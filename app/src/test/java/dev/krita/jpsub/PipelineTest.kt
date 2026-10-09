@@ -147,6 +147,65 @@ class PipelineTest {
         assertEquals(2, left) // one in MT, one queued
     }
 
+    /** Review-2 #1: after a timed-out drain nothing may be delivered any more, so the reported count is final. */
+    @Test
+    fun drainTimeoutStopsWorkAndCountIsFinal() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val mt = FakeMt(300)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it) })
+        p.start()
+        p.submit(job(1, 1, true, 1)); p.submit(job(2, 1, true, 2))
+        val left = p.drainFinals(80)
+        val deliveredAtReturn = out.size
+        Thread.sleep(800)
+        assertEquals(2, left)
+        assertEquals("nothing delivered after drain returned", deliveredAtReturn, out.size)
+        assertEquals(0, out.size)
+        assertTrue(mt.cancelled.get())
+        assertEquals(0, mt.inside.get())
+    }
+
+    /** Review-2 #2: a stop during drain ends the drain immediately instead of waiting for the deadline. */
+    @Test
+    fun stopDuringDrainReturnsPromptly() {
+        val p = Pipeline(FakeAsr(), FakeMt(10_000), {})
+        p.start()
+        p.submit(job(1, 1, true, 1)); p.submit(job(2, 1, true, 2))
+        Thread({ Thread.sleep(100); p.stop() }).start()
+        val t = System.nanoTime()
+        val left = p.drainFinals(5_000)
+        val ms = (System.nanoTime() - t) / 1_000_000
+        assertTrue("drain took ${ms}ms", ms < 1_000)
+        assertEquals(2, left)
+    }
+
+    /** Review-2 #3: an interruption that is not caused by stop() is a worker failure. */
+    @Test
+    fun unexpectedInterruptIsAFailure() {
+        val failures = AtomicInteger(0)
+        val asr = object : Asr { override fun recognize(samples: FloatArray): String = throw InterruptedException("spurious") }
+        val p = Pipeline(asr, FakeMt(1), {}, onFailure = { failures.incrementAndGet() })
+        p.start()
+        p.submit(job(1, 1, true, 1))
+        val deadline = System.currentTimeMillis() + 2_000
+        while (failures.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals(1, failures.get())
+        assertFalse(p.submit(job(2, 1, true, 2)))
+        p.stop(); p.awaitStopped()
+    }
+
+    /** Review-2 #5: timestamp provenance travels with the job to the caption. */
+    @Test
+    fun captionCarriesTimestampProvenance() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), { out.add(it) })
+        p.start()
+        p.submit(AsrJob(1, 1, true, FloatArray(10), monoMs(), timeEstimated = true))
+        p.submit(AsrJob(2, 1, true, FloatArray(20), monoMs(), timeEstimated = false))
+        assertEquals(0, p.drainFinals(2_000))
+        assertEquals(listOf(true, false), out.map { it.timeEstimated })
+    }
+
     /** The UI measures latency from Caption.audioEndAt; a slow delivery must show up, not cancel out. */
     @Test
     fun captionCarriesCaptureTimeForUiLatency() {

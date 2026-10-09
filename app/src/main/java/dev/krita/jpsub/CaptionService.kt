@@ -56,7 +56,6 @@ class CaptionService : Service() {
     private val board = CaptionBoard(maxLines = 2)
     // main thread only
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
-    @Volatile private var halTimestamps = false
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
 
@@ -140,9 +139,10 @@ class CaptionService : Service() {
             try {
                 capture(p, pl, vad)
                 if (overloaded && !stopping) {
+                    // returns early on stop; afterwards the pipeline is stopped, so the count is final
                     val left = pl.drainFinals(DRAIN_TIMEOUT_MS)
-                    setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。长按字幕结束。"
-                              else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。长按字幕结束。")
+                    if (!stopping) setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。长按字幕结束。"
+                                             else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。长按字幕结束。")
                     while (!stopping) Thread.sleep(100) // keep the last captions on screen until the user stops
                 }
             } finally {
@@ -206,12 +206,12 @@ class CaptionService : Service() {
                 framesRead += frame.size
                 // Capture time of this frame's last sample, from the HAL timestamp when available,
                 // so time spent waiting in the AudioRecord buffer counts as latency.
-                val capturedAt = if (rec.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
-                    halTimestamps = true
+                val hal = rec.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS
+                val capturedAt = if (hal) {
                     (ts.nanoTime + (framesRead - ts.framePosition) * 1_000_000_000L / 16_000) / 1_000_000
                 } else monoMs() // read time: underestimates latency by the time spent in the AudioRecord buffer
                 val f = frame.copyOf()
-                seg.accept(f, vad.prob(f), capturedAt)
+                seg.accept(f, vad.prob(f), capturedAt, estimated = !hal)
             }
             seg.flush()
         } finally {
@@ -254,7 +254,7 @@ class CaptionService : Service() {
                 append("识别${t.asrMs}ms 翻译${t.mtMs}ms")
                 // capture → this text update, for the caption actually rendered now; "~" = no HAL timestamp
                 lastUpdateMs[c.segmentId to c.revision]?.let { ms ->
-                    append(" 延迟${if (halTimestamps) "" else "~"}${"%.1f".format(ms / 1000.0)}s")
+                    append(" 延迟${if (c.timeEstimated) "~" else ""}${"%.1f".format(ms / 1000.0)}s")
                 }
             }
             if (backlog >= 2 && !overloaded) append("  ⚠处理跟不上(积压$backlog 句)")
@@ -273,7 +273,7 @@ class CaptionService : Service() {
             val key = c.segmentId to c.revision
             if (key !in lastUpdateMs && c.audioEndAt > 0) {
                 lastUpdateMs[key] = now - c.audioEndAt
-                Log.i(TAG, "shown seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} update=${now - c.audioEndAt}ms hal=$halTimestamps")
+                Log.i(TAG, "shown seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} update=${now - c.audioEndAt}ms hal=${!c.timeEstimated}")
             }
         }
         if (lastUpdateMs.size > 64) lastUpdateMs.keys.removeAll { k -> shown.none { it.segmentId to it.revision == k } }

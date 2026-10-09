@@ -24,7 +24,7 @@ class Segmenter(
     private val frameMs = frameSize * 1000 / sampleRate
     private val preRollFrames = preRollMs / frameMs
 
-    private class Frame(val pcm: FloatArray, val speech: Boolean, val endAt: Long)
+    private class Frame(val pcm: FloatArray, val speech: Boolean, val endAt: Long, val estimated: Boolean)
 
     private val preRoll = ArrayDeque<Frame>()
     private val frames = ArrayList<Frame>()
@@ -34,9 +34,12 @@ class Segmenter(
     private var segmentId = 0L
     private var revision = 0
 
-    /** @param now [monoMs] at the end of this frame */
-    fun accept(pcm: FloatArray, speechProb: Float, now: Long) {
-        val f = Frame(pcm, speechProb >= threshold, now)
+    /**
+     * @param now [monoMs] capture time of this frame's last sample
+     * @param estimated [now] is a read time rather than a HAL capture timestamp
+     */
+    fun accept(pcm: FloatArray, speechProb: Float, now: Long, estimated: Boolean = false) {
+        val f = Frame(pcm, speechProb >= threshold, now, estimated)
         if (!inSpeech) {
             if (!f.speech) {
                 preRoll.addLast(f)
@@ -65,7 +68,7 @@ class Segmenter(
             durMs >= maxUtteranceMs -> finalize(forcedCut(), continueSpeech = true)
             framesSinceDraft * frameMs >= draftEveryMs && durMs >= minDraftMs && f.speech -> {
                 framesSinceDraft = 0
-                emit(AsrJob(segmentId, ++revision, false, concat(frames.size), now))
+                emit(AsrJob(segmentId, ++revision, false, concat(frames.size), now, estimated))
             }
         }
     }
@@ -95,7 +98,7 @@ class Segmenter(
     }
 
     private fun finalize(count: Int, continueSpeech: Boolean) {
-        emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt))
+        emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
         if (continueSpeech) {

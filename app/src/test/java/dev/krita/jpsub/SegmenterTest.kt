@@ -36,6 +36,20 @@ class SegmenterTest {
         assertEquals(frameIds(finals[0]).last() * 32L, finals[0].audioEndAt)
     }
 
+    /** The final's provenance is that of its last included frame, not whatever the recorder reports later. */
+    @Test
+    fun finalTakesProvenanceOfItsLastFrame() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add)
+        var idx = 0
+        fun feed(speech: Boolean, ms: Int, est: Boolean) = repeat(ms / 32) { idx++; s.accept(FloatArray(frame), if (speech) 0.9f else 0.1f, idx * 32L, est) }
+        feed(false, 320, false); feed(true, 1600, false)  // HAL-timed speech
+        feed(false, 800, true)                            // HAL fails during the trailing silence
+        val f = jobs.single { it.isFinal }
+        assertTrue("last kept frame (trailing silence) is estimated", f.timeEstimated)
+        assertTrue("drafts during speech were HAL-timed", jobs.filter { !it.isFinal }.none { it.timeEstimated })
+    }
+
     @Test
     fun forcedCutLandsInThePauseAndLosesNoFrame() {
         val jobs = ArrayList<AsrJob>()

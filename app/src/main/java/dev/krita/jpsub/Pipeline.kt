@@ -13,6 +13,8 @@ data class AsrJob(
     val samples: FloatArray,
     /** [monoMs] when the last sample of [samples] was captured */
     val audioEndAt: Long,
+    /** [audioEndAt] is the read time, not a HAL capture timestamp (underestimates latency) */
+    val timeEstimated: Boolean = false,
 )
 
 data class Caption(
@@ -24,6 +26,8 @@ data class Caption(
     val timing: Timing,
     /** [monoMs] capture time of the last sample, so the UI can measure capture → text update itself */
     val audioEndAt: Long = 0,
+    /** see [AsrJob.timeEstimated] */
+    val timeEstimated: Boolean = false,
 )
 
 data class Timing(
@@ -103,7 +107,9 @@ class Pipeline(
 
     /**
      * Stops accepting jobs, drops queued drafts, and waits up to [timeoutMs] for the accepted finals to be
-     * delivered. @return the number of accepted finals still undelivered (0 = fully drained).
+     * delivered; returns early if the pipeline is stopped or fails. Always ends with the pipeline stopped
+     * and its workers joined, so nothing is delivered after it returns. Not for the worker threads.
+     * @return the number of accepted finals that were not delivered (0 = fully drained).
      */
     fun drainFinals(timeoutMs: Long): Int {
         synchronized(lock) {
@@ -112,11 +118,11 @@ class Pipeline(
             mtQueue.removeIf { !it.q.job.isFinal }
         }
         val deadline = clock() + timeoutMs
-        while (clock() < deadline && !failed) {
-            val left = synchronized(lock) { pendingFinals() + inFlightFinals }
-            if (left == 0) return 0
+        while (running && !failed && clock() < deadline && synchronized(lock) { pendingFinals() + inFlightFinals } > 0) {
             Thread.sleep(20)
         }
+        stop(); awaitStopped()
+        // in-flight finals are decremented only after onCaption returns, so after the join this count is exact
         return synchronized(lock) { pendingFinals() + inFlightFinals }
     }
 
@@ -142,7 +148,9 @@ class Pipeline(
     private fun guarded(body: () -> Unit) = Runnable {
         try {
             body()
-        } catch (_: InterruptedException) {
+        } catch (e: InterruptedException) {
+            // stop() interrupts the workers after clearing `running`; any other interruption is a failure
+            if (running) { failed = true; onFailure(e) }
         } catch (t: Throwable) {
             failed = true
             if (running) onFailure(t)
@@ -207,6 +215,7 @@ class Pipeline(
                         mtDoneMs = end - job.audioEndAt,
                     ),
                     job.audioEndAt,
+                    job.timeEstimated,
                 )
             )
             if (job.isFinal) synchronized(lock) { inFlightFinals-- }

@@ -4,6 +4,11 @@ import java.io.File
 import javax.sound.sampled.AudioSystem
 
 fun main() {
+    // Hard deadline for the whole run: a native call stuck in uninterruptible code would otherwise hang
+    // awaitStopped() forever. halt() skips shutdown hooks and cannot be blocked by worker threads.
+    val limitS = (System.getProperty("deadlineS") ?: "180").toLong()
+    Thread({ Thread.sleep(limitS * 1000); System.err.println("E2E: deadline ${limitS}s exceeded"); Runtime.getRuntime().halt(2) }, "e2e-watchdog")
+        .apply { isDaemon = true; start() }
     val m = System.getProperty("models")
     val vad = Vad(VadModelConfig.builder().setSileroVadModelConfig(SileroVadModelConfig.builder().setModel("$m/vad/silero_vad.onnx").setWindowSize(512).build()).setSampleRate(16000).setNumThreads(1).build())
     val rec = OfflineRecognizer(OfflineRecognizerConfig.builder().setOfflineModelConfig(OfflineModelConfig.builder()

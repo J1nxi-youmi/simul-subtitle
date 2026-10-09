@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Download sherpa-onnx AAR + models, and (optionally) push models to a connected phone.
+#   ./setup.sh            download only (into ./models and app/libs)
+#   ./setup.sh push       also adb push models to the app's external files dir
+# Set HTTPS_PROXY if GitHub / Hugging Face need a proxy.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+SHERPA=1.13.8
+REAZON=sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17
+GH=https://github.com/k2-fsa/sherpa-onnx/releases/download
+HF=https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main
+
+fetch() { [ -s "$2" ] || { echo "↓ $2"; curl -fL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }; }
+
+mkdir -p app/libs models/asr models/vad models/mt
+fetch "$GH/v$SHERPA/sherpa-onnx-$SHERPA.aar" "app/libs/sherpa-onnx-$SHERPA.aar"
+fetch "$GH/asr-models/silero_vad.onnx" models/vad/silero_vad.onnx
+fetch "$HF/HY-MT1.5-1.8B-Q4_K_M.gguf" models/mt/hy-mt.gguf
+if [ ! -s models/asr/tokens.txt ]; then
+  fetch "$GH/asr-models/$REAZON.tar.bz2" "models/$REAZON.tar.bz2"
+  tar xjf "models/$REAZON.tar.bz2" -C models
+  cp "models/$REAZON/encoder-epoch-35-avg-1.int8.onnx" models/asr/encoder.int8.onnx
+  cp "models/$REAZON/decoder-epoch-35-avg-1.onnx" models/asr/decoder.onnx
+  cp "models/$REAZON/joiner-epoch-35-avg-1.int8.onnx" models/asr/joiner.int8.onnx
+  cp "models/$REAZON/tokens.txt" models/asr/tokens.txt
+fi
+
+if [ "${1:-}" = push ]; then
+  DST=/sdcard/Android/data/dev.krita.jpsub/files
+  for d in asr vad mt; do
+    adb shell mkdir -p "$DST/$d"
+    for f in models/$d/*; do adb push "$f" "$DST/$d/"; done
+  done
+  echo "pushed to $DST"
+fi

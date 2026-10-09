@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.cxx/
+*.iml
+.idea/
+app/libs/
+models/
+tools/mac-e2e/build/

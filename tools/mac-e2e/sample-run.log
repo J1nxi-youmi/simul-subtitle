@@ -1,0 +1,54 @@
+  1.68s seg1.1d audio=896 wait=2 asrQ=0 asr=32 mtQ=1 mt=329 total=364 | すみません → 对不起，请再重复一遍吧。
+  2.24s seg1.2d audio=1600 wait=0 asrQ=0 asr=22 mtQ=0 mt=197 total=219 | すみません駅まで → 对不起，请带我到车站吧。
+  2.99s seg1.3d audio=2304 wait=0 asrQ=0 asr=28 mtQ=0 mt=241 total=269 | すみません駅までの道を落ち → 对不起，请告诉我到车站的路线吧。
+  3.71s seg1.4d audio=3008 wait=0 asrQ=0 asr=34 mtQ=1 mt=244 total=279 | すみません駅までの道を教えていただいて → 不好意思，请告诉我到车站的路线吧。
+  4.44s seg1.5d audio=3744 wait=0 asrQ=0 asr=44 mtQ=0 mt=235 total=279 | すみません駅までの道を教えていただけますか → 请问能告诉我到车站的路线吗？
+  4.99s seg1.6F audio=3968 wait=321 asrQ=0 asr=42 mtQ=0 mt=236 total=599 | すみません駅までの道を教えていただけますか → 请问能告诉我到车站的路线吗？
+  6.32s seg2.1d audio=896 wait=0 asrQ=0 asr=16 mtQ=0 mt=159 total=175 | まっすぐをこす → 直接地摩擦着
+  7.27s seg2.2d audio=1792 wait=0 asrQ=0 asr=23 mtQ=1 mt=205 total=229 | まっすぐ行ってふたを → 一直往前走，然后打开盖子。
+  7.99s seg2.3d audio=2496 wait=0 asrQ=0 asr=29 mtQ=0 mt=214 total=243 | まっすぐ行って二つ目の進行 → 一直向前走，到达第二个路口。
+  8.71s seg2.4d audio=3200 wait=1 asrQ=0 asr=36 mtQ=0 mt=223 total=260 | まっすぐ行って二つ目の信号を見つけ → 一直往前走，找到第二个信号灯。
+  9.53s seg2.5d audio=3968 wait=0 asrQ=0 asr=40 mtQ=0 mt=266 total=306 | まっすぐ行って二つ目の信号を右に曲がって → 一直往前走，到第二个信号灯处向右转弯。
+ 10.67s seg2.6F audio=4736 wait=320 asrQ=0 asr=44 mtQ=0 mt=319 total=683 | まっすぐ行って二つ目の信号を右に曲がってください → 请一直往前走，到达第二个信号灯后向右转弯即可。
+ 13.01s seg3.1d audio=896 wait=0 asrQ=0 asr=28 mtQ=0 mt=147 total=175 | そんなこと → 没那么严重吧
+ 13.74s seg3.2d audio=1600 wait=0 asrQ=0 asr=26 mtQ=0 mt=172 total=198 | そんなこと絶対 → 绝对不要做那种事。
+ 14.48s seg3.3d audio=2304 wait=0 asrQ=0 asr=27 mtQ=0 mt=206 total=233 | そんなこと絶対に許さない → 我绝对不会允许这种事情发生。
+ 15.59s seg3.4F audio=3072 wait=321 asrQ=0 asr=36 mtQ=1 mt=221 total=579 | そんなこと絶対に許さないからな → 我绝对不会允许这种事情的发生的。
+ 17.02s seg4.1d audio=960 wait=0 asrQ=0 asr=18 mtQ=0 mt=161 total=179 | まさかある → 没想到真的有那样的东西
+ 17.78s seg4.2d audio=1664 wait=0 asrQ=0 asr=23 mtQ=0 mt=220 total=243 | まさかあいつが母 → 没想到，那个家伙竟然是自己的母亲。
+ 18.55s seg4.3d audio=2432 wait=0 asrQ=0 asr=28 mtQ=0 mt=208 total=236 | まさかあいつが犯人だった → 没想到，那个人竟然就是凶手。
+ 19.29s seg4.4d audio=3136 wait=0 asrQ=0 asr=35 mtQ=0 mt=244 total=279 | まさかあいつが犯人だったなんて思ってない → 我绝对没想到那个人竟然就是凶手。
+ 20.06s seg4.5d audio=3872 wait=0 asrQ=0 asr=38 mtQ=0 mt=268 total=306 | まさかあいつが犯人だったなんて思わなかった → 我真没想到，那个人竟然就是凶手啊。
+ 20.57s seg4.6F audio=4064 wait=319 asrQ=0 asr=40 mtQ=0 mt=267 total=626 | まさかあいつが犯人だったなんて思わなかった → 我真没想到，那个人竟然就是凶手啊。
+ 22.89s seg5.1d audio=896 wait=0 asrQ=0 asr=16 mtQ=0 mt=149 total=165 | 明日の会議 → 明天的会议
+ 23.64s seg5.2d audio=1600 wait=0 asrQ=0 asr=21 mtQ=0 mt=192 total=213 | 明日の会議は午後三時 → 明天的会议时间是下午三点。
+ 24.38s seg5.3d audio=2304 wait=1 asrQ=0 asr=27 mtQ=0 mt=220 total=248 | 明日の会議は午後三時からの → 明天的会议将在下午三点开始。
+ 25.15s seg5.4d audio=3008 wait=0 asrQ=0 asr=31 mtQ=0 mt=280 total=311 | 明日の会議は午後三時から二変更 → 明天的会议将在下午三点开始，请做好调整安排。
+ 25.84s seg5.5d audio=3712 wait=2 asrQ=0 asr=38 mtQ=0 mt=254 total=294 | あすの会議は午後三時からに変更になりました → 明天的会议时间已改为下午三点。
+ 26.54s seg5.6d audio=4416 wait=0 asrQ=0 asr=42 mtQ=0 mt=256 total=298 | あすの会議は午後三時からに変更になりました → 明天的会议时间已改为下午三点。
+ 27.24s seg5.7d audio=5120 wait=0 asrQ=0 asr=50 mtQ=0 mt=245 total=295 | 明日の会議は午後三時からに変更になりました → 明天的会议时间已改为下午三点。
+ 28.09s seg5.8d audio=5824 wait=0 asrQ=0 asr=57 mtQ=0 mt=380 total=437 | 明日の会議は午後三時からに変更になりました資料は今日中に送ります → 明天的会议时间已改为下午三点。相关材料将在今天内发送给您。
+ 28.80s seg5.9F audio=6208 wait=321 asrQ=0 asr=57 mtQ=0 mt=381 total=759 | 明日の会議は午後三時からに変更になりました資料は今日中に送ります → 明天的会议时间已改为下午三点。相关材料将在今天内发送给您。
+ 30.05s seg6.1d audio=896 wait=0 asrQ=0 asr=20 mtQ=0 mt=101 total=121 | 昔々 → 从前
+ 30.79s seg6.2d audio=1600 wait=0 asrQ=0 asr=22 mtQ=0 mt=137 total=159 | 昔々あるとこ → 很久以前的地方
+ 31.57s seg6.3d audio=2304 wait=0 asrQ=0 asr=26 mtQ=0 mt=213 total=239 | むかしむかしあるところにおとがいました → 从前，有一个地方有座山丘
+ 32.32s seg6.4d audio=3008 wait=0 asrQ=0 asr=31 mtQ=0 mt=251 total=282 | むかしむかしあるところにおじいさんといていた → 从前，有一个地方，有一位老人住在那里。
+ 33.06s seg6.5d audio=3712 wait=0 asrQ=0 asr=39 mtQ=0 mt=277 total=316 | むかしむかしあるところにおじいさんとおばあさんがいました → 从前，有一个老人和一位老妇人。
+ 33.79s seg6.6d audio=4416 wait=0 asrQ=0 asr=42 mtQ=0 mt=299 total=341 | むかしむかしあるところにおじいさんとおばあさんがすんでいました → 从前，有一个老人和一位老妇人一起生活着。
+ 34.54s seg6.7d audio=5120 wait=0 asrQ=0 asr=51 mtQ=0 mt=338 total=389 | むかしむかしあるところにおじいさんとおばあさんが住んでいました → 从前，有一个地方上有位老人和一位老妇人共同居住。
+ 35.24s seg6.8d audio=5824 wait=0 asrQ=0 asr=51 mtQ=0 mt=332 total=383 | むかしむかしあるところにおじいさんとおばあさんが住んでいました → 从前，有一个地方上有位老人和一位老妇人共同居住。
+ 36.00s seg6.9d audio=6528 wait=0 asrQ=0 asr=61 mtQ=0 mt=380 total=441 | 昔々あるところにおじいさんとおばあさんがすんでいましたおじいさんは山へしばり → 从前，有一个地方住着一位老人和他的妻子。老人经常去山上劳作。
+ 36.41s seg6.10F audio=4928 wait=2081 asrQ=0 asr=46 mtQ=0 mt=331 total=2458 | むかしむかしあるところにおじいさんとおばあさんが住んでいました → 从前，有一个地方上有位老人和一位老妇人共同居住。
+ 37.02s seg7.1d audio=2784 wait=0 asrQ=0 asr=31 mtQ=0 mt=253 total=284 | おじいさんは山へしばかりにおばあさん → 爷爷经常去山上，而奶奶则留在家里。
+ 37.77s seg7.2d audio=3488 wait=0 asrQ=0 asr=37 mtQ=0 mt=287 total=324 | おじいさんは山へしばかりにおばあさんはかば → 爷爷经常去山上，而奶奶则一直在家照顾孩子。
+ 38.49s seg7.3d audio=4192 wait=0 asrQ=0 asr=40 mtQ=1 mt=296 total=337 | おじいさんは山へしばかりにおばあさんは川へ旨 → 爷爷经常去山上，而奶奶则喜欢待在河边。
+ 39.25s seg7.4d audio=4896 wait=0 asrQ=0 asr=46 mtQ=0 mt=355 total=401 | おじいさんは山へしば刈りにおばあさんは川へ洗濯に行きます → 爷爷经常去山上修剪植物，而奶奶则常常前往河边清洗衣物。
+ 39.99s seg7.5F audio=5312 wait=319 asrQ=1 asr=48 mtQ=0 mt=355 total=723 | おじいさんは山へしば刈りにおばあさんは川へ洗濯に行きました → 爷爷经常去山上修剪植物，而奶奶则常常前往河边清洗衣物。
+--- final board ---
+请问能告诉我到车站的路线吗？
+请一直往前走，到达第二个信号灯后向右转弯即可。
+我绝对不会允许这种事情的发生的。
+我真没想到，那个人竟然就是凶手啊。
+明天的会议时间已改为下午三点。相关材料将在今天内发送给您。
+从前，有一个地方上有位老人和一位老妇人共同居住。
+爷爷经常去山上修剪植物，而奶奶则常常前往河边清洗衣物。

@@ -15,8 +15,10 @@ AudioPlaybackCapture 16 kHz mono
 
 Drafts are disposable (stale queued drafts are merged), finals are never dropped silently. If finals pile
 up beyond 30 s of speech the app stops capturing, keeps translating the sentences it already accepted
-(up to 60 s; stopping ends this at once), then stops the workers and reports either "all translated" or
-how many were abandoned — nothing arrives after that report. Long-press to end.
+(up to 60 s, cut short by stopping), then cancels the rest, waits for any in-progress native call to
+return (not interruptible, so this wait has no hard limit), releases the models and reports either "all
+translated" or how many were abandoned — nothing arrives after that report. The captions stay until you
+long-press to end.
 
 ## Build
 

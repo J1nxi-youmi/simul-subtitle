@@ -95,6 +95,7 @@ class CaptionService : Service() {
         var asr: SherpaAsr? = null
         var mt: LlamaTranslator? = null
         var log: FileWriter? = null
+        var keepOverlay = false
         try {
             val t0 = monoMs()
             vad = SileroProb(files)
@@ -139,11 +140,12 @@ class CaptionService : Service() {
             try {
                 capture(p, pl, vad)
                 if (overloaded && !stopping) {
-                    // returns early on stop; afterwards the pipeline is stopped, so the count is final
+                    // Drain is bounded; afterwards it waits for in-progress native calls to return (cancelled, but
+                    // not interruptible), so the count is final and nothing is delivered later.
                     val left = pl.drainFinals(DRAIN_TIMEOUT_MS)
                     if (!stopping) setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。长按字幕结束。"
                                              else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。长按字幕结束。")
-                    while (!stopping) Thread.sleep(100) // keep the last captions on screen until the user stops
+                    keepOverlay = true // models are released below; the captions stay until the user stops
                 }
             } finally {
                 pl.stop()
@@ -159,6 +161,7 @@ class CaptionService : Service() {
             synchronized(cancelLock) { pipeline = null; translator = null }
             mt?.release(); asr?.release(); vad?.release()
             Log.i(TAG, "session released")
+            if (keepOverlay) while (!stopping) Thread.sleep(100) // only the overlay is alive now
             if (!stopping) main.post { stopSelf() }
         }
     }

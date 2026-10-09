@@ -124,6 +124,45 @@ class PipelineTest {
     }
 
     @Test
+    fun drainDeliversAcceptedFinalsAndDropsDrafts() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(FakeAsr(), FakeMt(100), { out.add(it) })
+        p.start()
+        p.submit(job(1, 1, true, 1)); p.submit(job(2, 1, true, 2)); p.submit(job(3, 1, false, 3)); p.submit(job(3, 2, true, 4))
+        p.submit(job(4, 1, false, 5))
+        assertEquals(0, p.drainFinals(5_000))
+        assertFalse("no new jobs after drain", p.submit(job(5, 1, true, 6)))
+        p.stop(); p.awaitStopped()
+        assertEquals(listOf(1L, 2L, 3L), out.filter { it.isFinal }.map { it.segmentId })
+        assertTrue(out.none { it.segmentId == 4L })
+    }
+
+    @Test
+    fun drainReportsWhatIsStillPending() {
+        val p = Pipeline(FakeAsr(), FakeMt(2_000), {})
+        p.start()
+        p.submit(job(1, 1, true, 1)); p.submit(job(2, 1, true, 2))
+        val left = p.drainFinals(200)
+        p.stop(); p.awaitStopped()
+        assertEquals(2, left) // one in MT, one queued
+    }
+
+    /** The UI measures latency from Caption.audioEndAt; a slow delivery must show up, not cancel out. */
+    @Test
+    fun captionCarriesCaptureTimeForUiLatency() {
+        val done = CountDownLatch(1)
+        var c: Caption? = null
+        val p = Pipeline(FakeAsr(), FakeMt(1), { c = it; done.countDown() })
+        p.start()
+        val audioEnd = monoMs() - 500
+        p.submit(AsrJob(1, 1, true, FloatArray(10), audioEnd))
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        Thread.sleep(300) // UI thread busy before rendering
+        assertEquals(audioEnd, c!!.audioEndAt)
+        assertTrue(monoMs() - c!!.audioEndAt >= 800)
+    }
+
+    @Test
     fun overloadIsReportedAndNewJobsRefused() {
         val overloads = AtomicInteger()
         val p = Pipeline(FakeAsr(), FakeMt(10_000), {}, onOverload = { overloads.incrementAndGet() }, maxPendingAudioMs = 3_000)

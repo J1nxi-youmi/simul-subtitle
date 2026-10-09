@@ -1,7 +1,6 @@
 package dev.krita.jpsub
 
 import java.util.concurrent.LinkedBlockingDeque
-import java.util.concurrent.TimeUnit
 
 /** Monotonic milliseconds; every timestamp in the pipeline uses this clock. */
 fun monoMs(): Long = System.nanoTime() / 1_000_000
@@ -23,6 +22,8 @@ data class Caption(
     val ja: String,
     val zh: String,
     val timing: Timing,
+    /** [monoMs] capture time of the last sample, so the UI can measure capture → text update itself */
+    val audioEndAt: Long = 0,
 )
 
 data class Timing(
@@ -77,6 +78,8 @@ class Pipeline(
     private val asrQueue = LinkedBlockingDeque<Queued>()
     private val mtQueue = LinkedBlockingDeque<MtJob>()
     private var pendingFinalAudioMs = 0L
+    /** finals taken off a queue and not yet delivered (guarded by [lock]) */
+    private var inFlightFinals = 0
     @Volatile private var running = false
     @Volatile private var overloaded = false
     @Volatile private var failed = false
@@ -97,6 +100,25 @@ class Pipeline(
 
     /** Blocks until both workers have exited (native calls finish on their own; MT is cancelled). */
     fun awaitStopped() = threads.forEach { it.join() }
+
+    /**
+     * Stops accepting jobs, drops queued drafts, and waits up to [timeoutMs] for the accepted finals to be
+     * delivered. @return the number of accepted finals still undelivered (0 = fully drained).
+     */
+    fun drainFinals(timeoutMs: Long): Int {
+        synchronized(lock) {
+            overloaded = true
+            asrQueue.removeIf { !it.job.isFinal }
+            mtQueue.removeIf { !it.q.job.isFinal }
+        }
+        val deadline = clock() + timeoutMs
+        while (clock() < deadline && !failed) {
+            val left = synchronized(lock) { pendingFinals() + inFlightFinals }
+            if (left == 0) return 0
+            Thread.sleep(20)
+        }
+        return synchronized(lock) { pendingFinals() + inFlightFinals }
+    }
 
     /** Called from the audio thread. Never blocks. @return false if refused (stopped or overloaded). */
     fun submit(job: AsrJob): Boolean {
@@ -127,9 +149,20 @@ class Pipeline(
         }
     }
 
+    /** Polls [q]; a final that leaves the queue is counted in [inFlightFinals] atomically, so drain never misses it. */
+    private fun <T> take(q: LinkedBlockingDeque<T>, isFinal: (T) -> Boolean): T? {
+        synchronized(lock) {
+            val x = q.pollFirst() ?: return@synchronized
+            if (isFinal(x)) inFlightFinals++
+            return x
+        }
+        Thread.sleep(10)
+        return null
+    }
+
     private fun asrLoop() {
         while (running && !failed) {
-            val q = asrQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue
+            val q = take(asrQueue) { it.job.isFinal } ?: continue
             val start = clock()
             val ja = asr.recognize(q.job.samples).trim()
             val end = clock()
@@ -140,13 +173,14 @@ class Pipeline(
                 if (!q.job.isFinal && ja.isEmpty()) return@synchronized
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 mtQueue.addLast(MtJob(q, ja, start, end))
+                if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
             }
         }
     }
 
     private fun mtLoop() {
         while (running && !failed) {
-            val j = mtQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue
+            val j = take(mtQueue) { it.q.job.isFinal } ?: continue
             val job = j.q.job
             val start = clock()
             var zh = if (j.ja.isEmpty()) "" else mt.translate(j.ja)
@@ -158,7 +192,7 @@ class Pipeline(
             }
             val backlog = synchronized(lock) {
                 if (job.isFinal) pendingFinalAudioMs -= audioMs(job)
-                pendingFinals()
+                pendingFinals() + inFlightFinals
             }
             onCaption(
                 Caption(
@@ -172,9 +206,11 @@ class Pipeline(
                         mtMs = end - start,
                         mtDoneMs = end - job.audioEndAt,
                     ),
+                    job.audioEndAt,
                 )
             )
-            onBacklog(backlog)
+            if (job.isFinal) synchronized(lock) { inFlightFinals-- }
+            onBacklog(backlog - if (job.isFinal) 1 else 0)
         }
     }
 

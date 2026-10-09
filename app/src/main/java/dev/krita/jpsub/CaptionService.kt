@@ -55,8 +55,8 @@ class CaptionService : Service() {
 
     private val board = CaptionBoard(maxLines = 2)
     // main thread only
-    private var lastTiming: Timing? = null
-    private var shownMs = 0L
+    private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
+    @Volatile private var halTimestamps = false
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
 
@@ -125,8 +125,8 @@ class CaptionService : Service() {
                 onCaption = { onCaption(it, csv) },
                 onBacklog = { backlog = it; refresh() },
                 onOverload = {
-                    overloaded = true
-                    setStatus("⚠ 手机处理跟不上，已停止接收新音频（未丢句）。长按字幕结束后重开。")
+                    overloaded = true // capture loop exits, then accepted finals are drained below
+                    setStatus("⚠ 手机处理跟不上，已停止采集，正在处理已收到的句子…")
                 },
                 onFailure = { e ->
                     Log.e(TAG, "pipeline worker failed", e)
@@ -139,6 +139,12 @@ class CaptionService : Service() {
             pl.start()
             try {
                 capture(p, pl, vad)
+                if (overloaded && !stopping) {
+                    val left = pl.drainFinals(DRAIN_TIMEOUT_MS)
+                    setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。长按字幕结束。"
+                              else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。长按字幕结束。")
+                    while (!stopping) Thread.sleep(100) // keep the last captions on screen until the user stops
+                }
             } finally {
                 pl.stop()
                 pl.awaitStopped() // ASR/MT workers are out of native code after this
@@ -188,7 +194,7 @@ class CaptionService : Service() {
             var framesRead = 0L
             // Non-blocking reads: stopping is only a flag, so onDestroy never touches AudioRecord and the
             // session thread is the only one that calls stop()/release().
-            while (!stopping) {
+            while (!stopping && !overloaded) {
                 var off = 0
                 while (off < frame.size && !stopping) {
                     val n = rec.read(frame, off, frame.size - off, AudioRecord.READ_NON_BLOCKING)
@@ -196,13 +202,14 @@ class CaptionService : Service() {
                     if (n == 0) Thread.sleep(10)
                     off += n
                 }
-                if (stopping) break
+                if (stopping || overloaded) break
                 framesRead += frame.size
                 // Capture time of this frame's last sample, from the HAL timestamp when available,
                 // so time spent waiting in the AudioRecord buffer counts as latency.
                 val capturedAt = if (rec.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
+                    halTimestamps = true
                     (ts.nanoTime + (framesRead - ts.framePosition) * 1_000_000_000L / 16_000) / 1_000_000
-                } else monoMs()
+                } else monoMs() // read time: underestimates latency by the time spent in the AudioRecord buffer
                 val f = frame.copyOf()
                 seg.accept(f, vad.prob(f), capturedAt)
             }
@@ -224,20 +231,16 @@ class CaptionService : Service() {
                 "${t.asrMs},${t.mtQueueMs},${t.mtMs},${t.mtDoneMs},${q(c.ja)},${q(c.zh)}\n")
             if (c.isFinal) log?.flush()
         }
-        if (board.accept(c)) {
-            val audioEndAt = monoMs() - t.mtDoneMs // reconstruct the capture time of the last sample
-            refresh { shownMs = monoMs() - audioEndAt; lastTiming = t }
-        }
+        if (board.accept(c)) refresh()
     }
 
     private fun setStatus(s: String) { status = s; refresh() }
 
-    /** Re-renders on the main thread; [onShown] runs right after the text is set (UI-delivery timing). */
-    private fun refresh(onShown: () -> Unit = {}) = main.post {
+    private fun refresh() = main.post {
         val v = overlay ?: return@post
-        onShown()
+        val shown = board.snapshot()
         val sb = SpannableStringBuilder()
-        for (c in board.snapshot()) {
+        for (c in shown) {
             if (sb.isNotEmpty()) sb.append('\n')
             val start = sb.length
             sb.append(c.zh)
@@ -245,10 +248,14 @@ class CaptionService : Service() {
         }
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
-            lastTiming?.let { t ->
+            shown.lastOrNull()?.let { c ->
+                val t = c.timing
                 if (isNotEmpty()) append("  ")
                 append("识别${t.asrMs}ms 翻译${t.mtMs}ms")
-                append(" 上屏延迟${"%.1f".format(shownMs / 1000.0)}s")
+                // capture → this text update, for the caption actually rendered now; "~" = no HAL timestamp
+                lastUpdateMs[c.segmentId to c.revision]?.let { ms ->
+                    append(" 延迟${if (halTimestamps) "" else "~"}${"%.1f".format(ms / 1000.0)}s")
+                }
             }
             if (backlog >= 2 && !overloaded) append("  ⚠处理跟不上(积压$backlog 句)")
         }
@@ -260,6 +267,16 @@ class CaptionService : Service() {
             sb.setSpan(ForegroundColorSpan(0xFF88CCFF.toInt()), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         v.text = sb
+        // Record capture → text-update latency once per (segment, revision), right after it was set.
+        val now = monoMs()
+        for (c in shown) {
+            val key = c.segmentId to c.revision
+            if (key !in lastUpdateMs && c.audioEndAt > 0) {
+                lastUpdateMs[key] = now - c.audioEndAt
+                Log.i(TAG, "shown seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} update=${now - c.audioEndAt}ms hal=$halTimestamps")
+            }
+        }
+        if (lastUpdateMs.size > 64) lastUpdateMs.keys.removeAll { k -> shown.none { it.segmentId to it.revision == k } }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -339,6 +356,7 @@ class CaptionService : Service() {
         // 8 Gen 3: 1×X4 + 5×A720 + 2×A520. Keep ASR + MT below the 6 big cores so they don't thrash.
         private const val ASR_THREADS = 2
         private const val MT_THREADS = 4
+        private const val DRAIN_TIMEOUT_MS = 60_000L
 
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(

@@ -22,36 +22,41 @@ fun main() {
     val t0 = System.currentTimeMillis()
     val submittedFinals = java.util.Collections.synchronizedList(ArrayList<Long>())
     val doneFinals = java.util.Collections.synchronizedList(ArrayList<Long>())
-    var failure: Throwable? = null
+    val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+    // -DdropFinal=<segmentId>: test hook that swallows one delivered final, to prove the harness fails when one is lost
+    val dropFinal = System.getProperty("dropFinal")?.toLong()
     val p = Pipeline(asr, mt, { c ->
         val t = c.timing
         println("%6.2fs seg%d.%d%s audio=%d wait=%d asrQ=%d asr=%d mtQ=%d mt=%d mtDone=%d | %s → %s".format((System.currentTimeMillis()-t0)/1000.0, c.segmentId, c.revision, if (c.isFinal) "F" else "d", t.audioMs, t.segmentWaitMs, t.asrQueueMs, t.asrMs, t.mtQueueMs, t.mtMs, t.mtDoneMs, c.ja, c.zh))
-        if (c.isFinal) doneFinals.add(c.segmentId)
+        if (c.isFinal && c.segmentId != dropFinal) doneFinals.add(c.segmentId)
         board.accept(c)
-    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure = it })
+    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) })
     p.start()
-    val seg = Segmenter({ job ->
-        val ok = p.submit(job)
-        if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
-    })
-    // stream the wav in real time
-    val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))
-    val bytes = ais.readAllBytes()
-    val pcm = FloatArray(bytes.size / 2) { ((bytes[2*it].toInt() and 0xff) or (bytes[2*it+1].toInt() shl 8)).toShort() / 32768f }
-    var i = 0; val start = System.nanoTime()
-    while (i + 512 <= pcm.size) {
-        val f = pcm.copyOfRange(i, i + 512); i += 512
-        val due = start + i * 1_000_000_000L / 16000
-        while (System.nanoTime() < due) Thread.sleep(1)
-        seg.accept(f, vad.compute(f), monoMs())
+    try {
+        val seg = Segmenter({ job ->
+            val ok = p.submit(job)
+            if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
+        })
+        // stream the wav in real time
+        val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))
+        val bytes = ais.readAllBytes()
+        val pcm = FloatArray(bytes.size / 2) { ((bytes[2*it].toInt() and 0xff) or (bytes[2*it+1].toInt() shl 8)).toShort() / 32768f }
+        var i = 0; val start = System.nanoTime()
+        while (i + 512 <= pcm.size) {
+            val f = pcm.copyOfRange(i, i + 512); i += 512
+            val due = start + i * 1_000_000_000L / 16000
+            while (System.nanoTime() < due) Thread.sleep(1)
+            seg.accept(f, vad.compute(f), monoMs())
+        }
+        seg.flush()
+        // wait until every accepted final has been delivered (bounded), instead of a fixed sleep
+        val left = p.drainFinals(30_000)
+        check(left == 0) { "$left accepted finals not delivered within 30 s" }
+    } finally {
+        p.stop(); p.awaitStopped()
     }
-    seg.flush()
-    // wait until every accepted final has been delivered (bounded), instead of a fixed sleep
-    val deadline = System.currentTimeMillis() + 30_000
-    while (doneFinals.size < submittedFinals.size && failure == null && System.currentTimeMillis() < deadline) Thread.sleep(20)
-    p.stop(); p.awaitStopped()
     println("--- final board ---"); board.snapshot().filter { it.isFinal }.forEach { println(it.zh) }
-    failure?.let { throw it }
+    failure.get()?.let { throw it }
     check(doneFinals == submittedFinals) { "finals submitted=$submittedFinals delivered=$doneFinals" }
     check(submittedFinals.isNotEmpty()) { "no speech detected" }
     println("OK: ${doneFinals.size} finals delivered in order")

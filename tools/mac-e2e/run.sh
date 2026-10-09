@@ -2,6 +2,7 @@
 # Run the real pipeline (Silero VAD → Segmenter → Pipeline → ReazonSpeech → HY-MT) on the Mac,
 # streaming a 16 kHz mono WAV in real time. Needs ../../models (./setup.sh) and network for the first run.
 #   tools/mac-e2e/run.sh [file.wav]     default: synthesise Japanese test sentences with `say -v Kyoko`
+#   JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh   negative check: must exit non-zero
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
 W="$HERE/build"; mkdir -p "$W/native" "$W/classes"
@@ -10,8 +11,11 @@ SHERPA=1.13.8
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA
 
 # 1. sherpa-onnx JVM jar + macOS native libs
-# download to .part and rename only on success, so an interrupted download is never mistaken for a cache hit
-fetch() { [ -s "$2" ] || { curl -fL --retry 3 -o "$2.part" "$1" && unzip -tq "$2.part" >/dev/null && mv "$2.part" "$2"; }; }
+# A cached file is used only if it is a valid zip; otherwise it is re-downloaded (to .part, renamed on success).
+fetch() {
+  unzip -tq "$2" >/dev/null 2>&1 && return 0
+  curl -fL --retry 3 -o "$2.part" "$1" && unzip -tq "$2.part" >/dev/null && mv -f "$2.part" "$2"
+}
 fetch "$GH/sherpa-onnx-jvm-$SHERPA.jar" "$W/sherpa-jvm.jar"
 if [ ! -s "$W/native/libsherpa-onnx-jni.dylib" ]; then
   fetch "$GH/sherpa-onnx-native-lib-osx-aarch64-$SHERPA.jar" "$W/sherpa-osx.jar"
@@ -50,6 +54,6 @@ if [ -z "$WAV" ]; then
   python3 "$HERE/make_sample.py" "$W" "$WAV"
 fi
 
-"$JH/bin/java" -Djava.library.path="$W/native" -Dwav="$WAV" -Dmodels="$ROOT/models" \
+"$JH/bin/java" ${JAVA_OPTS:-} -Djava.library.path="$W/native" -Dwav="$WAV" -Dmodels="$ROOT/models" \
   -cp "$W/classes:$STD:$W/sherpa-jvm.jar" E2EKt 2> >(grep -vE '^(llama|load|print_info|repack|resolve|gguf|common|ggml|graph|sched|init|llm|create|set_|done|clip|\.|  )' >&2)
 # exit status is the JVM's: non-zero if a final was refused, lost, reordered or a worker failed

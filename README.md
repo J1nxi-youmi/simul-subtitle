@@ -13,8 +13,9 @@ AudioPlaybackCapture 16 kHz mono
   → overlay: grey = draft (may change), white = final
 ```
 
-Drafts are disposable (stale queued drafts are merged), finals are never dropped. If finals pile up
-beyond 30 s of speech the app says so and stops taking audio instead of silently skipping sentences.
+Drafts are disposable (stale queued drafts are merged), finals are never dropped silently. If finals pile
+up beyond 30 s of speech the app stops capturing, keeps translating the sentences it already accepted
+(up to 60 s), then reports either "all translated" or how many were abandoned. Long-press to end.
 
 ## Build
 
@@ -44,20 +45,25 @@ Drag the subtitle vertically to move it, long-press it (or the notification's �
 Every caption is logged with a per-stage breakdown:
 
 ```bash
-adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=320 asrQ=0 asr=60 mtQ=0 mt=219 mtDone=599 | …
+adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=319 asrQ=9 asr=35 mtQ=13 mt=225 mtDone=601 | …
+                                             # shown seg=3.4F update=640ms hal=true
 adb pull /sdcard/Android/data/dev.krita.jpsub/files/timing.csv
 ```
 
-`wait` = end-of-speech detection, `mtDone` = last captured sample (AudioRecord HAL timestamp) → translation done. The overlay additionally shows 上屏延迟 = capture → text set on screen.
-The overlay shows the latest asr / mt / total times and a backlog warning.
+`wait` = end-of-speech detection, `mtDone` = last captured sample → translation done.
+`update` (and 延迟 in the overlay) = last captured sample → overlay text updated for that caption revision;
+it is a text-update time, not a measured display frame. Capture time comes from the AudioRecord HAL
+timestamp; if the device does not provide one, read time is used and the overlay prefixes the value
+with `~` (it then underestimates by the time audio sat in the AudioRecord buffer).
+The overlay also shows asr / mt times and a backlog warning.
 
 ## Mac end-to-end check
 
-`tools/mac-e2e/run.sh [file.wav]` runs the same Pipeline/Segmenter/JNI code with the real models on
+`tools/mac-e2e/run.sh [file.wav]` (exit 0 only if every accepted final is delivered, in order) runs the same Pipeline/Segmenter/JNI code with the real models on
 macOS (CPU), streaming the WAV in real time. Without an argument it synthesises a 6-sentence regression
-clip with `say -v Kyoko`. `tools/mac-e2e/sample-run.log` is a reference run (M-series Mac, 4 MT threads):
-finals arrive 0.6-0.8 s after a sentence ends (2.4 s once, for a forced cut whose tail waited for the
-next pause); ASR 40-60 ms, MT 220-380 ms per sentence.
+clip with `say -v Kyoko`. `JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh` is the negative check (must fail). `tools/mac-e2e/sample-run.log` is a reference run (M-series Mac, 4 MT threads):
+finals arrive 0.6-0.8 s after a sentence ends (2.5 s once: that sentence hit the length limit, was cut
+back at its longest pause, and the remainder waited ~2.1 s in the segmenter); ASR 35-60 ms, MT 220-390 ms.
 These are Mac numbers; the phone has not been measured yet.
 
 ## Decisions (measured, see git log)

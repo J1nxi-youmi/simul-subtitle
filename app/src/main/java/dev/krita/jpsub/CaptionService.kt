@@ -15,6 +15,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
@@ -47,12 +48,15 @@ class CaptionService : Service() {
      * and unblocks the read, so nothing is ever freed while another thread is still inside it.
      */
     @Volatile private var stopping = false
-    @Volatile private var record: AudioRecord? = null
-    private val recordLock = Any()
-    @Volatile private var pipeline: Pipeline? = null
+    /** Guards [pipeline]/[translator] so onDestroy's cancel never races the session thread's native free. */
+    private val cancelLock = Any()
+    private var pipeline: Pipeline? = null
+    private var translator: LlamaTranslator? = null
 
     private val board = CaptionBoard(maxLines = 2)
-    @Volatile private var lastTiming: Timing? = null
+    // main thread only
+    private var lastTiming: Timing? = null
+    private var shownMs = 0L
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
 
@@ -100,6 +104,7 @@ class CaptionService : Service() {
             setStatus("加载翻译模型…")
             if (stopping) return
             mt = LlamaTranslator(files, MT_THREADS)
+            synchronized(cancelLock) { translator = mt }
             val t2 = monoMs()
             // Warm-up so the first real sentence does not pay page-in / first-run costs.
             asr.recognize(FloatArray(16_000))
@@ -109,9 +114,11 @@ class CaptionService : Service() {
             if (stopping) return
             setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
 
-            log = FileWriter(File(getExternalFilesDir(null), "timing.csv"), true).apply {
-                write("mono_ms,segment,revision,final,audio_ms,segment_wait_ms,asr_queue_ms,asr_ms,mt_queue_ms,mt_ms,total_ms,ja,zh\n")
-            }
+            log = runCatching {
+                FileWriter(File(getExternalFilesDir(null), "timing.csv"), true).apply {
+                    write("mono_ms,segment,revision,final,audio_ms,segment_wait_ms,asr_queue_ms,asr_ms,mt_queue_ms,mt_ms,mt_done_ms,ja,zh\n")
+                }
+            }.getOrNull()
             val csv = log
             val pl = Pipeline(
                 asr, mt,
@@ -121,8 +128,14 @@ class CaptionService : Service() {
                     overloaded = true
                     setStatus("⚠ 手机处理跟不上，已停止接收新音频（未丢句）。长按字幕结束后重开。")
                 },
+                onFailure = { e ->
+                    Log.e(TAG, "pipeline worker failed", e)
+                    setStatus("出错：${e.message}")
+                    main.post { stopSelf() }
+                },
             )
-            pipeline = pl
+            synchronized(cancelLock) { pipeline = pl }
+            if (stopping) return // onDestroy ran before the pipeline was visible to it
             pl.start()
             try {
                 capture(p, pl, vad)
@@ -134,7 +147,10 @@ class CaptionService : Service() {
             Log.e(TAG, "session failed", e)
             setStatus("出错：${e.message}")
         } finally {
-            log?.close()
+            runCatching { log?.close() }
+            // Detach the translator under the same lock onDestroy uses for cancel(), so no thread can call
+            // into it after this point; the (slow) native free then happens outside the lock.
+            synchronized(cancelLock) { pipeline = null; translator = null }
             mt?.release(); asr?.release(); vad?.release()
             Log.i(TAG, "session released")
             if (!stopping) main.post { stopSelf() }
@@ -160,7 +176,6 @@ class CaptionService : Service() {
             .setBufferSizeInBytes(maxOf(minBuf, 16_000 * 4 * 2)) // 2 s of slack
             .setAudioPlaybackCaptureConfig(cfg)
             .build()
-        record = rec
         try {
             check(rec.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord 初始化失败" }
             if (stopping) return
@@ -169,42 +184,58 @@ class CaptionService : Service() {
             setStatus("")
             val seg = Segmenter({ pl.submit(it) })
             val frame = FloatArray(seg.frameSize)
+            val ts = AudioTimestamp()
+            var framesRead = 0L
+            // Non-blocking reads: stopping is only a flag, so onDestroy never touches AudioRecord and the
+            // session thread is the only one that calls stop()/release().
             while (!stopping) {
                 var off = 0
                 while (off < frame.size && !stopping) {
-                    val n = rec.read(frame, off, frame.size - off, AudioRecord.READ_BLOCKING)
+                    val n = rec.read(frame, off, frame.size - off, AudioRecord.READ_NON_BLOCKING)
                     check(n >= 0) { "读取音频失败 ($n)" }
-                    if (n == 0 && stopping) break
+                    if (n == 0) Thread.sleep(10)
                     off += n
                 }
                 if (stopping) break
+                framesRead += frame.size
+                // Capture time of this frame's last sample, from the HAL timestamp when available,
+                // so time spent waiting in the AudioRecord buffer counts as latency.
+                val capturedAt = if (rec.getTimestamp(ts, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
+                    (ts.nanoTime + (framesRead - ts.framePosition) * 1_000_000_000L / 16_000) / 1_000_000
+                } else monoMs()
                 val f = frame.copyOf()
-                seg.accept(f, vad.prob(f), monoMs())
+                seg.accept(f, vad.prob(f), capturedAt)
             }
             seg.flush()
         } finally {
-            synchronized(recordLock) { record = null }
             runCatching { rec.stop() }
             rec.release()
         }
     }
 
-    private fun onCaption(c: Caption, log: FileWriter) {
+    private fun onCaption(c: Caption, log: FileWriter?) {
         val t = c.timing
-        lastTiming = t
         Log.i(TAG, "seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} audio=${t.audioMs} wait=${t.segmentWaitMs} " +
-            "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} total=${t.totalMs} | ${c.ja} → ${c.zh}")
-        fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
-        log.write("${monoMs()},${c.segmentId},${c.revision},${c.isFinal},${t.audioMs},${t.segmentWaitMs},${t.asrQueueMs}," +
-            "${t.asrMs},${t.mtQueueMs},${t.mtMs},${t.totalMs},${q(c.ja)},${q(c.zh)}\n")
-        if (c.isFinal) log.flush()
-        if (board.accept(c)) refresh()
+            "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} | ${c.ja} → ${c.zh}")
+        // Diagnostics must never stop captions (e.g. storage full).
+        runCatching {
+            fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+            log?.write("${monoMs()},${c.segmentId},${c.revision},${c.isFinal},${t.audioMs},${t.segmentWaitMs},${t.asrQueueMs}," +
+                "${t.asrMs},${t.mtQueueMs},${t.mtMs},${t.mtDoneMs},${q(c.ja)},${q(c.zh)}\n")
+            if (c.isFinal) log?.flush()
+        }
+        if (board.accept(c)) {
+            val audioEndAt = monoMs() - t.mtDoneMs // reconstruct the capture time of the last sample
+            refresh { shownMs = monoMs() - audioEndAt; lastTiming = t }
+        }
     }
 
     private fun setStatus(s: String) { status = s; refresh() }
 
-    private fun refresh() = main.post {
+    /** Re-renders on the main thread; [onShown] runs right after the text is set (UI-delivery timing). */
+    private fun refresh(onShown: () -> Unit = {}) = main.post {
         val v = overlay ?: return@post
+        onShown()
         val sb = SpannableStringBuilder()
         for (c in board.snapshot()) {
             if (sb.isNotEmpty()) sb.append('\n')
@@ -216,7 +247,8 @@ class CaptionService : Service() {
             if (status.isNotEmpty()) append(status)
             lastTiming?.let { t ->
                 if (isNotEmpty()) append("  ")
-                append("识别${t.asrMs}ms 翻译${t.mtMs}ms 延迟${"%.1f".format(t.totalMs / 1000.0)}s")
+                append("识别${t.asrMs}ms 翻译${t.mtMs}ms")
+                append(" 上屏延迟${"%.1f".format(shownMs / 1000.0)}s")
             }
             if (backlog >= 2 && !overloaded) append("  ⚠处理跟不上(积压$backlog 句)")
         }
@@ -274,8 +306,9 @@ class CaptionService : Service() {
         // Never block the main thread and never free native objects here: the session thread
         // notices `stopping`, finishes, waits for the pipeline workers and releases everything itself.
         stopping = true
-        pipeline?.stop()
-        synchronized(recordLock) { runCatching { record?.stop() } } // unblocks a pending READ_BLOCKING read
+        // Only flags + an atomic store into a still-alive translator (the session thread detaches it under the
+        // same lock before freeing). The session thread notices `stopping` within ~10 ms (non-blocking reads).
+        synchronized(cancelLock) { pipeline?.stop() ?: translator?.cancel() }
         projection?.stop()
         projection = null
         overlay?.let { getSystemService(WindowManager::class.java).removeView(it) }

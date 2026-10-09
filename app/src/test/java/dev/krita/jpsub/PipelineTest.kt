@@ -72,6 +72,57 @@ class PipelineTest {
         assertEquals("ja6", out.last().ja)
     }
 
+    /** Reviewer repro: ASR slower than the draft interval, a newer draft is always queued when one finishes. */
+    @Test
+    fun slowAsrStillShowsDrafts() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val gate = java.util.concurrent.Semaphore(0)
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String { gate.acquire(); return "ja${samples.size}" }
+        }
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 1))
+        for (rev in 2..5) {
+            Thread.sleep(30)
+            p.submit(job(1, rev, false, rev)) // newer draft queued *before* the running one finishes
+            gate.release()
+        }
+        Thread.sleep(30)
+        p.submit(job(1, 6, true, 6))
+        gate.release(10)
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertTrue("drafts shown: ${out.filter { !it.isFinal }.map { it.revision }}", out.count { !it.isFinal } >= 3)
+    }
+
+    @Test
+    fun workerExceptionIsReportedAndPipelineRefusesNewJobs() {
+        val failures = Collections.synchronizedList(ArrayList<Throwable>())
+        val asr = object : Asr { override fun recognize(samples: FloatArray): String = throw IllegalStateException("boom") }
+        val p = Pipeline(asr, FakeMt(1), {}, onFailure = { failures.add(it) })
+        p.start()
+        assertTrue(p.submit(job(1, 1, true, 10)))
+        val deadline = System.currentTimeMillis() + 2_000
+        while (failures.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals("boom", failures.single().message)
+        assertFalse("must refuse after failure", p.submit(job(2, 1, true, 10)))
+        p.stop(); p.awaitStopped()
+    }
+
+    @Test
+    fun throwingCaptionSinkIsAFailureNotACrash() {
+        val failures = Collections.synchronizedList(ArrayList<Throwable>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), { throw java.io.IOException("disk full") }, onFailure = { failures.add(it) })
+        p.start()
+        p.submit(job(1, 1, true, 10))
+        val deadline = System.currentTimeMillis() + 2_000
+        while (failures.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals("disk full", failures.single().message)
+        p.stop(); p.awaitStopped()
+    }
+
     @Test
     fun overloadIsReportedAndNewJobsRefused() {
         val overloads = AtomicInteger()
@@ -130,7 +181,7 @@ class PipelineTest {
         assertEquals(1000L, t.audioMs)
         assertTrue("wait ${t.segmentWaitMs}", t.segmentWaitMs >= 100)
         assertTrue(t.asrMs >= 20 && t.mtMs >= 30)
-        assertTrue(t.totalMs >= t.segmentWaitMs + t.asrMs + t.mtMs)
+        assertTrue(t.mtDoneMs >= t.segmentWaitMs + t.asrMs + t.mtMs)
     }
 }
 

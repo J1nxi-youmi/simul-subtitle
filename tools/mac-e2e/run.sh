@@ -10,9 +10,11 @@ SHERPA=1.13.8
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA
 
 # 1. sherpa-onnx JVM jar + macOS native libs
-[ -s "$W/sherpa-jvm.jar" ] || curl -fL -o "$W/sherpa-jvm.jar" "$GH/sherpa-onnx-jvm-$SHERPA.jar"
+# download to .part and rename only on success, so an interrupted download is never mistaken for a cache hit
+fetch() { [ -s "$2" ] || { curl -fL --retry 3 -o "$2.part" "$1" && unzip -tq "$2.part" >/dev/null && mv "$2.part" "$2"; }; }
+fetch "$GH/sherpa-onnx-jvm-$SHERPA.jar" "$W/sherpa-jvm.jar"
 if [ ! -s "$W/native/libsherpa-onnx-jni.dylib" ]; then
-  curl -fL -o "$W/sherpa-osx.jar" "$GH/sherpa-onnx-native-lib-osx-aarch64-$SHERPA.jar"
+  fetch "$GH/sherpa-onnx-native-lib-osx-aarch64-$SHERPA.jar" "$W/sherpa-osx.jar"
   (cd "$W/native" && unzip -o -q -j ../sherpa-osx.jar 'sherpa-onnx/native/osx-aarch64/*')
 fi
 
@@ -49,4 +51,5 @@ if [ -z "$WAV" ]; then
 fi
 
 "$JH/bin/java" -Djava.library.path="$W/native" -Dwav="$WAV" -Dmodels="$ROOT/models" \
-  -cp "$W/classes:$STD:$W/sherpa-jvm.jar" E2EKt 2>/dev/null | grep -E '^ +[0-9]|^---|^[^ a-z_.]'
+  -cp "$W/classes:$STD:$W/sherpa-jvm.jar" E2EKt 2> >(grep -vE '^(llama|load|print_info|repack|resolve|gguf|common|ggml|graph|sched|init|llm|create|set_|done|clip|\.|  )' >&2)
+# exit status is the JVM's: non-zero if a final was refused, lost, reordered or a worker failed

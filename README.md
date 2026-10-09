@@ -44,11 +44,11 @@ Drag the subtitle vertically to move it, long-press it (or the notification's �
 Every caption is logged with a per-stage breakdown:
 
 ```bash
-adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=321 asrQ=0 asr=36 mtQ=1 mt=221 total=579 | …
+adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=320 asrQ=0 asr=60 mtQ=0 mt=219 mtDone=599 | …
 adb pull /sdcard/Android/data/dev.krita.jpsub/files/timing.csv
 ```
 
-`wait` = end-of-speech detection, `total` = last captured sample → caption handed to the UI.
+`wait` = end-of-speech detection, `mtDone` = last captured sample (AudioRecord HAL timestamp) → translation done. The overlay additionally shows 上屏延迟 = capture → text set on screen.
 The overlay shows the latest asr / mt / total times and a backlog warning.
 
 ## Mac end-to-end check

@@ -33,8 +33,8 @@ data class Timing(
     val asrMs: Long,
     val mtQueueMs: Long,
     val mtMs: Long,
-    /** from the last captured sample until the caption is handed to the UI thread */
-    val totalMs: Long,
+    /** from the last captured sample until MT finished (UI delivery is measured separately by the app) */
+    val mtDoneMs: Long,
 )
 
 interface Asr { fun recognize(samples: FloatArray): String }
@@ -63,6 +63,8 @@ class Pipeline(
     private val onCaption: (Caption) -> Unit,
     private val onBacklog: (pendingFinals: Int) -> Unit = {},
     private val onOverload: () -> Unit = {},
+    /** A worker threw; the pipeline refuses new jobs from now on. Called on the worker thread. */
+    private val onFailure: (Throwable) -> Unit = {},
     private val maxPendingAudioMs: Long = 30_000,
     private val clock: () -> Long = ::monoMs,
     private val sampleRate: Int = 16_000,
@@ -77,12 +79,13 @@ class Pipeline(
     private var pendingFinalAudioMs = 0L
     @Volatile private var running = false
     @Volatile private var overloaded = false
+    @Volatile private var failed = false
     private var threads: List<Thread> = emptyList()
 
     fun start() {
         check(threads.isEmpty()) { "Pipeline is single-use" }
         running = true
-        threads = listOf(Thread(::asrLoop, "jpsub-asr"), Thread(::mtLoop, "jpsub-mt")).onEach { it.start() }
+        threads = listOf(Thread(guarded(::asrLoop), "jpsub-asr"), Thread(guarded(::mtLoop), "jpsub-mt")).onEach { it.start() }
     }
 
     /** Non-blocking. Results produced after this call are discarded. */
@@ -99,7 +102,7 @@ class Pipeline(
     fun submit(job: AsrJob): Boolean {
         val backlog: Int
         synchronized(lock) {
-            if (!running || overloaded) return false
+            if (!running || overloaded || failed) return false
             asrQueue.removeIf { it.job.segmentId == job.segmentId && !it.job.isFinal }
             if (job.isFinal) {
                 pendingFinalAudioMs += audioMs(job)
@@ -113,15 +116,27 @@ class Pipeline(
         return true
     }
 
+    /** Runs a worker body; any exception puts the pipeline into the failed state instead of killing the process. */
+    private fun guarded(body: () -> Unit) = Runnable {
+        try {
+            body()
+        } catch (_: InterruptedException) {
+        } catch (t: Throwable) {
+            failed = true
+            if (running) onFailure(t)
+        }
+    }
+
     private fun asrLoop() {
-        while (running) {
-            val q = try { asrQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue } catch (_: InterruptedException) { return }
+        while (running && !failed) {
+            val q = asrQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue
             val start = clock()
             val ja = asr.recognize(q.job.samples).trim()
             val end = clock()
             if (!running) return
             synchronized(lock) {
-                if (!q.job.isFinal && asrQueue.any { it.job.segmentId == q.job.segmentId }) return@synchronized // already stale
+                // A draft that already ran is kept even if a newer draft is queued: on a slow phone every
+                // draft would otherwise be superseded before it reaches MT and nothing would be shown.
                 if (!q.job.isFinal && ja.isEmpty()) return@synchronized
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 mtQueue.addLast(MtJob(q, ja, start, end))
@@ -130,8 +145,8 @@ class Pipeline(
     }
 
     private fun mtLoop() {
-        while (running) {
-            val j = try { mtQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue } catch (_: InterruptedException) { return }
+        while (running && !failed) {
+            val j = mtQueue.pollFirst(200, TimeUnit.MILLISECONDS) ?: continue
             val job = j.q.job
             val start = clock()
             var zh = if (j.ja.isEmpty()) "" else mt.translate(j.ja)
@@ -155,7 +170,7 @@ class Pipeline(
                         asrMs = j.asrEndAt - j.asrStartAt,
                         mtQueueMs = start - j.asrEndAt,
                         mtMs = end - start,
-                        totalMs = end - job.audioEndAt,
+                        mtDoneMs = end - job.audioEndAt,
                     ),
                 )
             )

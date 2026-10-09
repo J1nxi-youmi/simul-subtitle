@@ -79,7 +79,7 @@ class SileroProb(m: ModelFiles) {
 }
 
 class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
-    private var handle: Long = nativeLoad(m.mt.path, threads)
+    @Volatile private var handle: Long = nativeLoad(m.mt.path, threads)
 
     init {
         check(handle != 0L) { "failed to load ${m.mt}" }
@@ -93,11 +93,13 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
         return String(bytes, Charsets.UTF_8)
     }
 
-    override fun cancel() = nativeCancel(handle)
+    /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
+    override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }
 
     fun release() {
-        nativeFree(handle)
+        val h = handle
         handle = 0
+        if (h != 0L) nativeFree(h)
     }
 
     companion object {

@@ -134,6 +134,9 @@ class MainActivity : Activity() {
 
     // ---- main card -----------------------------------------------------------------------------------------
 
+    /** The last start was refused by the system (foreground service not allowed); kept until the next start tap. */
+    private var startRefused = false
+
     private fun render() {
         if (!store.ready()) { renderModels(); return }
         progress.visibility = View.GONE
@@ -147,7 +150,8 @@ class MainActivity : Activity() {
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
             val hint = if (missingPerm) "开始前需要授予下方的权限，点开始会依次引导。" else "点开始，然后在系统弹窗里选择要翻译的 App。"
-            status(R.color.brand, "准备就绪", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
+            if (startRefused) status(R.color.err, "Android 暂时不允许启动字幕", "请再点一次开始重试；如果仍然失败，请反馈出现这个提示前的操作步骤。")
+            else status(R.color.brand, "准备就绪", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
             primary.setOnClickListener { start() }
@@ -538,7 +542,8 @@ class MainActivity : Activity() {
     private fun modelFilesBusy(): String? = when {
         // also true after stopping until the session thread has freed the native models
         CaptionService.modelsInUse -> "字幕运行中（或正在释放模型），停止后才能删除"
-        dl.state().let { it.running || it.verifying != null } -> "正在下载或校验模型，完成或取消后才能删除"
+        // anyTransfer: also a local-model download still running after switching to online (state() skips it)
+        dl.anyTransfer() || dl.state().let { it.running || it.verifying != null } -> "正在下载或校验模型，完成或取消后才能删除"
         else -> null
     }
 
@@ -621,7 +626,8 @@ class MainActivity : Activity() {
             width.value = (Math.round(prefs.widthFrac * 20) * 5f).coerceIn(40f, 100f)
             ja.isChecked = prefs.showJa
             stats.isChecked = prefs.showStats
-            height.value = (Math.round(prefs.heightFrac * 20) * 5f).coerceIn(0f, 40f)
+            // only a real 0 is "auto": a small dragged height still shows as fixed (at least the first step)
+            height.value = if (prefs.heightFrac <= 0f) 0f else (Math.round(prefs.heightFrac * 20) * 5f).coerceIn(5f, 40f)
             keepS.value = prefs.keepSentences.coerceIn(1, 6).toFloat()
             keepC.value = (Math.round(prefs.keepChars / 10f) * 10f).coerceIn(0f, 300f)
             loading = false
@@ -630,7 +636,7 @@ class MainActivity : Activity() {
             lSize.text = "字号  ${size.value.toInt()}"
             lAlpha.text = "背景不透明度  ${alpha.value.toInt()}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
-            lHeight.text = if (height.value == 0f) "字幕高度  自动（随内容）" else "字幕高度  屏幕的 ${height.value.toInt()}%"
+            lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（随内容）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"
             lKeepS.text = "至少保留  ${keepS.value.toInt()} 句"
             lKeepC.text = "超过  ${keepC.value.toInt()} 字后移除旧句"
             keepHint.text = "已说完的句子超过 ${keepS.value.toInt()} 句，并且总字数超过 ${keepC.value.toInt()} 字时，才移走最早的一句（正在说的那句不算）。窗口放不下时只显示最新的部分。"
@@ -638,7 +644,7 @@ class MainActivity : Activity() {
             preview.applyStyle(size.value, alpha.value / 100f)
             // same caption height as the overlay will get (the stage grows with it)
             preview.setMaxContentHeight((resources.displayMetrics.heightPixels * CaptionService.MAX_CAPTION_FRAC).toInt(), Int.MAX_VALUE)
-            preview.setCaptionHeight(if (height.value == 0f) 0 else (resources.displayMetrics.heightPixels * height.value / 100f).toInt())
+            preview.setCaptionHeight((resources.displayMetrics.heightPixels * prefs.heightFrac).toInt())
             preview.layoutParams = FrameLayout.LayoutParams((findViewById<View>(R.id.previewStage).width.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels * 0.8f).toInt()).let { (it * width.value / 100f).toInt() }, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL)
             preview.setLines(
                 listOf(CaptionOverlayView.Line("明天的会议改到下午三点了。", if (ja.isChecked) "明日の会議は午後三時に変更になりました" else null, true),
@@ -669,6 +675,7 @@ class MainActivity : Activity() {
     // ---- start ---------------------------------------------------------------------------------------------
 
     private fun start() {
+        startRefused = false
         if (!store.ready()) { render(); return } // never start without verified models
         if (!hasAudio()) {
             val ask = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -699,7 +706,7 @@ class MainActivity : Activity() {
             try {
                 CaptionService.start(this, resultCode, data)
             } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
-                status(R.color.err, "Android 暂时不允许启动字幕", "请回到首页重试；如果仍然失败，请反馈出现这个提示前的操作步骤。")
+                startRefused = true; render()
                 return
             }
             moveTaskToBack(true)

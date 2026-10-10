@@ -160,6 +160,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     fun applyStyle(sizeSp: Float, alpha: Float) {
         textSp = sizeSp; bgAlpha = alpha
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        applyCaptionHeight() // a fixed height is clamped to one line, which depends on the font size
         bg.setColor(colors.bg and 0x00FFFFFF or ((alpha * 255).toInt().coerceIn(0, 255) shl 24))
         // with a fully transparent card the text keeps a stronger shadow so it stays readable on video;
         // dark text on a light card has none (a black shadow would only blur it)

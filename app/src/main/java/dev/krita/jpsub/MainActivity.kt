@@ -302,7 +302,7 @@ class MainActivity : Activity() {
             if (!prefs.jevOn) return
             val p = prefs.jevProvider
             jevBox.addView(label("接口"))
-            jevBox.addView(choice(JevProvider.entries.map { it to it.label }, p) { prefs.jevProvider = it; main.post { renderJev() } })
+            jevBox.addView(choice(JevProvider.entries.map { it to it.short }, p) { prefs.jevProvider = it; main.post { renderJev() } })
             if (!p.needsKey) {
                 jevBox.addView(TextView(this).apply {
                     text = "不用填 key。只把识别出的日语和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以换下面两个付费接口。"

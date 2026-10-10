@@ -20,6 +20,21 @@ class Segmenter(
     private val minDraftMs: Int = 600,
     private val maxUtteranceMs: Int = 7_000,
     private val preRollMs: Int = 200,
+    /**
+     * A: an utterance with less speech than this is not finalized at [endSilenceMs]; it waits up to
+     * [maxHoldSilenceMs] of silence for the speaker to continue, and continuation joins the same segment.
+     * Short fragments ("えっと", a clause cut by a breath) are what ASR and MT get wrong alone. 0 = off.
+     */
+    private val minFinalMs: Int = 0,
+    private val maxHoldSilenceMs: Int = 1_500,
+    /**
+     * > 0 enables the judged hold: at [endSilenceMs] a draft with [AsrJob.endOfSpeech] covering the utterance up to the
+     * pause is emitted, and [holdHint] is asked about exactly that revision. true = unfinished (hold up to
+     * [maxHoldSilenceMs]), false = finished (final now), null = no answer yet (wait until this much silence, then final).
+     */
+    private val hintWaitMs: Int = 0,
+    /** Read on the audio thread; must not block. */
+    private val holdHint: (segmentId: Long, revision: Int) -> Boolean? = { _, _ -> null },
 ) {
     private val frameMs = frameSize * 1000 / sampleRate
     private val preRollFrames = preRollMs / frameMs
@@ -33,6 +48,8 @@ class Segmenter(
     private var framesSinceDraft = 0
     private var segmentId = 0L
     private var revision = 0
+    /** revision of the end-of-speech draft for the current pause, -1 = none yet */
+    private var tailRevision = -1
 
     /**
      * @param now [monoMs] capture time of this frame's last sample
@@ -58,19 +75,37 @@ class Segmenter(
         frames.add(f)
         framesSinceDraft++
         silentFrames = if (f.speech) 0 else silentFrames + 1
+        if (f.speech) tailRevision = -1
 
         val durMs = frames.size * frameMs
+        val silMs = silentFrames * frameMs
+        // keep ~100 ms of the trailing silence
+        val speechEnd = (frames.size - silentFrames + 100 / frameMs).coerceIn(1, frames.size)
         when {
-            silentFrames * frameMs >= endSilenceMs -> {
-                // keep ~100 ms of the trailing silence
-                finalize((frames.size - silentFrames + 100 / frameMs).coerceIn(1, frames.size), continueSpeech = false)
-            }
+            silMs >= endSilenceMs && !holding(silMs) -> finalize(speechEnd, continueSpeech = false)
             durMs >= maxUtteranceMs -> finalize(forcedCut(), continueSpeech = true)
+            silMs >= endSilenceMs -> {
+                if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
+                    tailRevision = ++revision
+                    emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
+                }
+            }
             framesSinceDraft * frameMs >= draftEveryMs && durMs >= minDraftMs && f.speech -> {
                 framesSinceDraft = 0
                 emit(AsrJob(segmentId, ++revision, false, concat(frames.size), now, estimated))
             }
         }
+    }
+
+    private fun speechMs() = frames.count { it.speech } * frameMs
+
+    /** Wait for continuation instead of finalizing at the normal end silence. Bounded by [maxHoldSilenceMs]. */
+    private fun holding(silMs: Int): Boolean {
+        if (silMs >= maxHoldSilenceMs) return false
+        if (speechMs() < minFinalMs) return true
+        if (hintWaitMs <= 0) return false
+        if (tailRevision < 0) return true // the end-of-speech draft is emitted on this frame
+        return holdHint(segmentId, tailRevision) ?: (silMs < hintWaitMs)
     }
 
     /**
@@ -99,6 +134,7 @@ class Segmenter(
 
     private fun finalize(count: Int, continueSpeech: Boolean) {
         emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
+        tailRevision = -1
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
         if (continueSpeech) {

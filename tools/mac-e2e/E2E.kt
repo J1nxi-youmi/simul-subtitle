@@ -41,7 +41,9 @@ fun main() {
             val ok = p.submit(job)
             if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
         }, endSilenceMs = (System.getProperty("endSilenceMs") ?: "400").toInt(),
-           maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: "7000").toInt())
+           maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: "7000").toInt(),
+           minFinalMs = (System.getProperty("minFinalMs") ?: "1200").toInt(),
+           maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt())
         // stream the wav in real time
         val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))
         val bytes = ais.readAllBytes()

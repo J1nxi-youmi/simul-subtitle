@@ -191,7 +191,7 @@ class CaptionService : Service() {
             rec.startRecording()
             check(rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "无法开始录音（可能被其他 App 占用）" }
             setStatus("")
-            val seg = Segmenter({ pl.submit(it) })
+            val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500)
             val frame = FloatArray(seg.frameSize)
             val ts = AudioTimestamp()
             var framesRead = 0L

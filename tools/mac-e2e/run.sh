@@ -5,7 +5,7 @@
 #   JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh   negative check: must exit non-zero
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
-W="$HERE/build"; mkdir -p "$W/native" "$W/classes"
+W="$HERE/build"; mkdir -p "$W/native"
 JH="${JAVA_HOME:?set JAVA_HOME to a JDK 17}"
 SHERPA=1.13.8
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA
@@ -44,11 +44,12 @@ KC="$(jar org.jetbrains.kotlin/kotlin-compiler-embeddable/2.0.21 '*.jar'):$STD"
 for a in kotlin-script-runtime kotlin-reflect kotlin-daemon-embeddable; do KC="$KC:$(jar org.jetbrains.kotlin/$a '*.jar')"; done
 KC="$KC:$(jar org.jetbrains.intellij.deps 'trove4j*.jar'):$(jar org.jetbrains/annotations/13.0 '*.jar'):$(jar org.jetbrains.kotlinx 'kotlinx-coroutines-core-jvm*.jar')"
 [ -n "$STD" ] || { echo "run ./gradlew :app:testDebugUnitTest once so Gradle fetches Kotlin"; exit 1; }
-rm -rf "$W/classes" && mkdir -p "$W/classes" # stale classes of removed/renamed declarations break overload resolution
-"$JH/bin/javac" -d "$W/classes" "$HERE/MacLlama.java"
+# a fresh output dir per run: stale classes of removed/renamed declarations break overload resolution
+C="$(mktemp -d "$W/classes.XXXXXX")"
+"$JH/bin/javac" -d "$C" "$HERE/MacLlama.java"
 P="$ROOT/app/src/main/java/dev/krita/jpsub"
 "$JH/bin/java" -cp "$KC" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -nowarn \
-  -cp "$STD:$W/sherpa-jvm.jar:$W/classes" -d "$W/classes" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$HERE/E2E.kt"
+  -cp "$STD:$W/sherpa-jvm.jar:$C" -d "$C" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$HERE/E2E.kt"
 
 # 4. test audio
 WAV="${1:-}"
@@ -58,5 +59,5 @@ if [ -z "$WAV" ]; then
 fi
 
 "$JH/bin/java" ${JAVA_OPTS:-} -Djava.library.path="$W/native" -Dwav="$WAV" -Dmodels="$ROOT/models" \
-  -cp "$W/classes:$STD:$W/sherpa-jvm.jar" E2EKt 2> >(grep -vE '^(llama|load|print_info|repack|resolve|gguf|common|ggml|graph|sched|init|llm|create|set_|done|clip|\.|  )' >&2)
+  -cp "$C:$STD:$W/sherpa-jvm.jar" E2EKt 2> >(grep -vE '^(llama|load|print_info|repack|resolve|gguf|common|ggml|graph|sched|init|llm|create|set_|done|clip|\.|  )' >&2)
 # exit status is the JVM's: non-zero if a final was refused, lost, reordered or a worker failed

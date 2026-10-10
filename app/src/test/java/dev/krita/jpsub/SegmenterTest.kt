@@ -90,4 +90,158 @@ class SegmenterTest {
         run(listOf(false to 5000), Segmenter(jobs::add))
         assertTrue(jobs.isEmpty())
     }
+
+    // --- A: a short fragment is not finalized at the first short pause; it waits for continuation ---
+
+    @Test
+    fun shortFragmentFollowedQuicklyBySpeechBecomesOneFinal() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500)
+        // 640 ms speech, 600 ms pause (> endSilence 400, < hold 1500), 1500 ms speech, long silence
+        val total = run(listOf(false to 320, true to 640, false to 608, true to 1504, false to 1600), s)
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(1, finals.size)
+        assertEquals(setOf(1L), jobs.map { it.segmentId }.toSet())
+        val ids = frameIds(finals[0])
+        assertTrue("starts in pre-roll", ids.first() <= 11)
+        assertTrue("covers both parts", ids.last() >= 10 + 20 + 19 + 47)
+        assertTrue(ids.last() <= total)
+        assertEquals("contiguous", (ids.first()..ids.last()).toList(), ids)
+    }
+
+    @Test
+    fun shortFragmentFollowedByLongSilenceIsFinalizedAlone() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500)
+        run(listOf(false to 320, true to 640, false to 1600, true to 1504, false to 1600), s)
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(listOf(1L, 2L), finals.map { it.segmentId })
+        // the held final still keeps only ~100 ms of trailing silence, not the whole wait
+        assertTrue(frameIds(finals[0]).last() <= 10 + 20 + 4)
+    }
+
+    @Test
+    fun longEnoughUtteranceIsFinalizedAtNormalEndSilence() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500)
+        run(listOf(true to 1504, false to 608, true to 1504, false to 608), s)
+        assertEquals(listOf(1L, 2L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun holdHintKeepsALongUtteranceOpen() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900, holdHint = { seg, _ -> seg == 1L })
+        run(listOf(true to 1504, false to 608, true to 1504, false to 1600), s)
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun speechLengthIgnoresPreRollAndInternalSilence() {
+        // 200 ms pre-roll + 704 ms speech + 288 ms pause + 320 ms speech: frames ≈ 1.5 s, speech ≈ 1.0 s < 1.2 s → still held
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500)
+        run(listOf(false to 320, true to 704, false to 288, true to 320, false to 608), s)
+        assertTrue(jobs.none { it.isFinal })
+        // just over the threshold → normal final at endSilence
+        val jobs2 = ArrayList<AsrJob>()
+        run(listOf(false to 320, true to 1248, false to 608), Segmenter(jobs2::add, minFinalMs = 1200, maxHoldSilenceMs = 1500))
+        assertEquals(1, jobs2.count { it.isFinal })
+    }
+
+    /** The judged hold, with an answer that arrives at a given silence length (fake Jev latency). */
+    private class FakeJudge(val answer: Boolean, val readyAfterFrames: Int) {
+        val asked = ArrayList<Pair<Long, Int>>()
+        var tail: AsrJob? = null
+        var framesSinceTail = 0
+        fun onJob(j: AsrJob) { if (j.endOfSpeech) { tail = j; framesSinceTail = 0 } }
+        fun hint(seg: Long, rev: Int): Boolean? {
+            asked.add(seg to rev)
+            val t = tail ?: return null
+            if (t.segmentId != seg || t.revision != rev) return null
+            return if (++framesSinceTail >= readyAfterFrames) answer else null
+        }
+    }
+
+    private fun judged(answer: Boolean, readyAfterFrames: Int, pattern: List<Pair<Boolean, Int>>): Pair<List<AsrJob>, FakeJudge> {
+        val jobs = ArrayList<AsrJob>()
+        val j = FakeJudge(answer, readyAfterFrames)
+        val s = Segmenter({ jobs.add(it); j.onJob(it) }, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900, holdHint = j::hint)
+        run(pattern, s); s.flush()
+        return jobs to j
+    }
+
+    // middle pause 1088 ms: longer than hintWaitMs (900), shorter than maxHold (1500) → the answer decides
+    private val midPause = listOf(true to 1504, false to 1088, true to 1504, false to 1600)
+    private val shortPause = listOf(true to 1504, false to 608, true to 1504, false to 1600)
+
+    @Test
+    fun judgeSaysFinishedInTimeFinalizesBeforeTheWaitEnds() {
+        val (jobs, _) = judged(answer = false, readyAfterFrames = 3, pattern = shortPause)
+        assertEquals(listOf(1L, 2L), jobs.filter { it.isFinal }.map { it.segmentId })
+        // the end-of-speech draft carries exactly the audio of the final that follows it
+        val tail = jobs.first { it.endOfSpeech && it.segmentId == 1L }
+        assertEquals(frameIds(jobs.first { it.isFinal }), frameIds(tail))
+    }
+
+    @Test
+    fun judgeSaysUnfinishedInTimeJoinsTheContinuation() {
+        val (jobs, _) = judged(answer = true, readyAfterFrames = 3, pattern = shortPause)
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun lateAnswerFallsBackToFinalAtTheWaitLimit() {
+        // the answer would come after ~1.3 s of silence; the segmenter gives up at 900 ms and finalizes
+        val (jobs, _) = judged(answer = true, readyAfterFrames = 40, pattern = midPause)
+        val f = jobs.filter { it.isFinal }
+        assertEquals(listOf(1L, 2L), f.map { it.segmentId })
+        val firstFinalAt = jobs.indexOf(f[0])
+        val tailAt = jobs.indexOfFirst { it.endOfSpeech && it.segmentId == 1L }
+        assertTrue(tailAt in 0 until firstFinalAt)
+    }
+
+    @Test
+    fun answerForAnOlderRevisionIsNotUsed() {
+        // speech resumes during the wait, so a new pause asks about a new revision; the judge only knows the old one
+        val jobs = ArrayList<AsrJob>()
+        var firstTail: AsrJob? = null
+        val s = Segmenter({ jobs.add(it); if (it.endOfSpeech && firstTail == null) firstTail = it }, minFinalMs = 1200,
+            maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { seg, rev -> if (firstTail?.let { it.segmentId == seg && it.revision == rev } == true) true else null })
+        run(listOf(true to 1504, false to 608, true to 1504, false to 1088, true to 1504, false to 1600), s)
+        val tails = jobs.filter { it.endOfSpeech && it.segmentId == 1L }
+        assertEquals(2, tails.size)
+        assertTrue(tails[1].revision > tails[0].revision)
+        // second pause: no answer for its revision → final at hintWaitMs (two segments), not held by the stale "true"
+        assertEquals(listOf(1L, 2L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun answerUnfinishedHoldsAcrossAPauseLongerThanTheWait() {
+        val (jobs, _) = judged(answer = true, readyAfterFrames = 3, pattern = midPause)
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun holdingLosesNoFrameAndForcedCutStillApplies() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900, holdHint = { _, _ -> true })
+        val total = run(listOf(true to 640, false to 608, true to 640, false to 608, true to 2016), s)
+        s.flush()
+        val finals = jobs.filter { it.isFinal }
+        assertTrue(finals.size >= 2)
+        assertTrue(finals.all { it.samples.size <= 3000 * 16 + frame })
+        assertEquals((1..total).toList(), finals.flatMap(::frameIds))
+    }
+
+    @Test
+    fun flushFinalizesAHeldFragment() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500)
+        run(listOf(true to 640, false to 608), s)
+        assertTrue(jobs.none { it.isFinal })
+        s.flush()
+        assertEquals(1, jobs.count { it.isFinal })
+    }
 }

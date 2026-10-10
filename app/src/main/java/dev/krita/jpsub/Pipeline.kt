@@ -15,6 +15,8 @@ data class AsrJob(
     val audioEndAt: Long,
     /** [audioEndAt] is the read time, not a HAL capture timestamp (underestimates latency) */
     val timeEstimated: Boolean = false,
+    /** a draft cut at a pause: everything the speaker said before it; the segmenter asks whether it is finished */
+    val endOfSpeech: Boolean = false,
 )
 
 data class Caption(

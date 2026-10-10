@@ -38,10 +38,8 @@ class MainActivity : Activity() {
     private lateinit var secondary: MaterialButton
     private lateinit var permList: LinearLayout
 
-    /** a verification of finished downloads is running on [verifier] */
-    @Volatile private var verifying: String? = null
-    private var verifyError: String? = null
-    private var verifier: Thread? = null
+    /** Re-reads the style prefs into the sliders and preview; set up in [setupStyle]. */
+    private var loadStyle: () -> Unit = {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,8 +52,8 @@ class MainActivity : Activity() {
             v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom); insets
         }
         prefs = Prefs(this)
-        store = ModelStore(getExternalFilesDir(null)!!)
-        dl = ModelDownloader(this, store, prefs)
+        dl = ModelDownloader.get(this)
+        store = dl.store
 
         statusDot = findViewById(R.id.statusDot)
         statusTitle = findViewById(R.id.statusTitle)
@@ -69,6 +67,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        loadStyle() // the overlay toolbar may have changed size / opacity meanwhile
+        renderPermissions()
         render()
         main.post(ticker)
     }
@@ -85,7 +85,6 @@ class MainActivity : Activity() {
     // ---- main card -----------------------------------------------------------------------------------------
 
     private fun render() {
-        renderPermissions()
         if (!store.ready()) { renderModels(); return }
         progress.visibility = View.GONE
         secondary.visibility = View.GONE
@@ -106,9 +105,9 @@ class MainActivity : Activity() {
 
     private fun renderModels() {
         val st = dl.state()
-        if (st.toVerify.isNotEmpty() && verifier?.isAlive != true) verify(st.toVerify)
+        val verifying = st.verifying
         val gb = { b: Long -> "%.2f GB".format(b / 1e9) }
-        progress.visibility = if (st.running || verifying != null || st.doneBytes > 0) View.VISIBLE else View.GONE
+        progress.visibility = if (st.running || st.doneBytes > 0) View.VISIBLE else View.GONE
         progress.setProgressCompat((st.doneBytes * 1000 / st.totalBytes).toInt(), true)
         primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
         primary.setIconResource(R.drawable.ic_download)
@@ -124,10 +123,10 @@ class MainActivity : Activity() {
                 secondary.visibility = View.VISIBLE; secondary.text = "取消下载"
                 secondary.setOnClickListener { dl.cancel(); render() }
             }
-            st.failed.isNotEmpty() || verifyError != null -> {
-                status(R.color.err, "下载未完成", (st.failed + listOfNotNull(verifyError)).joinToString("\n"))
+            st.errors.isNotEmpty() -> {
+                status(R.color.err, "下载未完成", st.errors.joinToString("\n"))
                 primary.text = "重试"; primary.isEnabled = true
-                primary.setOnClickListener { verifyError = null; dl.start(); render() }
+                primary.setOnClickListener { dl.start(); render() }
                 secondary.visibility = View.GONE
             }
             else -> {
@@ -148,20 +147,6 @@ class MainActivity : Activity() {
         primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand) and 0x00FFFFFF or 0xB3000000.toInt())
     }
 
-    /** Hash-checks finished downloads off the main thread; only verified files are published. */
-    private fun verify(specs: List<ModelSpec>) {
-        verifier = Thread({
-            for (s in specs) {
-                verifying = s.path.substringAfterLast('/')
-                val r = store.publish(s)
-                dl.forget(s)
-                if (r !is ModelStore.Result.Ok) verifyError = "${verifying} 校验失败（${r}），请重试"
-            }
-            verifying = null
-            main.post { render() }
-        }, "jpsub-verify").apply { start() }
-    }
-
     private fun status(color: Int, title: String, body: String) {
         statusDot.background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(getColor(color)) }
         statusTitle.text = title
@@ -175,14 +160,14 @@ class MainActivity : Activity() {
     private fun renderPermissions() {
         permList.removeAllViews()
         permRow("捕获 App 声音", "只录制被共享 App 的播放声音，不使用麦克风", hasAudio()) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_PERM_ONLY)
         }
         permRow("悬浮窗", "在其他 App 上方显示字幕", Settings.canDrawOverlays(this)) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         if (Build.VERSION.SDK_INT >= 33) {
             permRow("通知（可选）", "显示运行状态和下载进度", checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM_ONLY)
             }
         }
     }
@@ -223,7 +208,7 @@ class MainActivity : Activity() {
         val lWidth = findViewById<TextView>(R.id.labelWidth)
 
         fun load() {
-            size.value = prefs.textSp.coerceIn(12f, 36f).let { Math.round(it).toFloat() }
+            size.value = prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP).let { Math.round(it).toFloat() }
             alpha.value = (Math.round(prefs.bgAlpha * 20) * 5f).coerceIn(0f, 100f)
             width.value = (Math.round(prefs.widthFrac * 20) * 5f).coerceIn(40f, 100f)
             ja.isChecked = prefs.showJa
@@ -241,6 +226,7 @@ class MainActivity : Activity() {
                 if (stats.isChecked) "识别 52ms · 翻译 310ms · 延迟 0.7s" else null,
             )
         }
+        loadStyle = { load(); apply() }
         load(); apply()
         findViewById<View>(R.id.previewStage).post { apply() } // the stage's real width is known after layout
         size.addOnChangeListener { _, v, user -> if (user) { prefs.textSp = v; apply() } }
@@ -249,7 +235,7 @@ class MainActivity : Activity() {
         ja.setOnCheckedChangeListener { _, v -> prefs.showJa = v; apply() }
         stats.setOnCheckedChangeListener { _, v -> prefs.showStats = v; apply() }
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
-            prefs.textSp = 20f; prefs.bgAlpha = 0.55f; prefs.widthFrac = 0.92f; prefs.showJa = false; prefs.showStats = false
+            prefs.textSp = 20f; prefs.bgAlpha = 0.55f; prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
             prefs.overlayX = -1; prefs.overlayY = -1
             load(); apply()
         }
@@ -258,10 +244,11 @@ class MainActivity : Activity() {
     // ---- start ---------------------------------------------------------------------------------------------
 
     private fun start() {
+        if (!store.ready()) { render(); return } // never start without verified models
         if (!hasAudio()) {
             val ask = mutableListOf(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) ask += Manifest.permission.POST_NOTIFICATIONS // optional
-            requestPermissions(ask.toTypedArray(), 1)
+            requestPermissions(ask.toTypedArray(), REQ_START)
             return
         }
         if (!Settings.canDrawOverlays(this)) {
@@ -269,20 +256,27 @@ class MainActivity : Activity() {
             return
         }
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        startActivityForResult(mpm.createScreenCaptureIntent(), 2)
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        renderPermissions()
         render()
-        if (requestCode == 1 && hasAudio()) start()
-        else if (requestCode == 1) status(R.color.err, "需要录音权限", "只用于捕获被共享 App 的声音，不会使用麦克风。")
+        if (requestCode == REQ_START && hasAudio()) start()
+        else if (requestCode == REQ_START) status(R.color.err, "需要录音权限", "只用于捕获被共享 App 的声音，不会使用麦克风。")
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == 2 && resultCode == RESULT_OK && data != null) {
+        if (requestCode == REQ_PROJECTION && resultCode == RESULT_OK && data != null) {
             CaptionService.start(this, resultCode, data)
             moveTaskToBack(true)
         }
+    }
+
+    private companion object {
+        const val REQ_START = 1      // runtime permission asked on the way to starting subtitles
+        const val REQ_PROJECTION = 2
+        const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
     }
 }

@@ -15,8 +15,32 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
     fun file(s: ModelSpec) = File(root, s.path)
     fun partFile(s: ModelSpec) = File(root, s.path + ".part")
 
-    /** Cheap check (no hashing) used on every screen resume: right size at the final path. */
-    fun isInstalled(s: ModelSpec) = file(s).let { it.isFile && it.length() == s.size }
+    /** Written next to a file after its SHA-256 matched, so readiness never needs to re-hash 1.2 GB. */
+    fun okMarker(s: ModelSpec) = File(root, s.path + ".ok")
+
+    /** Cheap check used on every screen resume: verified marker + right size at the final path. */
+    fun isInstalled(s: ModelSpec) = okMarker(s).isFile && file(s).let { it.isFile && it.length() == s.size }
+
+    /** A file at the final path that was never verified (e.g. copied by adb from an older version). */
+    fun unverified() = specs.filter { !okMarker(it).isFile && file(it).isFile }
+
+    /**
+     * Hash-checks a file already at the final path. Good → marker written; bad → moved to "<path>.bad" so it
+     * is downloaded again. Slow: call off the main thread.
+     */
+    fun verifyInstalled(s: ModelSpec): Result {
+        val f = file(s)
+        if (!f.isFile) return Result.Missing
+        val r = check(s, f)
+        if (r == Result.Ok) okMarker(s).writeText(s.sha256) else reject(s, f, r)
+        return r
+    }
+
+    private fun check(s: ModelSpec, f: File): Result {
+        if (f.length() != s.size) return Result.WrongSize(f.length())
+        val got = sha256(f)
+        return if (got.equals(s.sha256, ignoreCase = true)) Result.Ok else Result.WrongHash(got)
+    }
     fun missing() = specs.filter { !isInstalled(it) }
     fun ready() = missing().isEmpty()
     fun totalBytes() = specs.sumOf { it.size }
@@ -30,19 +54,20 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
     fun publish(s: ModelSpec): Result {
         val part = partFile(s)
         if (!part.isFile) return Result.Missing
-        if (part.length() != s.size) return reject(s, part, Result.WrongSize(part.length()))
-        val got = sha256(part)
-        if (!got.equals(s.sha256, ignoreCase = true)) return reject(s, part, Result.WrongHash(got))
+        val r = check(s, part)
+        if (r != Result.Ok) return reject(s, part, r)
         val dst = file(s)
         dst.parentFile?.mkdirs()
+        okMarker(s).delete()
         if (!part.renameTo(dst)) return Result.Io("无法写入 ${dst.path}")
+        okMarker(s).writeText(s.sha256)
         return Result.Ok
     }
 
-    private fun reject(s: ModelSpec, part: File, r: Result): Result {
+    private fun reject(s: ModelSpec, f: File, r: Result): Result {
         val bad = File(root, s.path + ".bad")
         bad.delete() // previous rejected attempt for the same file only
-        part.renameTo(bad)
+        f.renameTo(bad)
         return r
     }
 

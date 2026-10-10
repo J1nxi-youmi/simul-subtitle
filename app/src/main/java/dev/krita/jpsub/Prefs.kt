@@ -18,7 +18,7 @@ class Prefs(ctx: Context) {
 
     /** Overlay width as a fraction of the screen width */
     var widthFrac: Float
-        get() = sp.getFloat("widthFrac", 0.92f)
+        get() = sp.getFloat("widthFrac", DEFAULT_WIDTH)
         set(v) = sp.edit().putFloat("widthFrac", v).apply()
 
     /** Show the recognised Japanese above the Chinese line */
@@ -42,4 +42,13 @@ class Prefs(ctx: Context) {
     /** DownloadManager ids by model path, so a download survives the activity being recreated */
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
+
+    fun listen(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(l)
+    fun unlisten(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.unregisterOnSharedPreferenceChangeListener(l)
+
+    companion object {
+        const val DEFAULT_WIDTH = 0.90f
+        /** Width slider / resize range as a fraction of the screen width. */
+        const val MIN_WIDTH = 0.40f
+    }
 }

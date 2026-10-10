@@ -48,6 +48,20 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     var onResize: (dw: Int) -> Unit = {}
     var onStyleChanged: () -> Unit = {}
     var onStop: () -> Unit = {}
+    /** Toolbar opened/closed: the host widens the window while it is open so the toolbar is never clipped. */
+    var onToolbarShown: (Boolean) -> Unit = {}
+
+    /** Caption card width in px (the window may be wider while the toolbar is open). */
+    fun setCardWidth(px: Int) {
+        val lp = card.layoutParams
+        if (lp.width != px) { lp.width = px; card.layoutParams = lp }
+    }
+
+    /** Natural width of the toolbar, independent of the current window width. */
+    fun toolbarWidthPx(): Int {
+        toolbar.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        return toolbar.measuredWidth
+    }
 
     init {
         orientation = VERTICAL
@@ -168,7 +182,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         toolbar.addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF87171.toInt()) })
     }
 
-    private fun setSize(v: Float) { applyStyle(v.coerceIn(12f, 40f), bgAlpha); onStyleChanged() }
+    private fun setSize(v: Float) { applyStyle(v.coerceIn(MIN_SP, MAX_SP), bgAlpha); onStyleChanged() }
     private fun setAlphaStep(v: Float) { applyStyle(textSp, v.coerceIn(0f, 1f)); onStyleChanged() }
 
     fun setLocked(v: Boolean) {
@@ -184,8 +198,13 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         toolbar.visibility = VISIBLE
         handle.visibility = if (locked) GONE else VISIBLE
         bumpToolbarTimer()
+        onToolbarShown(true)
     }
-    private fun hideToolbar() { toolbar.visibility = GONE; handle.visibility = GONE }
+    private fun hideToolbar() {
+        if (toolbar.visibility == GONE) return
+        toolbar.visibility = GONE; handle.visibility = GONE
+        onToolbarShown(false)
+    }
 
     private fun installGestures() {
         val slop = dp(8f)
@@ -216,5 +235,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             }
             true
         }
+    }
+
+    companion object {
+        /** Caption size range, shared with the settings slider. */
+        const val MIN_SP = 12f
+        const val MAX_SP = 36f
     }
 }

@@ -18,7 +18,7 @@ up beyond 30 s of speech the app stops capturing, keeps translating the sentence
 (up to 60 s, cut short by stopping), then cancels the rest, waits for any in-progress native call to
 return (not interruptible, so this wait has no hard limit), releases the models and reports either "all
 translated" or how many were abandoned — nothing arrives after that report. The captions stay until you
-long-press to end.
+tap the subtitle and press ✕.
 
 ## Build
 
@@ -35,13 +35,22 @@ Behind a proxy: `HTTPS_PROXY=... ./setup.sh` and `./gradlew -Dhttps.proxyHost=12
 
 ## Install on the phone
 
-```bash
-adb install -r app/build/outputs/apk/release/app-release.apk
-./setup.sh push                              # copies models to /sdcard/Android/data/dev.krita.jpsub/files
-```
+No adb needed: copy `app/build/outputs/apk/release/app-release.apk` to the phone (cable, cloud drive,
+chat app) and open it; allow "install unknown apps" for the app you opened it from. Updates install over
+the old version (same signing key).
 
-Open "日语字幕" → 开始 → allow audio / overlay → choose the app to share (or the whole screen).
-Drag the subtitle vertically to move it, long-press it (or the notification's 停止) to stop.
+Models (~1.21 GB) are downloaded **by the app**: open "日语字幕" → 下载模型. The system DownloadManager
+fetches them from pinned Hugging Face revisions / the sherpa-onnx GitHub release (keeps going in the
+background); each file is checked for exact size and SHA-256 before it is used, so a partial or corrupt
+download is never loaded. Needs access to huggingface.co and github.com. Files copied by an older version
+(`./setup.sh push` over adb still works) are hash-checked once in the background.
+
+Then 开始字幕 → allow audio / overlay → choose the app to share (or the whole screen).
+
+Overlay: drag to move · drag the corner dot to change width · tap for the toolbar (A−/A+ size,
+background −/+ opacity, lock position, ✕ stop). Size, opacity, width, Japanese line and timing line can
+also be set on the home screen, with a live preview; changes apply to a running overlay immediately.
+The notification's 停止 also stops.
 
 ## Measuring
 

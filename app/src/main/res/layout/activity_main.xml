@@ -255,7 +255,7 @@
             android:background="@drawable/tips_bg"
             android:lineSpacingExtra="5dp"
             android:padding="18dp"
-            android:text="1. 点「开始字幕」，在系统弹窗里选择要翻译的 App（或整个屏幕），务必勾选共享音频。\n2. 字幕悬浮在屏幕上：拖动移动位置，拖右下角圆点调整宽度，点一下字幕展开工具栏（字号、透明度、锁定、停止）。\n3. 灰色字是识别中的草稿，说完一句后会变白定稿。\n4. 部分 App（例如开启了版权保护的视频）不允许捕获声音，这时不会出字幕。"
+            android:text="1. 点「开始字幕」，在系统弹窗里选择要翻译的 App（或整个屏幕）。\n2. 字幕悬浮在屏幕上：拖动移动位置，拖右下角圆点调整宽度，点一下字幕展开工具栏（字号、透明度、锁定、停止）。\n3. 灰色字是识别中的草稿，说完一句后会变白定稿。\n4. 部分 App（例如开启了版权保护的视频）不允许捕获声音，这时不会出字幕。"
             android:textColor="@color/text2"
             android:textSize="13.5sp" />
     </LinearLayout>

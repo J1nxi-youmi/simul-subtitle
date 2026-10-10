@@ -89,17 +89,14 @@ class CaptionService : Service() {
     private fun session(p: MediaProjection) {
         val root = getExternalFilesDir(null)!!
         val files = ModelFiles(root)
-        val missing = ModelStore(root).missing()
-        if (missing.isNotEmpty()) {
-            setStatus("模型未下载完整，请回到 App 首页下载：\n" + missing.joinToString("、") { it.path.substringAfterLast('/') })
-            return
-        }
         var vad: SileroProb? = null
         var asr: SherpaAsr? = null
         var mt: LlamaTranslator? = null
         var log: FileWriter? = null
         var keepOverlay = false
         try {
+            // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stopSelf)
+            if (!ModelStore(root).ready()) { Log.w(TAG, "models missing, not starting"); return }
             val t0 = monoMs()
             vad = SileroProb(files)
             asr = SherpaAsr(files, ASR_THREADS)
@@ -146,8 +143,8 @@ class CaptionService : Service() {
                     // Drain is bounded; afterwards it waits for in-progress native calls to return (cancelled, but
                     // not interruptible), so the count is final and nothing is delivered later.
                     val left = pl.drainFinals(DRAIN_TIMEOUT_MS)
-                    if (!stopping) setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。长按字幕结束。"
-                                             else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。长按字幕结束。")
+                    if (!stopping) setStatus(if (left == 0) "⚠ 手机处理跟不上，已停止采集；已收到的句子都已翻译。点字幕再点 ✕ 结束。"
+                                             else "⚠ 手机处理跟不上，已停止采集；还有 $left 句未翻译被放弃。点字幕再点 ✕ 结束。")
                     keepOverlay = true // models are released below; the captions stay until the user stops
                 }
             } finally {
@@ -279,33 +276,62 @@ class CaptionService : Service() {
         val wm = getSystemService(WindowManager::class.java)
         val dm = resources.displayMetrics
         val v = CaptionOverlayView(this, interactive = true)
-        v.applyStyle(prefs.textSp, prefs.bgAlpha)
-        val width = (dm.widthPixels * prefs.widthFrac).toInt()
+        v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
+        var cardW = (dm.widthPixels * prefs.widthFrac).toInt()
+        var toolbarShown = false
         val lp = WindowManager.LayoutParams(
-            width,
+            cardW,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.overlayX.takeIf { it >= 0 } ?: ((dm.widthPixels - width) / 2)
+            x = prefs.overlayX.takeIf { it >= 0 } ?: ((dm.widthPixels - cardW) / 2)
             y = prefs.overlayY.takeIf { it >= 0 } ?: (dm.heightPixels * 2 / 3)
         }
-        fun clamp() {
-            lp.width = lp.width.coerceIn((dm.widthPixels * 0.35f).toInt(), dm.widthPixels)
-            lp.x = lp.x.coerceIn(0, (dm.widthPixels - lp.width).coerceAtLeast(0))
-            lp.y = lp.y.coerceIn(0, (dm.heightPixels - v.height.coerceAtLeast(1)).coerceAtLeast(0))
+        // Keeps the card at the user's width and fully on screen. While the toolbar is open the window is
+        // widened around the card's centre so the toolbar fits; closed, the window is exactly the card, so no
+        // invisible area blocks touches to the app underneath.
+        fun layout() {
+            val sw = dm.widthPixels; val sh = dm.heightPixels
+            cardW = cardW.coerceIn((sw * Prefs.MIN_WIDTH).toInt(), sw)
+            val win = maxOf(cardW, if (toolbarShown) v.toolbarWidthPx() else 0).coerceAtMost(sw)
+            lp.x -= (win - lp.width) / 2
+            lp.width = win
+            v.setCardWidth(cardW)
+            lp.x = lp.x.coerceIn(0, (sw - lp.width).coerceAtLeast(0))
+            lp.y = lp.y.coerceIn(0, (sh - v.height.coerceAtLeast(1)).coerceAtLeast(0))
+            if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)
         }
-        v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; clamp(); wm.updateViewLayout(v, lp) }
-        v.onResize = { dw -> lp.width += dw; clamp(); wm.updateViewLayout(v, lp) }
-        v.onMoveEnd = { prefs.overlayX = lp.x; prefs.overlayY = lp.y; prefs.widthFrac = lp.width.toFloat() / dm.widthPixels }
+        v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; layout() }
+        v.onResize = { dw -> cardW += dw; layout() }
+        v.onMoveEnd = { prefs.overlayX = lp.x + (lp.width - cardW) / 2; prefs.overlayY = lp.y; prefs.widthFrac = cardW.toFloat() / dm.widthPixels }
         v.onStyleChanged = { prefs.textSp = v.textSp; prefs.bgAlpha = v.bgAlpha }
+        v.onToolbarShown = { toolbarShown = it; layout() }
         v.onStop = { stopSelf() }
+        // taller text / toolbar / rotation: pull the window back on screen once the new height is known
+        v.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) v.post { layout() }
+        }
+        // settings changed on the home screen while subtitles run
+        prefListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
+                    v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
+                "widthFrac" -> (dm.widthPixels * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
+                "showJa", "showStats" -> refresh()
+            }
+        }.also { prefs.listen(it) }
+        v.setCardWidth(cardW)
         wm.addView(v, lp)
         overlay = v
+        layout()
         refresh()
     }
+
+    /** Strong reference: SharedPreferences only keeps listeners weakly. */
+    private var prefListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     override fun onDestroy() {
         // Never block the main thread and never free native objects here: the session thread
@@ -317,6 +343,7 @@ class CaptionService : Service() {
         synchronized(cancelLock) { pipeline?.stop() ?: translator?.cancel() }
         projection?.stop()
         projection = null
+        prefListener?.let { prefs.unlisten(it) }; prefListener = null
         overlay?.let { getSystemService(WindowManager::class.java).removeView(it) }
         overlay = null
         super.onDestroy()

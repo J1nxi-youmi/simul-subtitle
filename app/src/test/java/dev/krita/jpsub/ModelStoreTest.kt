@@ -70,6 +70,40 @@ class ModelStoreTest {
     }
 
     @Test
+    fun sameLengthBadFinalFileIsNotReadyAndIsRejectedOnVerify() {
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.file(s), "hello MODEL".toByteArray()) // e.g. pushed by hand, never verified
+        assertFalse("unverified file must not count as installed", store.ready())
+        assertEquals(listOf(s), store.unverified())
+        assertTrue(store.verifyInstalled(s) is ModelStore.Result.WrongHash)
+        assertFalse(store.file(s).exists())
+        assertTrue(store.unverified().isEmpty())
+        assertEquals(listOf(s), store.missing())
+    }
+
+    @Test
+    fun goodUnverifiedFinalFileBecomesReadyAfterVerify() {
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.file(s), good)
+        assertFalse(store.ready())
+        assertEquals(ModelStore.Result.Ok, store.verifyInstalled(s))
+        assertTrue(store.ready())
+    }
+
+    @Test
+    fun publishTwiceIsHarmless() {
+        // a second verifier (e.g. a recreated screen) must not turn a published file into a failure
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.partFile(s), good)
+        assertEquals(ModelStore.Result.Ok, store.publish(s))
+        assertEquals(ModelStore.Result.Missing, store.publish(s))
+        assertTrue(store.ready())
+    }
+
+    @Test
     fun pinnedManifestMatchesWhatWasMeasured() {
         // The Mac e2e and the phone must use the same bytes; guard against accidental edits.
         assertEquals(1_210_825_907L, ModelStore(tmp.root).totalBytes())

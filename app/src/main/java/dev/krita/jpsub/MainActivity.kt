@@ -302,10 +302,21 @@ class MainActivity : Activity() {
             if (!prefs.jevOn) return
             val p = prefs.jevProvider
             jevBox.addView(label("接口"))
-            jevBox.addView(choice(JevProvider.entries.map { it to it.short }, p) { prefs.jevProvider = it; main.post { renderJev() } })
+            // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names
+            jevBox.addView(android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                    JevProvider.entries.map { "${it.label}（${it.note}）" })
+                setSelection(p.ordinal, false)
+                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(a: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                        if (prefs.jevProvider.ordinal != pos) { prefs.jevProvider = JevProvider.entries[pos]; main.post { renderJev() } }
+                    }
+                    override fun onNothingSelected(a: android.widget.AdapterView<*>?) {}
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             if (!p.needsKey) {
                 jevBox.addView(TextView(this).apply {
-                    text = "不用填 key。只把识别出的日语和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以换下面两个付费接口。"
+                    text = "不用填 key。只把识别出的日语和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以在上面换成另外两个需要 key 的接口。"
                     textSize = 12.5f; setTextColor(getColor(R.color.text2))
                 })
                 return

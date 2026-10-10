@@ -21,11 +21,11 @@ import org.json.JSONTokener
 // Pure Kotlin + OkHttp so the Mac harness (tools/mac-e2e) runs the same code.
 
 /** [needsKey] false: no Authorization header is sent (Zen rejects a wrong key with 401 but answers without one). */
-enum class JevProvider(val label: String, val url: String, val model: String, val needsKey: Boolean = true, val short: String = label) {
+enum class JevProvider(val label: String, val url: String, val model: String, val needsKey: Boolean = true, val note: String) {
     // free and keyless, but undocumented: it may get rate limits or a login at any time (tested 2026-10-10)
-    ZEN("OpenCode Zen", "https://opencode.ai/zen/v1/systemone", "jev-1.13-free", needsKey = false, short = "免费"),
-    OFFICIAL("TypeSafe 官方", "https://api.typesafe.ai/v1/systemone", "jev-latest", short = "官方"),
-    OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1/systemone", "~typesafe/jev-latest", short = "OR"),
+    ZEN("OpenCode Zen", "https://opencode.ai/zen/v1/systemone", "jev-1.13-free", needsKey = false, note = "免费，不用 key"),
+    OFFICIAL("TypeSafe 官方", "https://api.typesafe.ai/v1/systemone", "jev-latest", note = "需要 key"),
+    OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1/systemone", "~typesafe/jev-latest", note = "需要 key"),
 }
 
 /** One request with everything the session log needs. [answer] is the parsed `answers.x`, null on any failure. */

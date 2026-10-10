@@ -170,7 +170,10 @@ class Pipeline(
         val backlog: Int
         synchronized(lock) {
             if (!running || overloaded || failed) return false
-            asrQueue.removeIf { it.job.segmentId == job.segmentId && !it.job.isFinal }
+            // A sentence-end candidate is a question the Segmenter is waiting on: a plain draft must not evict it,
+            // only a newer candidate or the final (which ends the wait) may.
+            val evicts = job.isFinal || job.endOfSpeech
+            asrQueue.removeIf { it.job.segmentId == job.segmentId && !it.job.isFinal && (evicts || !it.job.endOfSpeech) }
             if (job.isFinal) {
                 if (job.segmentId > lastFinalSeg) lastFinalSeg = job.segmentId
                 pendingFinalAudioMs += audioMs(job)

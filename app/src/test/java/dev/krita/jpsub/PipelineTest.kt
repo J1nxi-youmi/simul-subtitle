@@ -53,6 +53,16 @@ class PipelineTest {
         override fun recognize(samples: FloatArray): String { seen.add(samples.size); return "ja${samples.size}" }
     }
 
+    /** Blocks the first recognize() until [gate] opens. */
+    private class GateAsr : Asr {
+        val gate = CountDownLatch(1); val entered = CountDownLatch(1)
+        val seen = Collections.synchronizedList(ArrayList<Int>())
+        override fun recognize(samples: FloatArray): String {
+            if (entered.count > 0) { entered.countDown(); gate.await() }
+            seen.add(samples.size); return "ja${samples.size}"
+        }
+    }
+
     companion object {
         /** The Japanese text inside a GENERAL-scene Index prompt. */
         fun source(prompt: String) = prompt.substringAfter("\n\n").substringBefore("<|im_end|>")
@@ -475,6 +485,23 @@ class PipelineTest {
         val p = Pipeline(FakeAsr(), FakeMt(1), { out.add(it); if (!it.isFinal) shown.countDown() })
         p.start(); p.submit(job(1, 1, false, 10))
         assertTrue(shown.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+    }
+
+    @Test
+    fun aLaterPlainDraftDoesNotReplaceAQueuedSentenceEndCandidate() {
+        val asr = GateAsr(); val judge = FakeJudge(unfinishedP = 0.9)
+        val p = Pipeline(asr, FakeMt(1), {}, judge = judge)
+        p.start()
+        p.submit(job(1, 1, true, 5)) // keeps the ASR thread busy
+        assertTrue(asr.entered.await(2, TimeUnit.SECONDS))
+        p.submit(AsrJob(2, 4, false, FloatArray(24), monoMs(), endOfSpeech = true)) // Segmenter waits for this answer
+        p.submit(job(2, 5, false, 25)) // speech went on 32 ms later: a plain draft of the same segment
+        asr.gate.countDown()
+        val deadline = monoMs() + 2000
+        while (p.holdHint(2, 4) == null && monoMs() < deadline) Thread.sleep(5)
+        p.stop(); p.awaitStopped()
+        assertEquals(true, p.holdHint(2, 4))
+        assertTrue(judge.asked.toString(), judge.asked.contains("u:ja24"))
     }
 
     @Test

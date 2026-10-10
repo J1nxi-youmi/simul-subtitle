@@ -46,6 +46,24 @@ class SessionLogTest {
     }
 
     @Test
+    fun deleteRemovesFinishedAndInterruptedLogsButNeverOneStillBeingWritten() {
+        val root = tmp.newFolder()
+        val done = SessionLog(SessionLog.dir(root)).also { it.write(mapOf("ev" to "a")); assertTrue(it.close()) }.file
+        val stale = File(SessionLog.dir(root), "session-20260101-000000.jsonl.part").apply { writeText("{}\n") }
+        val running = SessionLog(SessionLog.dir(root))
+        val runningFile = SessionLog.list(root).single(SessionLog::isActive)
+        assertTrue(SessionLog.delete(done)); assertFalse(done.exists())
+        assertFalse("a running session's file must stay", SessionLog.delete(runningFile)); assertTrue(runningFile.exists())
+        // "clear all": the running one stays, the interrupted one goes; the count says what is left
+        assertEquals(1, SessionLog.deleteAll(root))
+        assertFalse(stale.exists())
+        assertEquals(listOf(runningFile), SessionLog.list(root))
+        assertTrue(running.close())
+        assertEquals(0, SessionLog.deleteAll(root))
+        assertTrue(SessionLog.list(root).isEmpty())
+    }
+
+    @Test
     fun aStalledDiskDropsEventsVisiblyInsteadOfGrowingWithoutBound() {
         val release = CountDownLatch(1)
         val stuck = object : Writer() {

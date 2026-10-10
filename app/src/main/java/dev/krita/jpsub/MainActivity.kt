@@ -372,9 +372,14 @@ class MainActivity : Activity() {
             })
             return
         }
-        val shown = if (showAllLogs) files else files.take(MAX_LOGS_SHOWN)
-        for (f in shown) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val dp = resources.displayMetrics.density
+        // all logs stay reachable: beyond 5 the list scrolls inside a fixed-height box instead of growing the page
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        for (f in files) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
+            }
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             // session-20261010-151200[-1].jsonl[.part] → 2026-10-10 15:12:00
             val n = f.name.removePrefix("session-").substringBefore(".jsonl")
@@ -391,17 +396,60 @@ class MainActivity : Activity() {
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = f !in active
+                minWidth = 0; minimumWidth = 0; setPadding((10 * dp).toInt(), 0, (10 * dp).toInt(), 0)
+                setOnClickListener { confirmDelete("删除 $title 的记录？", "删除后不能恢复。") {
+                    if (!SessionLog.delete(f)) Toast.makeText(this@MainActivity, "删除失败：记录正在写入或文件被占用", Toast.LENGTH_SHORT).show()
+                    renderLogs()
+                } }
+            })
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                 text = "分享"; isEnabled = f !in active; setOnClickListener { share(f) }
             })
-            box.addView(row)
+            rows.addView(row)
         }
-        if (files.size > MAX_LOGS_SHOWN) box.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = if (showAllLogs) "只看最近 $MAX_LOGS_SHOWN 个" else "查看全部（共 ${files.size} 个）"
-            setOnClickListener { showAllLogs = !showAllLogs; renderLogs() }
+        if (files.size > LOGS_BEFORE_SCROLL) {
+            val scroller = object : android.widget.ScrollView(this) {
+                // the page is a ScrollView too: keep the gesture in this list while it can scroll
+                override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+                    parent.requestDisallowInterceptTouchEvent(canScrollVertically(1) || canScrollVertically(-1))
+                    return super.onTouchEvent(e)
+                }
+                override fun onInterceptTouchEvent(e: android.view.MotionEvent): Boolean {
+                    if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) parent.requestDisallowInterceptTouchEvent(true)
+                    return super.onInterceptTouchEvent(e)
+                }
+            }.apply { isVerticalScrollBarEnabled = true; isScrollbarFadingEnabled = false; addView(rows) }
+            // about 5½ rows: the cut-off row shows there is more
+            box.addView(scroller, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (LOGS_BEFORE_SCROLL * 58 * dp + 28 * dp).toInt()))
+        } else box.addView(rows)
+        val deletable = files.count { it !in active }
+        box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, (6 * dp).toInt(), 0, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "共 ${files.size} 个，" + files.sumOf { it.length() }.let { if (it < 1048576) "%.1f KB".format(it / 1024.0) else "%.1f MB".format(it / 1048576.0) }
+                textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "全部清空"; setTextColor(getColor(R.color.err)); isEnabled = deletable > 0
+                setOnClickListener { confirmDelete("删除全部 $deletable 个记录？", "正在记录的不会删除。删除后不能恢复。") {
+                    val left = SessionLog.deleteAll(getExternalFilesDir(null)!!)
+                    if (left > 0) Toast.makeText(this@MainActivity, "还剩 $left 个（正在记录或无法删除）", Toast.LENGTH_SHORT).show()
+                    renderLogs()
+                } }
+            })
         })
     }
-    private var showAllLogs = false
+
+    private fun confirmDelete(title: String, msg: String, ok: () -> Unit) {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(title).setMessage(msg)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ -> ok() }
+            .show()
+    }
     private var listedLogs: Pair<List<String>, Set<java.io.File>>? = null
     private var translateRunning = false
 
@@ -522,6 +570,6 @@ class MainActivity : Activity() {
         const val REQ_PROJECTION = 2
         val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "showJa", "showStats", "keepSentences", "keepChars")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
-        const val MAX_LOGS_SHOWN = 20
+        const val LOGS_BEFORE_SCROLL = 5
     }
 }

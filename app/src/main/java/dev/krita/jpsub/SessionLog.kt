@@ -127,5 +127,9 @@ class SessionLog(
         }
         /** false for a session that is still running, failed, or was interrupted */
         fun complete(f: File) = f.name.endsWith(".jsonl")
+        /** Deletes one listed log unless a session may still write it. @return true if it is gone */
+        fun delete(f: File): Boolean = synchronized(NAMES) { f !in ACTIVE && (f.delete() || !f.exists()) }
+        /** Deletes every log no session may still write. @return how many logs are left (running or undeletable) */
+        fun deleteAll(root: File): Int = synchronized(NAMES) { list(root).count { !delete(it) } }
     }
 }

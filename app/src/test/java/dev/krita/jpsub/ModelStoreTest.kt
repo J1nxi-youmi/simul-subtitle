@@ -19,6 +19,21 @@ class ModelStoreTest {
     private fun write(f: File, b: ByteArray) { f.parentFile.mkdirs(); f.writeBytes(b) }
 
     @Test
+    fun onlineTranslationNeedsOnlyTheSpeechModelsAndKeepsTheLocalOne() {
+        val asr = spec(path = "asr/a.onnx"); val mt = spec("mt bytes".toByteArray(), path = "mt/m.gguf")
+        var local = false
+        val store = ModelStore(tmp.root, listOf(asr, mt), needsMt = { local })
+        write(store.partFile(asr), good); assertEquals(ModelStore.Result.Ok, store.publish(asr))
+        assertTrue("online: the local model is not required", store.ready())
+        assertEquals(good.size.toLong(), store.totalBytes())
+        local = true // switched to local
+        assertFalse(store.ready()); assertEquals(listOf(mt), store.missing())
+        write(store.partFile(mt), "mt bytes".toByteArray()); assertEquals(ModelStore.Result.Ok, store.publish(mt))
+        local = false
+        assertTrue(store.isInstalled(mt)) // switching back to online leaves the downloaded model in place
+    }
+
+    @Test
     fun missingAndZeroByteFilesAreNotReady() {
         val s = spec()
         val store = ModelStore(tmp.root, listOf(s))

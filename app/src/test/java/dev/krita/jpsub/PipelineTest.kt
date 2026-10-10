@@ -65,7 +65,7 @@ class PipelineTest {
 
     companion object {
         /** The Japanese text inside a GENERAL-scene Index prompt. */
-        fun source(prompt: String) = prompt.substringAfter("\n\n").substringBefore("<|im_end|>")
+        fun source(prompt: String) = prompt.substringAfter("\n\n")
     }
 
     private fun job(seg: Long, rev: Int, final: Boolean, n: Int) = AsrJob(seg, rev, final, FloatArray(n), monoMs())

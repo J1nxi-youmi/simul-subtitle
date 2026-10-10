@@ -16,9 +16,12 @@ fun main() {
         .setTokens("$m/asr/tokens.txt").setNumThreads(2).setModelType("transducer").build()).setDecodingMethod("greedy_search").build())
     val asr = object : Asr { override fun recognize(samples: FloatArray): String { val s = rec.createStream(); val pd = FloatArray(samples.size + 9600); System.arraycopy(samples, 0, pd, 4800, samples.size); s.acceptWaveform(pd, 16000); rec.decode(s); val t = rec.getResult(s).text; s.release(); return t } }
     val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
-    val mt = object : Mt {
+    // -Donline=<35|9|2> uses bilibili's public Index API instead of the local model
+    val online = System.getProperty("online")?.let { m -> OnlineModel.entries.single { it.name == "B$m" } }
+    val mt: Mt = if (online != null) OnlineTranslator(online) else object : Mt {
         val h = MacLlama.nativeLoad("$m/mt/index-translate-2b.gguf", 4)
-        override fun translate(prompt: String): MtResult? = MacLlama.nativeTranslate(h, prompt, 160)?.let(MtResult::parse)
+        override fun translate(prompt: String): MtResult? =
+            qwenChat(prompt).let { full -> MacLlama.nativeTranslate(h, full, 160)?.let { MtResult.parse(it, request = full) } }
         override fun cancel() = MacLlama.nativeCancel(h)
     }
     // -Djev=1 uses the real Jev (TYPESAFE_API_KEY); -Dlog=<file> writes the session events as JSONL

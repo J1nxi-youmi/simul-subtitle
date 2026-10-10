@@ -276,9 +276,10 @@ class Pipeline(
         val t0 = clock()
         val r = hit?.result ?: mt.translate(prompt)
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
-            "prompt" to prompt, "raw" to r?.raw, "stop" to r?.stop?.toString(), "prompt_tokens" to r?.promptTokens,
+            "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
+            "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
             "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs, "ms" to clock() - t0,
-            // reused: the token counts / prefill / decode are those of the earlier call (rev reused_from)
+            // reused: everything but ms is that of the earlier call (rev reused_from)
             "reused" to (hit != null), "reused_from" to hit?.rev))
         if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r)
         return r

@@ -16,9 +16,10 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
 }
 
 /**
- * Index-Translate-2B (Qwen3.5) prompt in the format the model was trained and benchmarked with (bilibili/Index-Translate
+ * Index-Translate user message in the format the models were trained and benchmarked with (bilibili/Index-Translate
  * inference/llm/translate.py): the plain instruction when there are no constraints, otherwise 【源文】/【约束要求】 with
- * the terms found in [text] as a hard constraint and the scene / [notes] as soft ones.
+ * the terms found in [text] as a hard constraint and the scene / [notes] as soft ones. The same text goes to the online
+ * API (as the user message) and to the local model (wrapped by [qwenChat]).
  */
 fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList()): String {
     val terms = scene.terms.filter { text.contains(it.first) }.distinctBy { it.second }
@@ -27,35 +28,92 @@ fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList()): 
         scene.background?.let { add("【注意】$it") }
         notes.forEach { add("【注意】$it") }
     }
-    val user = if (constraints.isEmpty()) "请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n$text"
+    return if (constraints.isEmpty()) "请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n$text"
     else "请将以下日语直播字幕翻译成中文，并且严格遵循所有约束要求。\n\n【源文】\n$text\n\n【约束要求】\n" +
         constraints.mapIndexed { i, c -> "${i + 1}. $c" }.joinToString("\n") + "\n\n只输出译文，不要有任何额外说明。"
-    // Qwen3.5 chat template with thinking disabled (empty think block), as rendered by the model's own template.
-    return "<|im_start|>user\n$user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 }
+
+/** Qwen3.5 chat template with thinking disabled (empty think block), as rendered by the model's own template. */
+fun qwenChat(user: String) = "<|im_start|>user\n$user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 
 /** The model occasionally still emits a think block or a stray "</think>"; the official client strips it too. */
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
 
 /**
- * One translation call as the native code reported it. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
- * [raw] is the model output exactly as generated (kept for the session log); [text] is what a caption shows.
+ * One translation call. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
+ * [raw] is the model output exactly as generated; [text] is what a caption shows. For the session log: [request] is
+ * exactly what was sent (local: the full chat prompt; online: the JSON body), [response] the raw HTTP body (online),
+ * [http] its status and [error] a fixed code or exception class. Timings the backend does not report stay null.
  */
-class MtResult(val raw: String, val stop: Char, val promptTokens: Int, val outputTokens: Int,
-               val prefillMs: Long = 0, val decodeMs: Long = 0) {
+class MtResult(
+    val raw: String, val stop: Char, val promptTokens: Int?, val outputTokens: Int?,
+    val prefillMs: Long? = null, val decodeMs: Long? = null,
+    val request: String? = null, val response: String? = null, val http: Int? = null, val error: String? = null,
+) {
     val text: String get() = stripThink(raw)
 
     /** Text usable as a caption: generation ended normally or ran into the token cap (kept, it is mostly complete). */
     val usable get() = (stop == 'e' || stop == 'l') && text.isNotEmpty()
 
     companion object {
-        fun parse(b: ByteArray): MtResult {
+        fun parse(b: ByteArray, request: String? = null): MtResult {
             val nul = b.indexOf(0)
             val c = String(b, nul + 1, b.size - nul - 1, Charsets.US_ASCII).split(',')
             return MtResult(String(b, 1, nul - 1, Charsets.UTF_8), b[0].toInt().toChar(), c[0].toInt(), c[1].toInt(),
-                c.getOrNull(2)?.toLong() ?: 0, c.getOrNull(3)?.toLong() ?: 0)
+                c.getOrNull(2)?.toLong(), c.getOrNull(3)?.toLong(), request = request)
         }
+    }
+}
+
+/** The models behind the free public Index-Translate API (only 35B-A3B is listed by /v1/models; all three answer). */
+enum class OnlineModel(val id: String, val label: String) {
+    B35("Index-Translate-35B-A3B", "35B-A3B（质量最好）"),
+    B9("Index-Translate-9B", "9B"),
+    B2("Index-Translate-2B", "2B（最快）"),
+}
+
+/**
+ * bilibili's free public Index-Translate API (inference/llm/call_api.py): no key, the client's User-Agent, thinking off.
+ * No retry and no fallback: a failure is a failed caption, visible as such. [cancel] is terminal (stop).
+ */
+class OnlineTranslator(
+    private val model: OnlineModel,
+    deadlineMs: Long = 8_000,
+    /** tests point this at a local server */
+    private val url: String = URL,
+) : Mt {
+    private val calls = Calls(deadlineMs)
+
+    override fun translate(prompt: String): MtResult? {
+        val body = Json.encode(mapOf(
+            "model" to model.id,
+            "messages" to listOf(mapOf("role" to "user", "content" to prompt)),
+            "temperature" to 0, "max_tokens" to MAX_TOKENS,
+            "chat_template_kwargs" to mapOf("enable_thinking" to false),
+        ))
+        val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"))
+        if (r.error == "cancelled") return null
+        val j = r.body?.let { runCatching { Json.parse(it) as? Map<*, *> }.getOrNull() }
+        val choice = (j?.get("choices") as? List<*>)?.firstOrNull() as? Map<*, *>
+        val content = (choice?.get("message") as? Map<*, *>)?.get("content") as? String
+        val usage = j?.get("usage") as? Map<*, *>
+        val stop = when {
+            r.status != 200 || content == null -> 'f'
+            choice["finish_reason"] == "length" -> 'l'
+            else -> 'e'
+        }
+        val error = r.error ?: when { r.status != 200 -> "HTTP ${r.status}"; content == null -> "bad response"; else -> null }
+        return MtResult(content ?: "", stop, (usage?.get("prompt_tokens") as? Number)?.toInt(),
+            (usage?.get("completion_tokens") as? Number)?.toInt(), request = body, response = r.body, http = r.status, error = error)
+    }
+
+    override fun cancel() = calls.cancel()
+
+    companion object {
+        const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
+        /** same cap as the local model */
+        const val MAX_TOKENS = 160
     }
 }
 

@@ -50,6 +50,14 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("finalOnly", false)
         set(v) = sp.edit().putBoolean("finalOnly", v).apply()
 
+    /** Translate with bilibili's public API (default) or the local Index-Translate-2B; read when a session starts. */
+    var mtOnline: Boolean
+        get() = sp.getBoolean("mtOnline", true)
+        set(v) = sp.edit().putBoolean("mtOnline", v).apply()
+    var onlineModel: OnlineModel
+        get() = runCatching { OnlineModel.valueOf(sp.getString("onlineModel", null) ?: "") }.getOrDefault(OnlineModel.B35)
+        set(v) = sp.edit().putString("onlineModel", v.name).apply()
+
     /** What the subtitles are about (translator background + term list); read when a session starts. */
     var scene: Scene
         get() = runCatching { Scene.valueOf(sp.getString("scene", null) ?: "") }.getOrDefault(Scene.GENERAL)

@@ -13,8 +13,8 @@ import java.util.concurrent.Executors
  */
 class ModelDownloader private constructor(ctx: Context) {
     private val app = ctx.applicationContext
-    val store = ModelStore(app.getExternalFilesDir(null)!!)
     private val prefs = Prefs(app)
+    val store = ModelStore(app.getExternalFilesDir(null)!!, needsMt = { !prefs.mtOnline })
     private val dm = app.getSystemService(DownloadManager::class.java)
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "jpsub-verify").apply { isDaemon = true } }
     private val queued = HashSet<String>() // paths submitted to [worker], guarded by this
@@ -76,7 +76,8 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun state(): State {
         var done = 0L; var running = false
-        for (s in store.specs) {
+        // a download of a file the mode no longer needs keeps running (cancel() stops it), it just is not counted
+        for (s in store.required()) {
             if (store.isInstalled(s)) { done += s.size; continue }
             if (s.path in queued) { done += s.size; continue }
             val id = prefs.downloadId(s.path).takeIf { it >= 0 } ?: continue

@@ -50,7 +50,7 @@ class CaptionService : Service() {
     /** Guards [pipeline]/[translator] so onDestroy's cancel never races the session thread's native free. */
     private val cancelLock = Any()
     private var pipeline: Pipeline? = null
-    private var translator: LlamaTranslator? = null
+    private var translator: Mt? = null
 
     private val board = CaptionBoard(maxLines = 2)
     // main thread only
@@ -93,24 +93,29 @@ class CaptionService : Service() {
         val files = ModelFiles(root)
         var vad: SileroProb? = null
         var asr: SherpaAsr? = null
-        var mt: LlamaTranslator? = null
+        var local: LlamaTranslator? = null
         var log: SessionLog? = null
         var keepOverlay = false
         try {
+            // fixed for the whole session: the home screen disables these switches while running
+            val online = if (prefs.mtOnline) prefs.onlineModel else null
             // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stopSelf)
-            if (!ModelStore(root).ready()) { Log.w(TAG, "models missing, not starting"); return }
+            if (!ModelStore(root, needsMt = { online == null }).ready()) { Log.w(TAG, "models missing, not starting"); return }
             val t0 = monoMs()
             vad = SileroProb(files)
             asr = SherpaAsr(files, ASR_THREADS)
             val t1 = monoMs()
-            setStatus("加载翻译模型…")
             if (stopping) return
-            mt = LlamaTranslator(files, MT_THREADS)
+            val mt: Mt = if (online != null) OnlineTranslator(online) else {
+                setStatus("加载翻译模型…")
+                LlamaTranslator(files, MT_THREADS).also { local = it }
+            }
             synchronized(cancelLock) { translator = mt }
             val t2 = monoMs()
-            // Warm-up so the first real sentence does not pay page-in / first-run costs.
+            // Warm-up so the first real sentence does not pay page-in / first-run costs. Online: nothing to warm up,
+            // and no request is sent that the session log would not show.
             asr.recognize(FloatArray(16_000))
-            mt.translate(indexPrompt("こんにちは。", Scene.GENERAL))
+            local?.translate(indexPrompt("こんにちは。", Scene.GENERAL))
             val t3 = monoMs()
             Log.i(TAG, "load asr=${t1 - t0}ms mt=${t2 - t1}ms warmup=${t3 - t2}ms")
             if (stopping) return
@@ -124,9 +129,11 @@ class CaptionService : Service() {
             log = sl
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
-                "jev_requested" to prefs.jevOn, "final_only" to prefs.finalOnly, "mt_model" to files.mt.name,
+                "jev_requested" to prefs.jevOn, "final_only" to prefs.finalOnly,
+                "mt_engine" to (if (online != null) "online" else "local"),
+                "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
-            if (prefs.jevOn && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次只用本地")
+            if (prefs.jevOn && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次不用 Jev")
             val pl = Pipeline(
                 asr, mt,
                 onCaption = { onCaption(it, sl) },
@@ -172,7 +179,7 @@ class CaptionService : Service() {
             // Detach the translator under the same lock onDestroy uses for cancel(), so no thread can call
             // into it after this point; the (slow) native free then happens outside the lock.
             synchronized(cancelLock) { pipeline = null; translator = null }
-            mt?.release(); asr?.release(); vad?.release()
+            local?.release(); asr?.release(); vad?.release()
             Log.i(TAG, "session released")
             if (keepOverlay) while (!stopping) Thread.sleep(100) // only the overlay is alive now
             if (!stopping) main.post { stopSelf() }

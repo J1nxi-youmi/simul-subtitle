@@ -60,6 +60,42 @@ class JevTest {
     private fun jev(deadline: Long = 2_000) =
         Jev(JevProvider.OFFICIAL, "sk-secret", deadline, url = "http://127.0.0.1:$port/v1/systemone")
 
+    private fun online(deadline: Long = 2_000) = OnlineTranslator(OnlineModel.B9, deadline, url = "http://127.0.0.1:$port/v1/chat/completions")
+
+    @Test
+    fun onlineTranslationSendsTheOfficialRequestAndKeepsTheRawResponse() {
+        // shape recorded from index-translate.bilibili.com on 2026-10-10
+        reply = { 200 to """{"model":"Index-Translate-9B","choices":[{"index":0,"message":{"role":"assistant","content":"真的吗？"},"finish_reason":"stop"}],"usage":{"prompt_tokens":34,"completion_tokens":4}}""" }
+        val r = online().translate("请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n本当に？")!!
+        assertEquals("真的吗？", r.text); assertTrue(r.usable); assertEquals(200, r.http); assertNull(r.error)
+        assertEquals(34, r.promptTokens); assertEquals(4, r.outputTokens); assertNull(r.prefillMs)
+        val req = Json.parse(lastBody.get()!!) as Map<*, *>
+        assertEquals("Index-Translate-9B", req["model"])
+        assertEquals(mapOf("enable_thinking" to false), req["chat_template_kwargs"])
+        assertEquals("本当に？", ((req["messages"] as List<*>).single() as Map<*, *>)["content"].toString().substringAfter("\n\n"))
+        assertEquals(r.request, lastBody.get()); assertTrue(r.response!!.contains("finish_reason"))
+    }
+
+    @Test
+    fun onlineFailuresAreUnusableAndLogged() {
+        reply = { 503 to "busy" }
+        val a = online().translate("x")!!
+        assertFalse(a.usable); assertEquals(503, a.http); assertEquals("HTTP 503", a.error); assertEquals("busy", a.response)
+        reply = { 200 to """{"choices":[{"message":{"content":"很长"},"finish_reason":"length"}]}""" }
+        val b = online().translate("x")!!
+        assertEquals('l', b.stop); assertTrue(b.usable); assertNull(b.promptTokens)
+        delayMs = 3_000
+        val c = online(deadline = 300).translate("x")!!
+        assertFalse(c.usable); assertTrue(c.error!!, c.error!!.startsWith("deadline"))
+    }
+
+    @Test
+    fun aStoppedOnlineTranslatorSendsNothingMore() {
+        val t = online(); t.cancel()
+        assertNull(t.translate("x"))
+        Thread.sleep(200); assertEquals(0, hits.get())
+    }
+
     @Test
     fun aSlowlyTricklingResponseIsStillCutAtTheDeadline() {
         // every byte arrives well within the read timeout, so only a whole-call deadline can stop this

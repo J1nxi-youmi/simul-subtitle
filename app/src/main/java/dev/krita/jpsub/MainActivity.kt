@@ -98,6 +98,8 @@ class MainActivity : Activity() {
     private val ticker = object : Runnable {
         override fun run() {
             render()
+            // the translation switches are disabled while a session runs
+            if (CaptionService.running != translateRunning) renderTranslate()
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
             val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.active
             if (now != listedLogs) renderLogs()
@@ -155,8 +157,10 @@ class MainActivity : Activity() {
             }
             else -> {
                 val left = store.totalBytes() - store.installedBytes()
-                status(R.color.warn, "需要下载识别和翻译模型",
-                    "一次性下载约 ${gb(left)}，之后完全在手机本地运行、无需联网。\n来源：huggingface.co、github.com（建议连 Wi‑Fi）。")
+                if (prefs.mtOnline) status(R.color.warn, "需要下载识别模型",
+                    "一次性下载约 ${gb(left)}，语音识别在手机本地运行，翻译用在线接口。\n来源：huggingface.co、github.com。")
+                else status(R.color.warn, "需要下载识别和翻译模型",
+                    "一次性下载约 ${gb(left)}，之后翻译也在手机本地运行（Jev 仍需联网）。\n来源：huggingface.co、github.com（建议连 Wi‑Fi）。")
                 primary.text = "下载模型"; primary.isEnabled = true
                 primary.setOnClickListener { dl.start(); render() }
                 secondary.visibility = View.GONE
@@ -240,11 +244,44 @@ class MainActivity : Activity() {
             }
         }
 
-    /** Scene, display mode and Jev. Scene and Jev apply to the next start; the mode applies immediately. */
+    /** Engine, scene, display mode and Jev. Engine, scene and Jev apply to the next start; the mode applies immediately. */
     private fun renderTranslate() {
         val box = findViewById<LinearLayout>(R.id.translateList)
         box.removeAllViews()
-        box.addView(label("场景（下次开始时生效）", top = 0))
+        box.addView(label("翻译（下次开始时生效）", top = 0))
+        val running = CaptionService.running
+        translateRunning = running
+        val engine = choice(listOf(true to "在线 Index", false to "本地 2B"), prefs.mtOnline) {
+            if (prefs.mtOnline != it) { prefs.mtOnline = it; renderTranslate(); render() } // local needs its model file
+        }
+        box.addView(engine)
+        if (prefs.mtOnline) {
+            val models = android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                    OnlineModel.entries.map { it.label })
+                setSelection(prefs.onlineModel.ordinal, false)
+                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                        if (prefs.onlineModel.ordinal != pos) prefs.onlineModel = OnlineModel.entries[pos]
+                    }
+                    override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+                }
+                isEnabled = !running
+            }
+            box.addView(models, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (6 * resources.displayMetrics.density).toInt()
+            })
+        }
+        box.addView(TextView(this).apply {
+            text = (if (prefs.mtOnline)
+                "B站免费公网接口：识别出的日文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。35B 质量最好，9B/2B 更快。"
+            else "在手机上翻译，需要先下载约 1.3 GB 模型；比在线慢很多，长句可能积压。") +
+                if (running) "\n运行中不能切换，停止后再改。" else ""
+            textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            setPadding(0, (6 * resources.displayMetrics.density).toInt(), 0, 0)
+        })
+        if (running) for (i in 0 until engine.childCount) engine.getChildAt(i).isEnabled = false
+        box.addView(label("场景（下次开始时生效）"))
         box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
         box.addView(label("显示方式（运行中也可在悬浮窗工具栏切换）"))
         modeGroup = choice(listOf(false to "边出边改", true to "只看定稿"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
@@ -348,6 +385,7 @@ class MainActivity : Activity() {
     }
     private var showAllLogs = false
     private var listedLogs: Pair<List<String>, java.io.File?>? = null
+    private var translateRunning = false
 
     private fun share(f: java.io.File) {
         // the list may be up to one tick old: never hand out a URI for a file that is being written or no longer exists

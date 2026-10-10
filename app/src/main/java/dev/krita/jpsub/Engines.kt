@@ -86,7 +86,8 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
     }
 
     /** Every sentence stands alone: cross-sentence context made finals worse with HY-MT and is untested with Index. */
-    override fun translate(prompt: String): MtResult? = nativeTranslate(handle, prompt, MAX_TOKENS)?.let(MtResult::parse)
+    override fun translate(prompt: String): MtResult? =
+        qwenChat(prompt).let { full -> nativeTranslate(handle, full, MAX_TOKENS)?.let { MtResult.parse(it, request = full) } }
 
     /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
     override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }

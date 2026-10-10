@@ -11,7 +11,12 @@ class ModelSpec(val path: String, val url: String, val size: Long, val sha256: S
  * A file counts as installed only once it has been verified and published under [ModelSpec.path];
  * downloads land in "<path>.part" first, so a half-written or wrong file never reaches the native code.
  */
-class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
+class ModelStore(
+    val root: File,
+    val specs: List<ModelSpec> = MODELS,
+    /** read live: false when translating online, so the local model is neither required nor downloaded (nor deleted) */
+    private val needsMt: () -> Boolean = { true },
+) {
     fun file(s: ModelSpec) = File(root, s.path)
     fun partFile(s: ModelSpec) = File(root, s.path + ".part")
 
@@ -42,10 +47,12 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
         val got = sha256(f)
         return if (got.equals(s.sha256, ignoreCase = true)) Result.Ok else Result.WrongHash(got)
     }
-    fun missing() = specs.filter { !isInstalled(it) }
+    /** The files the current mode needs: the local translation model only when translating locally. */
+    fun required() = specs.filter { needsMt() || !it.path.startsWith("mt/") }
+    fun missing() = required().filter { !isInstalled(it) }
     fun ready() = missing().isEmpty()
-    fun totalBytes() = specs.sumOf { it.size }
-    fun installedBytes() = specs.filter(::isInstalled).sumOf { it.size }
+    fun totalBytes() = required().sumOf { it.size }
+    fun installedBytes() = required().filter(::isInstalled).sumOf { it.size }
 
     /**
      * Verifies a finished download in [partFile] and, only if size and SHA-256 match, renames it to the final

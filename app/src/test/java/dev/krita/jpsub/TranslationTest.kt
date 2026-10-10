@@ -31,8 +31,8 @@ class TranslationTest {
     @Test
     fun generalSceneUsesPlainInstruction() {
         val p = indexPrompt("こんにちは", Scene.GENERAL)
-        assertTrue(p.startsWith("<|im_start|>user\n请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\nこんにちは<|im_end|>"))
-        assertTrue(p.endsWith("<|im_start|>assistant\n<think>\n\n</think>\n\n"))
+        assertEquals("请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\nこんにちは", p)
+        assertEquals("<|im_start|>user\n$p<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", qwenChat(p))
     }
 
     @Test

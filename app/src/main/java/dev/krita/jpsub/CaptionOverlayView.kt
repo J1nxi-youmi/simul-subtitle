@@ -24,7 +24,7 @@ import kotlin.math.abs
  * The subtitle card. Used twice: as the floating overlay (with [interactive] gestures) and as the live
  * preview in the settings screen, so what the user tunes is exactly what they get.
  *
- * Overlay gestures: drag anywhere to move, drag the corner dot to resize width, single tap to show the
+ * Overlay gestures: drag anywhere to move, drag the corner dot to resize width and height, single tap to show the
  * toolbar (font −/+, opacity −/+, lock, stop). When locked the card ignores drags; tap still unlocks.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
@@ -46,7 +46,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** Overlay host callbacks (unused for the preview). */
     var onMove: (dx: Int, dy: Int) -> Unit = { _, _ -> }
     var onMoveEnd: () -> Unit = {}
-    var onResize: (dw: Int) -> Unit = {}
+    var onResize: (dw: Int, dh: Int) -> Unit = { _, _ -> }
     var onStyleChanged: () -> Unit = {}
     var onStop: () -> Unit = {}
     /** Mode button tapped: the host flips "only finished sentences" in prefs and calls [setFinalOnly]. */
@@ -77,9 +77,27 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
      * font or width change.
      */
     fun setMaxContentHeight(captionPx: Int, statusPx: Int) {
-        if (text.maxHeight != captionPx) text.maxHeight = captionPx
         if (stats.maxHeight != statusPx) stats.maxHeight = statusPx
+        captionMaxPx = captionPx
+        applyCaptionHeight()
     }
+
+    private var captionMaxPx = Int.MAX_VALUE
+    private var captionFixedPx = 0
+    /**
+     * Fixed caption area height in px (0 = fit the text, up to the max height). Text stays bottom-aligned, so
+     * when it does not fit the newest lines are shown and older ones are cut off at the top.
+     */
+    fun setCaptionHeight(px: Int) { captionFixedPx = px; applyCaptionHeight() }
+    private fun applyCaptionHeight() {
+        val want = if (captionFixedPx > 0) captionFixedPx.coerceIn(minCaptionPx(), captionMaxPx.coerceAtLeast(minCaptionPx())) else 0
+        if (want > 0) { if (text.minHeight != want) text.minHeight = want; if (text.maxHeight != want) text.maxHeight = want }
+        else { if (text.minHeight != 0) text.minHeight = 0; if (text.maxHeight != captionMaxPx) text.maxHeight = captionMaxPx }
+    }
+    /** one caption line: the area never gets smaller than that */
+    fun minCaptionPx() = text.lineHeight + text.paddingTop + text.paddingBottom
+    /** Current caption area height (for starting a resize drag from what is on screen). */
+    fun captionHeightPx() = text.height
 
     /** Natural width of the toolbar, independent of the current window width. */
     fun toolbarWidthPx(): Int {
@@ -268,11 +286,12 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             }
             true
         }
-        var hx = 0f
+        var hx = 0f; var hy = 0f
         handle.setOnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { hx = e.rawX; removeCallbacks(hideRunnable) }
-                MotionEvent.ACTION_MOVE -> { onResize((e.rawX - hx).toInt()); hx = e.rawX }
+                MotionEvent.ACTION_DOWN -> { hx = e.rawX; hy = e.rawY; removeCallbacks(hideRunnable) }
+                // bottom-right dot: right/left = width, down/up = caption height
+                MotionEvent.ACTION_MOVE -> { onResize((e.rawX - hx).toInt(), (e.rawY - hy).toInt()); hx = e.rawX; hy = e.rawY }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { onMoveEnd(); bumpToolbarTimer() }
             }
             true

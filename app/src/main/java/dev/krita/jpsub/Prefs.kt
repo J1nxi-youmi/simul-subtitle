@@ -24,6 +24,11 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("widthFrac", DEFAULT_WIDTH)
         set(v) = sp.edit().putFloat("widthFrac", v).apply()
 
+    /** Caption area height as a fraction of the usable screen height; 0 = fit the text (default) */
+    var heightFrac: Float
+        get() = sp.getFloat("heightFrac", 0f)
+        set(v) = sp.edit().putFloat("heightFrac", v).apply()
+
     /** Show the recognised Japanese above the Chinese line */
     var showJa: Boolean
         get() = sp.getBoolean("showJa", false)

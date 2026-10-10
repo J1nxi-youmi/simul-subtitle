@@ -557,6 +557,8 @@ class MainActivity : Activity() {
         val lSize = findViewById<TextView>(R.id.labelSize)
         val lAlpha = findViewById<TextView>(R.id.labelAlpha)
         val lWidth = findViewById<TextView>(R.id.labelWidth)
+        val height = findViewById<Slider>(R.id.sliderHeight)
+        val lHeight = findViewById<TextView>(R.id.labelHeight)
         val keepS = findViewById<Slider>(R.id.sliderKeepSentences)
         val keepC = findViewById<Slider>(R.id.sliderKeepChars)
         val lKeepS = findViewById<TextView>(R.id.labelKeepSentences)
@@ -571,6 +573,7 @@ class MainActivity : Activity() {
             width.value = (Math.round(prefs.widthFrac * 20) * 5f).coerceIn(40f, 100f)
             ja.isChecked = prefs.showJa
             stats.isChecked = prefs.showStats
+            height.value = (Math.round(prefs.heightFrac * 20) * 5f).coerceIn(0f, 40f)
             keepS.value = prefs.keepSentences.coerceIn(1, 6).toFloat()
             keepC.value = (Math.round(prefs.keepChars / 10f) * 10f).coerceIn(0f, 300f)
             loading = false
@@ -579,10 +582,14 @@ class MainActivity : Activity() {
             lSize.text = "字号  ${size.value.toInt()}"
             lAlpha.text = "背景不透明度  ${alpha.value.toInt()}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
+            lHeight.text = if (height.value == 0f) "字幕高度  自动（随内容）" else "字幕高度  屏幕的 ${height.value.toInt()}%"
             lKeepS.text = "至少保留  ${keepS.value.toInt()} 句"
             lKeepC.text = "超过  ${keepC.value.toInt()} 字后移除旧句"
             keepHint.text = "已说完的句子超过 ${keepS.value.toInt()} 句，并且总字数超过 ${keepC.value.toInt()} 字时，才移走最早的一句（正在说的那句不算）。窗口放不下时只显示最新的部分。"
             preview.applyStyle(size.value, alpha.value / 100f)
+            // same caption height as the overlay will get (the stage grows with it)
+            preview.setMaxContentHeight((resources.displayMetrics.heightPixels * CaptionService.MAX_CAPTION_FRAC).toInt(), Int.MAX_VALUE)
+            preview.setCaptionHeight(if (height.value == 0f) 0 else (resources.displayMetrics.heightPixels * height.value / 100f).toInt())
             preview.layoutParams = FrameLayout.LayoutParams((findViewById<View>(R.id.previewStage).width.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels * 0.8f).toInt()).let { (it * width.value / 100f).toInt() }, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL)
             preview.setLines(
                 listOf(CaptionOverlayView.Line("明天的会议改到下午三点了。", if (ja.isChecked) "明日の会議は午後三時に変更になりました" else null, true),
@@ -598,11 +605,12 @@ class MainActivity : Activity() {
         width.addOnChangeListener { _, v, user -> if (user) { prefs.widthFrac = v / 100f; apply() } }
         ja.setOnCheckedChangeListener { _, v -> if (!loading) { prefs.showJa = v; apply() } }
         stats.setOnCheckedChangeListener { _, v -> if (!loading) { prefs.showStats = v; apply() } }
+        height.addOnChangeListener { _, v, user -> if (user) { prefs.heightFrac = v / 100f; apply() } }
         keepS.addOnChangeListener { _, v, user -> if (user) { prefs.keepSentences = v.toInt(); apply() } }
         keepC.addOnChangeListener { _, v, user -> if (user) { prefs.keepChars = v.toInt(); apply() } }
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
             prefs.setStyle(20f, 0.55f); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
-            prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS
+            prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS; prefs.heightFrac = 0f
             prefs.overlayX = -1; prefs.overlayY = -1
             load(); apply()
         }
@@ -644,7 +652,7 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_START = 1      // runtime permission asked on the way to starting subtitles
         const val REQ_PROJECTION = 2
-        val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "showJa", "showStats", "keepSentences", "keepChars")
+        val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "heightFrac", "showJa", "showStats", "keepSentences", "keepChars")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
         const val LOGS_BEFORE_SCROLL = 5
     }

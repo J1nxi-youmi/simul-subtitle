@@ -342,16 +342,30 @@ class CaptionService : Service() {
             lp.width = win
             v.setCardWidth(cardW)
             // captions ≤ 40 %, status ≤ 20 % of the usable height: card + toolbar always fit on screen
-            v.setMaxContentHeight((a.height() * 0.4f).toInt(), (a.height() * 0.2f).toInt())
+            v.setMaxContentHeight((a.height() * MAX_CAPTION_FRAC).toInt(), (a.height() * 0.2f).toInt())
             lp.x = lp.x.coerceIn(0, (sw - lp.width).coerceAtLeast(0))
             lp.y = lp.y.coerceIn(0, (a.height() - v.height.coerceAtLeast(1)).coerceAtLeast(0))
             if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)
         }
         // rotation / resize: the caption height may not change, so re-fit explicitly from the saved width fraction
-        onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); layout() }
+        // caption height from the saved fraction (0 = fit the text); kept within the 40 % cap by the view
+        fun applyHeight() = v.setCaptionHeight((area().height() * prefs.heightFrac).toInt())
+        var captionH = 0 // px while a resize drag runs
+        onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); applyHeight(); layout() }
         v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; layout() }
-        v.onResize = { dw -> cardW += dw; layout() }
-        v.onMoveEnd = { prefs.overlayX = lp.x + (lp.width - cardW) / 2; prefs.overlayY = lp.y; prefs.widthFrac = cardW.toFloat() / area().width() }
+        v.onResize = { dw, dh ->
+            cardW += dw
+            if (dh != 0) {
+                if (captionH == 0) captionH = v.captionHeightPx() // start from what is on screen (also when auto)
+                captionH = (captionH + dh).coerceIn(v.minCaptionPx(), (area().height() * MAX_CAPTION_FRAC).toInt())
+                v.setCaptionHeight(captionH)
+            }
+            layout()
+        }
+        v.onMoveEnd = {
+            prefs.overlayX = lp.x + (lp.width - cardW) / 2; prefs.overlayY = lp.y; prefs.widthFrac = cardW.toFloat() / area().width()
+            if (captionH > 0) { prefs.heightFrac = captionH.toFloat() / area().height(); captionH = 0 }
+        }
         v.onStyleChanged = { prefs.setStyle(v.textSp, v.bgAlpha) }
         v.onToolbarShown = { toolbarShown = it; layout() }
         v.onStop = { stopSelf() }
@@ -367,12 +381,14 @@ class CaptionService : Service() {
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
+                "heightFrac" -> if (captionH == 0) { applyHeight(); layout() }
                 "showJa", "showStats" -> refresh()
                 "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
                 "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }
             }
         }.also { prefs.listen(it) }
         v.setCardWidth(cardW)
+        applyHeight()
         wm.addView(v, lp)
         overlay = v
         layout()
@@ -434,6 +450,8 @@ class CaptionService : Service() {
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
+        /** captions never take more than this part of the usable height, so the toolbar always fits */
+        const val MAX_CAPTION_FRAC = 0.4f
 
         /** true from start until onDestroy (main thread); the home screen uses it to show 开始/停止. */
         @Volatile var running = false

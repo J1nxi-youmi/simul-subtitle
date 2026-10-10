@@ -2,6 +2,7 @@ package dev.krita.jpsub
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -122,6 +123,19 @@ class ModelStoreTest {
         write(store.file(s), good)
         assertEquals(listOf(s), store.unverified())
         assertEquals(ModelStore.Result.Ok, store.verifyInstalled(s))
+        assertTrue(store.ready())
+    }
+
+    @Test
+    fun legacyRejectedCopiesAreRemovedBeforeAnyDownload() {
+        // older versions kept a failed 1.1 GB model as .bad; it must go before the retry needs the space
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        val bad = File(tmp.root, s.path + ".bad")
+        write(bad, "old bad copy".toByteArray())
+        write(store.file(s), good); store.verifyInstalled(s) // even next to an installed model
+        assertNull(store.removeRejected())
+        assertFalse(bad.exists())
         assertTrue(store.ready())
     }
 

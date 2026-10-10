@@ -308,7 +308,8 @@ class CaptionService : Service() {
             lp.x -= (win - lp.width) / 2
             lp.width = win
             v.setCardWidth(cardW)
-            v.setMaxTextHeight((a.height() * 0.4f).toInt()) // card + toolbar always fit on screen
+            // captions ≤ 40 %, status ≤ 20 % of the usable height: card + toolbar always fit on screen
+            v.setMaxContentHeight((a.height() * 0.4f).toInt(), (a.height() * 0.2f).toInt())
             lp.x = lp.x.coerceIn(0, (sw - lp.width).coerceAtLeast(0))
             lp.y = lp.y.coerceIn(0, (a.height() - v.height.coerceAtLeast(1)).coerceAtLeast(0))
             if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)

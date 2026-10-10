@@ -59,16 +59,13 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     }
 
     /**
-     * Caps the caption text height so the toolbar keeps room on screen; when captions are taller (narrow
-     * card, big font) the text shows its newest lines.
+     * Caps caption and status heights so the toolbar keeps room on screen. Both are bottom-aligned, so when
+     * they overflow (narrow card, big font) TextView itself keeps the newest lines in view, also after a
+     * font or width change.
      */
-    fun setMaxTextHeight(px: Int) {
-        if (text.maxHeight != px) { text.maxHeight = px; scrollTextToEnd() }
-    }
-
-    private fun scrollTextToEnd() = text.post {
-        val l = text.layout ?: return@post
-        text.scrollTo(0, (l.height - (text.height - text.totalPaddingTop - text.totalPaddingBottom)).coerceAtLeast(0))
+    fun setMaxContentHeight(captionPx: Int, statusPx: Int) {
+        if (text.maxHeight != captionPx) text.maxHeight = captionPx
+        if (stats.maxHeight != statusPx) stats.maxHeight = statusPx
     }
 
     /** Natural width of the toolbar, independent of the current window width. */
@@ -84,14 +81,14 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
         text.apply {
             setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM
             setShadowLayer(dp(3f), 0f, dp(1f), 0xCC000000.toInt())
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setLineSpacing(dp(2f), 1f)
         }
         stats.apply {
             setTextColor(0xFFB4ACFA.toInt())
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             visibility = GONE
         }
@@ -153,7 +150,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             if (!l.isFinal) sb.setSpan(ForegroundColorSpan(0xFFB9B5C9.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         text.text = sb
-        scrollTextToEnd()
         stats.text = statsLine ?: ""
         stats.visibility = if (statsLine.isNullOrEmpty()) GONE else VISIBLE
     }

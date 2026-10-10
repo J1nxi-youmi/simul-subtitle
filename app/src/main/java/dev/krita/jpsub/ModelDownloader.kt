@@ -28,6 +28,7 @@ class ModelDownloader private constructor(ctx: Context) {
     private val errors = LinkedHashMap<String, String>() // path → message, guarded by this
 
     init {
+        store.removeRejected()
         // files copied by an older version (adb push) were never hash-checked: check them once, in the background
         for (s in store.unverified()) submit(s) { store.verifyInstalled(s) }
     }
@@ -36,6 +37,8 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun start() {
         errors.clear(); failed.clear()
+        // copies kept by older versions after a failed check: free the space before downloading again
+        store.removeRejected()?.let { errors["bad"] = it; return }
         for (s in store.missing()) {
             if (s.path in queued) continue
             // already at the final path but unmarked (e.g. marker write failed after the rename): verify, don't refetch
@@ -92,9 +95,15 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     private fun submitPublish(s: ModelSpec) = submit(s) {
-        val r = store.publish(s)
-        // the transfer is used up once published or rejected (file gone); on an I/O error keep it for 重试
-        if (r == ModelStore.Result.Ok || r is ModelStore.Result.WrongSize || r is ModelStore.Result.WrongHash) synchronized(this) {
+        var r = store.publish(s)
+        if (r == ModelStore.Result.Missing) {
+            // the record says finished but there is no .part: either it was published already (marker missing)
+            // or the bytes are gone; never loop on it from polling
+            r = if (store.file(s).isFile) store.verifyInstalled(s) else ModelStore.Result.Io("下载的文件不见了")
+        }
+        // the transfer is used up once published, rejected or gone; on a read error keep it for 重试
+        val keep = r is ModelStore.Result.Io && store.partFile(s).isFile
+        if (!keep) synchronized(this) {
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }; prefs.setDownloadId(s.path, -1)
         }
         r
@@ -102,24 +111,27 @@ class ModelDownloader private constructor(ctx: Context) {
 
     /**
      * The process can die between [DownloadManager.enqueue] and saving its id. Before deleting the .part file
-     * or enqueueing again, take over this app's own job for the same pinned URL, if the system still has one
-     * (the query only returns this app's downloads; every model file has its own URL).
+     * or enqueueing again, take over this app's own job for the same pinned URL if the system still has one
+     * (the query only returns this app's downloads; every model file has its own URL). Never removes the other
+     * records: they all point at the same .part path, and removing a record deletes that file.
      */
     private fun adoptOrphan(s: ModelSpec) {
-        val known = prefs.downloadId(s.path)
-        var adopt = -1L
+        val usable = setOf(DownloadManager.STATUS_SUCCESSFUL, DownloadManager.STATUS_RUNNING,
+            DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED)
+        if (statusOf(s) in usable) return // the recorded job is fine
+        var adopt = -1L; var adoptDone = false
         dm.query(DownloadManager.Query())?.use { c ->
             val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
             val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
             val stCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
             while (c.moveToNext()) {
-                val id = c.getLong(idCol)
-                if (id == known || c.getString(uriCol) != s.url) continue
-                if (c.getInt(stCol) == DownloadManager.STATUS_FAILED || adopt >= 0) dm.remove(id) else adopt = id
+                if (c.getString(uriCol) != s.url) continue
+                val st = c.getInt(stCol)
+                if (st !in usable || adoptDone) continue
+                adopt = c.getLong(idCol); adoptDone = st == DownloadManager.STATUS_SUCCESSFUL // finished beats running
             }
         }
-        if (adopt >= 0 && known >= 0 && statusOf(s).let { it != null && it != DownloadManager.STATUS_FAILED }) dm.remove(adopt)
-        else if (adopt >= 0) { if (known >= 0) dm.remove(known); prefs.setDownloadId(s.path, adopt) }
+        if (adopt >= 0) prefs.setDownloadId(s.path, adopt)
     }
 
     /** Runs [job] for [s] once on the verifier thread; any failure becomes a retryable error, never a crash. */

@@ -62,12 +62,16 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
         okMarker(s).delete()
         if (!part.renameTo(dst)) return Result.Io("无法写入 ${dst.path}")
         okMarker(s).writeText(s.sha256)
-        File(root, s.path + ".bad").delete() // left behind by versions that kept rejected copies
         return Result.Ok
     }
 
+    /** Deletes "<path>.bad" copies kept by older versions; returns an error message if one could not be deleted. */
+    fun removeRejected(): String? {
+        val stuck = specs.map { File(root, it.path + ".bad") }.filter { !it.delete() && it.exists() }
+        return if (stuck.isEmpty()) null else "无法删除旧的损坏文件：" + stuck.joinToString("、") { it.name }
+    }
+
     private fun reject(s: ModelSpec, f: File, r: Result): Result {
-        File(root, s.path + ".bad").delete() // left behind by versions that kept rejected copies
         if (!f.delete() && f.exists()) return Result.Io("无法删除损坏的 ${f.name}")
         return r
     }

@@ -151,8 +151,13 @@ class JevTest {
     fun jsonRoundTrip() {
         val v = mapOf("s" to "引号\"\\\n\u0001", "n" to 1, "d" to 0.5, "b" to true, "z" to null, "l" to listOf(1, "a"))
         val back = Json.parse(Json.encode(v)) as Map<*, *>
-        assertEquals(v["s"], back["s"]); assertEquals(1.0, back["n"]); assertEquals(true, back["b"]); assertNull(back["z"])
-        assertEquals(listOf(1.0, "a"), back["l"])
+        assertEquals(v["s"], back["s"]); assertEquals(1, (back["n"] as Number).toInt()); assertEquals(0.5, (back["d"] as Number).toDouble(), 0.0)
+        assertEquals(true, back["b"]); assertTrue(back.containsKey("z")); assertNull(back["z"])
+        assertEquals(listOf(1, "a"), (back["l"] as List<*>).map { if (it is Number) it.toInt() else it })
         assertEquals("\u00e9x", Json.parse("\"\\u00e9x\""))
+        // invalid input is an error, not a guess
+        for (bad in listOf("{\"a\":1} x", "\"\\q\"", "{\"a\":}", "")) {
+            assertTrue(bad, runCatching { Json.parse(bad) }.exceptionOrNull() is java.io.IOException)
+        }
     }
 }

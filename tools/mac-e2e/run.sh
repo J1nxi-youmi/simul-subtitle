@@ -40,10 +40,12 @@ clang++ -std=c++17 -O2 -shared -fPIC -I"$JH/include" -I"$JH/include/darwin" -I"$
 K=~/.gradle/caches/modules-2/files-2.1
 jar() { find "$K/$1" -name "$2" | grep -v sources | head -1; }
 STD=$(jar org.jetbrains.kotlin/kotlin-stdlib/2.0.21 'kotlin-stdlib-2.0.21.jar')
+# org.json ships with Android; the app's unit tests fetch the reference jar (testImplementation) and so does this
+STD="$STD:$(jar org.json/json/20240303 'json-20240303.jar')"
 KC="$(jar org.jetbrains.kotlin/kotlin-compiler-embeddable/2.0.21 '*.jar'):$STD"
 for a in kotlin-script-runtime kotlin-reflect kotlin-daemon-embeddable; do KC="$KC:$(jar org.jetbrains.kotlin/$a '*.jar')"; done
 KC="$KC:$(jar org.jetbrains.intellij.deps 'trove4j*.jar'):$(jar org.jetbrains/annotations/13.0 '*.jar'):$(jar org.jetbrains.kotlinx 'kotlinx-coroutines-core-jvm*.jar')"
-[ -n "$STD" ] || { echo "run ./gradlew :app:testDebugUnitTest once so Gradle fetches Kotlin"; exit 1; }
+[ -n "${STD%%:*}" ] && [ -n "${STD#*:}" ] || { echo "run ./gradlew :app:testDebugUnitTest once so Gradle fetches Kotlin"; exit 1; }
 # a fresh output dir per run: stale classes of removed/renamed declarations break overload resolution
 C="$(mktemp -d "$W/classes.XXXXXX")"
 "$JH/bin/javac" -d "$C" "$HERE/MacLlama.java"

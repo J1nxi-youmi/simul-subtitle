@@ -5,6 +5,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Timer
 import kotlin.concurrent.schedule
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+import org.json.JSONTokener
 
 // TypeSafe Jev (System One decision model) client and the two questions the pipeline asks it.
 // Pure Kotlin / java.net so the Mac harness (tools/mac-e2e) runs the same code.
@@ -118,92 +122,38 @@ class Jev(
     }
 }
 
-/** Minimal JSON for request bodies, Jev responses and the session log (org.json is not on the JVM test classpath). */
+/**
+ * Request bodies, Jev responses and the session log, on org.json (part of Android; tests and the Mac harness use the
+ * reference jar). Converts to and from plain Kotlin maps/lists so callers stay library-free; null is kept as JSON null.
+ */
 object Json {
-    fun encode(v: Any?): String = StringBuilder().also { write(it, v) }.toString()
-
-    private fun write(sb: StringBuilder, v: Any?) {
-        when (v) {
-            null -> sb.append("null")
-            is String -> {
-                sb.append('"')
-                for (ch in v) when {
-                    ch == '"' -> sb.append("\\\""); ch == '\\' -> sb.append("\\\\")
-                    ch == '\n' -> sb.append("\\n"); ch == '\r' -> sb.append("\\r"); ch == '\t' -> sb.append("\\t")
-                    ch < ' ' -> sb.append("\\u%04x".format(ch.code))
-                    else -> sb.append(ch)
-                }
-                sb.append('"')
-            }
-            is Boolean, is Int, is Long -> sb.append(v)
-            is Number -> v.toDouble().let { if (it.isFinite()) sb.append(it) else sb.append("null") }
-            is Map<*, *> -> {
-                sb.append('{')
-                v.entries.forEachIndexed { i, e -> if (i > 0) sb.append(','); write(sb, e.key.toString()); sb.append(':'); write(sb, e.value) }
-                sb.append('}')
-            }
-            is Iterable<*> -> { sb.append('['); v.forEachIndexed { i, x -> if (i > 0) sb.append(','); write(sb, x) }; sb.append(']') }
-            else -> write(sb, v.toString())
-        }
+    fun encode(v: Any?): String = when (v) {
+        is Map<*, *> -> toJson(v).toString()
+        is Iterable<*> -> toJson(v).toString()
+        else -> JSONArray().put(toJson(v)).toString().removePrefix("[").removeSuffix("]")
     }
 
-    fun parse(s: String): Any? = P(s).run { val v = value(); ws(); if (i != s.length) err(); v }
+    private fun toJson(v: Any?): Any = when (v) {
+        null -> JSONObject.NULL
+        is Map<*, *> -> JSONObject().also { o -> v.forEach { (k, x) -> o.put(k.toString(), toJson(x)) } }
+        is Iterable<*> -> JSONArray().also { a -> v.forEach { a.put(toJson(it)) } }
+        is String, is Boolean, is Int, is Long -> v
+        is Number -> v.toDouble().takeIf { it.isFinite() } ?: JSONObject.NULL
+        else -> v.toString()
+    }
 
-    private class P(val s: String) {
-        var i = 0
-        fun err(): Nothing = throw IOException("bad JSON at $i")
-        fun ws() { while (i < s.length && s[i] in " \t\r\n") i++ }
-        fun value(): Any? {
-            ws()
-            if (i >= s.length) err()
-            return when (s[i]) {
-                '{' -> {
-                    i++; val m = LinkedHashMap<String, Any?>(); ws()
-                    if (s.getOrNull(i) == '}') { i++; return m }
-                    while (true) {
-                        ws(); val k = value() as? String ?: err(); ws()
-                        if (s.getOrNull(i++) != ':') err()
-                        m[k] = value(); ws()
-                        when (s.getOrNull(i++)) { ',' -> continue; '}' -> return m; else -> err() }
-                    }
-                    @Suppress("UNREACHABLE_CODE") m
-                }
-                '[' -> {
-                    i++; val l = ArrayList<Any?>(); ws()
-                    if (s.getOrNull(i) == ']') { i++; return l }
-                    while (true) {
-                        l.add(value()); ws()
-                        when (s.getOrNull(i++)) { ',' -> continue; ']' -> return l; else -> err() }
-                    }
-                    @Suppress("UNREACHABLE_CODE") l
-                }
-                '"' -> {
-                    i++; val sb = StringBuilder()
-                    while (true) {
-                        val ch = s.getOrNull(i++) ?: err()
-                        when (ch) {
-                            '"' -> return sb.toString()
-                            '\\' -> when (val e = s.getOrNull(i++) ?: err()) {
-                                'n' -> sb.append('\n'); 't' -> sb.append('\t'); 'r' -> sb.append('\r')
-                                'b' -> sb.append('\b'); 'f' -> sb.append('\u000c')
-                                'u' -> { sb.append(s.substring(i, i + 4).toInt(16).toChar()); i += 4 }
-                                else -> sb.append(e)
-                            }
-                            else -> sb.append(ch)
-                        }
-                    }
-                    @Suppress("UNREACHABLE_CODE") sb
-                }
-                't' -> lit("true", true)
-                'f' -> lit("false", false)
-                'n' -> lit("null", null)
-                else -> {
-                    val st = i
-                    while (i < s.length && s[i] in "+-0123456789.eE") i++
-                    s.substring(st, i).toDoubleOrNull() ?: err()
-                }
-            }
-        }
-        fun lit(w: String, v: Any?): Any? { if (!s.startsWith(w, i)) err(); i += w.length; return v }
+    /** @throws IOException if [s] is not one JSON value */
+    fun parse(s: String): Any? = try {
+        val t = JSONTokener(s)
+        val v = t.nextValue()
+        if (t.more() && t.nextClean() != 0.toChar()) throw IOException("trailing data after JSON")
+        fromJson(v)
+    } catch (e: JSONException) { throw IOException("bad JSON: ${e.message}") }
+
+    private fun fromJson(v: Any?): Any? = when (v) {
+        JSONObject.NULL, null -> null
+        is JSONObject -> LinkedHashMap<String, Any?>().also { m -> v.keys().forEach { k -> m[k] = fromJson(v.get(k)) } }
+        is JSONArray -> (0 until v.length()).map { fromJson(v.get(it)) }
+        else -> v
     }
 }

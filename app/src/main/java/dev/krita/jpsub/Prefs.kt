@@ -19,6 +19,11 @@ class Prefs(ctx: Context) {
     /** Size and opacity in one edit, so a change listener never sees one new and one old value. */
     fun setStyle(sizeSp: Float, alpha: Float) = sp.edit().putFloat("textSp", sizeSp).putFloat("bgAlpha", alpha).apply()
 
+    /** Home screen theme: "system", "light" or "dark" */
+    var theme: String
+        get() = sp.getString("theme", "system")!!
+        set(v) = sp.edit().putString("theme", v).apply()
+
     /** Caption colour scheme id, see CaptionOverlayView.PALETTES */
     var palette: String
         get() = sp.getString("palette", "white")!!

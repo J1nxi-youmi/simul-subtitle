@@ -53,6 +53,21 @@ class MainActivity : Activity() {
         (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == prefs.finalOnly }?.let { if (g.checkedButtonId != it.id) g.check(it.id) }
     }
 
+    // App-chosen day / night: override the night bit before any resource is read, so values-night and the
+    // DayNight theme follow it. "system" leaves the configuration alone.
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(base)
+        val night = when (Prefs(base).theme) {
+            "light" -> android.content.res.Configuration.UI_MODE_NIGHT_NO
+            "dark" -> android.content.res.Configuration.UI_MODE_NIGHT_YES
+            else -> return
+        }
+        applyOverrideConfiguration(android.content.res.Configuration().apply {
+            fontScale = 0f // "unset": a fresh Configuration says 1.0, which would override the user's font size
+            uiMode = (base.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+        })
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_JpSub)
@@ -76,6 +91,13 @@ class MainActivity : Activity() {
         permList = findViewById(R.id.permList)
         setupStyle()
         renderTranslate()
+        findViewById<LinearLayout>(R.id.themeBox).apply {
+            addView(label("首页的白天 / 夜间外观（不影响悬浮字幕，配色在「字幕样式」里选）", top = 0))
+            // recreate re-reads resources with the new mode; the overlay lives in the service and is untouched
+            addView(choice(listOf("system" to "跟随系统", "light" to "白天", "dark" to "夜间"), prefs.theme) {
+                if (prefs.theme != it) { prefs.theme = it; recreate() }
+            })
+        }
     }
 
     override fun onResume() {

@@ -52,7 +52,7 @@ class CaptionService : Service() {
     private var pipeline: Pipeline? = null
     private var translator: Mt? = null
 
-    private val board = CaptionBoard(maxFinals = 2)
+    private val board by lazy { CaptionBoard(prefs.keepSentences, prefs.keepChars) }
     // main thread only
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0
@@ -367,6 +367,7 @@ class CaptionService : Service() {
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
                 "showJa", "showStats" -> refresh()
+                "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
                 "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }
             }
         }.also { prefs.listen(it) }

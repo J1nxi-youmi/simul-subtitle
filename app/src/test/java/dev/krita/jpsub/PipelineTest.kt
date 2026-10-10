@@ -724,8 +724,8 @@ class CaptionBoardTest {
     }
 
     @Test
-    fun keepsTwoFinalsPlusTheDraftAndIgnoresStaleOldDrafts() {
-        val b = CaptionBoard(maxFinals = 2)
+    fun aDraftNeverPushesOutAFinalAndStaleOldDraftsAreIgnored() {
+        val b = CaptionBoard(minFinals = 2, maxChars = 0)
         b.accept(cap(1, 1, true)); b.accept(cap(2, 1, true)); b.accept(cap(3, 1, false))
         // the draft is an extra line: it does not push out a finished sentence
         assertEquals(listOf(1L, 2L, 3L), b.snapshot().map { it.segmentId })
@@ -734,10 +734,58 @@ class CaptionBoardTest {
         assertEquals(listOf(2L, 3L), b.snapshot().map { it.segmentId })
     }
 
+    private fun zh(n: Int) = "字".repeat(n)
+
+    /** User rule: an old sentence leaves only when there are more than N sentences AND more than M characters. */
+    @Test
+    fun keepsOldSentencesUntilBothTheSentenceAndTheCharacterLimitAreExceeded() {
+        val b = CaptionBoard(minFinals = 2, maxChars = 100)
+        // more than 2 sentences but only 90 characters: all stay
+        for (i in 1L..3L) b.accept(cap(i, 1, true, zh = zh(30)))
+        assertEquals(listOf(1L, 2L, 3L), b.snapshot().map { it.segmentId })
+        // 120 characters and 4 sentences: the oldest goes, back to 90
+        b.accept(cap(4, 1, true, zh = zh(30)))
+        assertEquals(listOf(2L, 3L, 4L), b.snapshot().map { it.segmentId })
+    }
+
+    @Test
+    fun exactlyAtTheLimitsNothingIsRemovedAndTwoLongSentencesAlwaysStay() {
+        val b = CaptionBoard(minFinals = 2, maxChars = 100)
+        b.accept(cap(1, 1, true, zh = zh(50))); b.accept(cap(2, 1, true, zh = zh(50)))
+        assertEquals(2, b.snapshot().size) // exactly 100: not over
+        // over the characters but not over the sentence count: both long sentences stay
+        b.accept(cap(3, 1, true, zh = zh(300)))
+        assertEquals(listOf(2L, 3L), b.snapshot().map { it.segmentId })
+    }
+
+    @Test
+    fun removesSeveralOldSentencesAtOnceAndCountsCodePointsOfFinalsOnly() {
+        val b = CaptionBoard(minFinals = 1, maxChars = 10)
+        for (i in 1L..5L) b.accept(cap(i, 1, true, zh = "😀😀"))  // 2 code points each, 10 in total
+        assertEquals(5, b.snapshot().size)
+        b.accept(cap(6, 1, false, zh = zh(50))) // a long draft is not counted
+        assertEquals(6, b.snapshot().size)
+        b.accept(cap(6, 2, true, zh = zh(9)))    // 19 characters: drop oldest until ≤ 10 → only 6 (9) is left
+        assertEquals(listOf(6L), b.snapshot().map { it.segmentId })
+    }
+
+    @Test
+    fun loweringTheLimitsWhileRunningTrimsAtOnceAndOldFinalsDoNotComeBack() {
+        val b = CaptionBoard(minFinals = 2, maxChars = 100)
+        for (i in 1L..4L) b.accept(cap(i, 1, true, zh = zh(20)))
+        assertEquals(4, b.snapshot().size)
+        assertTrue(b.setLimits(2, 30))
+        assertEquals(listOf(3L, 4L), b.snapshot().map { it.segmentId })
+        assertFalse(b.setLimits(2, 30))
+        // a removed sentence's late final / draft does not come back
+        assertFalse(b.accept(cap(1, 2, true)))
+        assertFalse(b.accept(cap(2, 2, false)))
+    }
+
     /** User report: a sentence read as finished was later a different sentence. Finals never change on screen. */
     @Test
     fun aShownFinalNeverChangesWhileLaterSpeechComesIn() {
-        val b = CaptionBoard(maxFinals = 2)
+        val b = CaptionBoard(minFinals = 2, maxChars = 0)
         b.accept(cap(1, 3, true, zh = "顺便一提啊……"))
         for (rev in 1..6) b.accept(cap(2, rev, false, zh = "草稿$rev"))
         assertEquals(listOf("顺便一提啊……", "草稿6"), b.snapshot().map { it.zh })

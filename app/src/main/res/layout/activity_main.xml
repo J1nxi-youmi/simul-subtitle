@@ -258,6 +258,36 @@
                     android:valueFrom="40"
                     android:valueTo="100" />
 
+                <TextView
+                    style="@style/SliderLabel"
+                    android:id="@+id/labelKeepSentences" />
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderKeepSentences"
+                    app:tickVisible="false"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="1"
+                    android:valueFrom="1"
+                    android:valueTo="6" />
+
+                <TextView
+                    style="@style/SliderLabel"
+                    android:id="@+id/labelKeepChars" />
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderKeepChars"
+                    app:tickVisible="false"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="10"
+                    android:valueFrom="0"
+                    android:valueTo="300" />
+                <TextView
+                    android:id="@+id/keepHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text2"
+                    android:textSize="12.5sp" />
+
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchJa"
                     android:layout_width="match_parent"

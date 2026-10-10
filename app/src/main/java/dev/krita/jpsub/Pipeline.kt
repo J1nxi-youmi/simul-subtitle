@@ -423,35 +423,58 @@ class Pipeline(
 }
 
 /**
- * What the overlay shows: the last [maxFinals] finished sentences, which never change once shown, and below them
- * one separate draft line for the sentence still being spoken. A draft never replaces or pushes out a final.
+ * What the overlay shows: finished sentences, which never change once shown, and below them one separate draft
+ * line for the sentence still being spoken. A draft never replaces or pushes out a final.
+ * The oldest final leaves only while there are more than [minFinals] finals AND their Chinese text is longer than
+ * [maxChars] code points (drafts and Japanese are not counted).
  * Guards: newer revisions only, nothing after a segment's final, no late drafts of older segments.
  */
-class CaptionBoard(private val maxFinals: Int = 2) {
+class CaptionBoard(private var minFinals: Int = DEFAULT_SENTENCES, private var maxChars: Int = DEFAULT_CHARS) {
     private val finals = ArrayDeque<Caption>()
     private var draft: Caption? = null
+    /** newest final ever accepted: a removed sentence must not come back */
+    private var lastFinal = Long.MIN_VALUE
 
     /** @return true if the board changed */
     @Synchronized
     fun accept(c: Caption): Boolean {
-        val lastFinal = finals.lastOrNull()?.segmentId ?: Long.MIN_VALUE
-        if (c.segmentId <= lastFinal && finals.any { it.segmentId == c.segmentId }) return false
+        // a segment at or before the newest final is done: no second final, no late draft, also after it was trimmed
+        if (c.segmentId <= lastFinal) return false
         val d = draft
         if (c.isFinal) {
-            if (c.segmentId < lastFinal) return false
             if (d != null && d.segmentId <= c.segmentId) draft = null
+            lastFinal = c.segmentId
             if (c.zh.isEmpty()) return d != null && draft == null
             finals.addLast(c)
-            while (finals.size > maxFinals) finals.removeFirst()
+            trim()
             return true
         }
-        if (c.segmentId <= lastFinal) return false
         if (d != null && (c.segmentId < d.segmentId || (c.segmentId == d.segmentId && c.revision <= d.revision))) return false
         draft = c
         return true
     }
 
+    /** Settings changed while running. @return true if sentences were removed */
+    @Synchronized
+    fun setLimits(sentences: Int, chars: Int): Boolean {
+        minFinals = sentences.coerceAtLeast(1); maxChars = chars.coerceAtLeast(0)
+        return trim()
+    }
+
+    private fun trim(): Boolean {
+        var removed = false
+        while (finals.size > minFinals && finals.sumOf { it.zh.codePointCount(0, it.zh.length) } > maxChars) {
+            finals.removeFirst(); removed = true
+        }
+        return removed
+    }
+
     /** finals oldest first, then the draft (if any) */
     @Synchronized
     fun snapshot(): List<Caption> = finals.toList() + listOfNotNull(draft)
+
+    companion object {
+        const val DEFAULT_SENTENCES = 2
+        const val DEFAULT_CHARS = 100
+    }
 }

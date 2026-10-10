@@ -42,6 +42,14 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("overlayY", -1)
         set(v) = sp.edit().putInt("overlayY", v).apply()
 
+    /** Overlay keeps old sentences until there are more than [keepSentences] AND more than [keepChars] characters. */
+    var keepSentences: Int
+        get() = sp.getInt("keepSentences", CaptionBoard.DEFAULT_SENTENCES)
+        set(v) = sp.edit().putInt("keepSentences", v).apply()
+    var keepChars: Int
+        get() = sp.getInt("keepChars", CaptionBoard.DEFAULT_CHARS)
+        set(v) = sp.edit().putInt("keepChars", v).apply()
+
     /** DownloadManager ids by model path, so a download survives the activity being recreated */
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()

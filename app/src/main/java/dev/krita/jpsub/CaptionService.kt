@@ -309,6 +309,7 @@ class CaptionService : Service() {
         val wm = getSystemService(WindowManager::class.java)
         val dm = resources.displayMetrics
         val v = CaptionOverlayView(this, interactive = true)
+        v.setColors(CaptionOverlayView.palette(prefs.palette))
         v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
         // usable area: current window bounds (follows rotation) minus status / navigation bars. Only its size is
         // used: the overlay's x/y are already relative to that area (its parent frame excludes the bars).
@@ -383,6 +384,7 @@ class CaptionService : Service() {
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
                 "heightFrac" -> if (captionH == 0) { applyHeight(); layout() }
                 "showJa", "showStats" -> refresh()
+                "palette" -> v.setColors(CaptionOverlayView.palette(prefs.palette))
                 "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
                 "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }
             }

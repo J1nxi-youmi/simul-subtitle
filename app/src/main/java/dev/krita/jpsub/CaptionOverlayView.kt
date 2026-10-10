@@ -41,6 +41,9 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
     var textSp = 20f; private set
     var bgAlpha = 0.55f; private set
+    var colors = PALETTES[0]; private set
+    private var lastLines: List<Line> = emptyList()
+    private var lastStats: String? = null
     var locked = false; private set
 
     /** Overlay host callbacks (unused for the preview). */
@@ -157,15 +160,29 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     fun applyStyle(sizeSp: Float, alpha: Float) {
         textSp = sizeSp; bgAlpha = alpha
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-        bg.setColor(Color.argb((alpha * 255).toInt().coerceIn(0, 255), 16, 14, 26))
-        // with a fully transparent card the text keeps a stronger shadow so it stays readable on video
-        text.setShadowLayer(dp(if (alpha < 0.2f) 4f else 3f), 0f, dp(1f), 0xEE000000.toInt())
+        bg.setColor(colors.bg and 0x00FFFFFF or ((alpha * 255).toInt().coerceIn(0, 255) shl 24))
+        // with a fully transparent card the text keeps a stronger shadow so it stays readable on video;
+        // dark text on a light card has none (a black shadow would only blur it)
+        if (colors.shadow) text.setShadowLayer(dp(if (alpha < 0.2f) 4f else 3f), 0f, dp(1f), 0xEE000000.toInt())
+        else text.setShadowLayer(0f, 0f, 0f, 0)
+    }
+
+    /** Text / background colours of the captions; the background keeps the user's opacity. */
+    class Palette(val id: String, val label: String, val zh: Int, val ja: Int, val draft: Int, val stats: Int, val bg: Int, val shadow: Boolean = true)
+
+    fun setColors(p: Palette) {
+        if (p === colors) return
+        colors = p
+        text.setTextColor(p.zh); stats.setTextColor(p.stats)
+        applyStyle(textSp, bgAlpha)
+        setLines(lastLines, lastStats) // spans carry the old colours
     }
 
     /** One entry per visible line: Chinese text, optional Japanese, draft flag. */
     class Line(val zh: String, val ja: String?, val isFinal: Boolean)
 
     fun setLines(lines: List<Line>, statsLine: String?) {
+        lastLines = lines; lastStats = statsLine
         val sb = SpannableStringBuilder()
         val jaPx = (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, textSp * 0.62f, resources.displayMetrics)).toInt()
         for (l in lines) {
@@ -174,14 +191,14 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                 val s = sb.length
                 sb.append(l.ja).append('\n')
                 sb.setSpan(AbsoluteSizeSpan(jaPx), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(ForegroundColorSpan(0xCCDCD8F0.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(ForegroundColorSpan(colors.ja), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             val s = sb.length
             // the draft line is visibly separate from the finished sentences above: dimmer, smaller, marked "…"
             if (!l.isFinal) sb.append("… ")
             sb.append(l.zh)
             if (!l.isFinal) {
-                sb.setSpan(ForegroundColorSpan(0xFFB9B5C9.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(ForegroundColorSpan(colors.draft), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 sb.setSpan(android.text.style.RelativeSizeSpan(0.85f), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
@@ -302,5 +319,16 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         /** Caption size range, shared with the settings slider. */
         const val MIN_SP = 12f
         const val MAX_SP = 36f
+
+        /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
+        val PALETTES = listOf(
+            Palette("white", "经典白", 0xFFFFFFFF.toInt(), 0xCCDCD8F0.toInt(), 0xFFB9B5C9.toInt(), 0xFFB4ACFA.toInt(), 0xFF100E1A.toInt()),
+            Palette("yellow", "影院黄", 0xFFFFE066.toInt(), 0xCCFFF3C4.toInt(), 0xFFCFC48F.toInt(), 0xFFFFC94D.toInt(), 0xFF000000.toInt()),
+            Palette("mint", "薄荷绿", 0xFFA7F3D0.toInt(), 0xCCD1FAE5.toInt(), 0xFF8CBBA6.toInt(), 0xFF6EE7B7.toInt(), 0xFF0B1F1A.toInt()),
+            Palette("sky", "天空蓝", 0xFFBAE6FD.toInt(), 0xCCE0F2FE.toInt(), 0xFF93B4C9.toInt(), 0xFF7DD3FC.toInt(), 0xFF0B1726.toInt()),
+            Palette("sakura", "樱花粉", 0xFFFBCFE8.toInt(), 0xCCFCE7F3.toInt(), 0xFFC9A3B8.toInt(), 0xFFF9A8D4.toInt(), 0xFF24101C.toInt()),
+            Palette("paper", "白底黑字", 0xFF16151C.toInt(), 0xCC3D3B48.toInt(), 0xFF6E6C7A.toInt(), 0xFF5B4BD6.toInt(), 0xFFFFFFFF.toInt(), shadow = false),
+        )
+        fun palette(id: String?) = PALETTES.firstOrNull { it.id == id } ?: PALETTES[0]
     }
 }

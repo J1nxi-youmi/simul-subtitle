@@ -19,6 +19,11 @@ class Prefs(ctx: Context) {
     /** Size and opacity in one edit, so a change listener never sees one new and one old value. */
     fun setStyle(sizeSp: Float, alpha: Float) = sp.edit().putFloat("textSp", sizeSp).putFloat("bgAlpha", alpha).apply()
 
+    /** Caption colour scheme id, see CaptionOverlayView.PALETTES */
+    var palette: String
+        get() = sp.getString("palette", "white")!!
+        set(v) = sp.edit().putString("palette", v).apply()
+
     /** Overlay width as a fraction of the screen width */
     var widthFrac: Float
         get() = sp.getFloat("widthFrac", DEFAULT_WIDTH)

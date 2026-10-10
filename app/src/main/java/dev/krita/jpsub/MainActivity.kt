@@ -564,6 +564,32 @@ class MainActivity : Activity() {
         val lKeepS = findViewById<TextView>(R.id.labelKeepSentences)
         val lKeepC = findViewById<TextView>(R.id.labelKeepChars)
         val keepHint = findViewById<TextView>(R.id.keepHint)
+        val paletteRow = findViewById<LinearLayout>(R.id.paletteRow)
+        val dpx = resources.displayMetrics.density
+        // one swatch per palette: its background with a sample glyph in its text colour, brand outline when chosen
+        fun renderPalettes() {
+            paletteRow.removeAllViews()
+            for (p in CaptionOverlayView.PALETTES) {
+                val sel = p.id == CaptionOverlayView.palette(prefs.palette).id
+                paletteRow.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                    contentDescription = p.label + if (sel) "（已选）" else ""
+                    setPadding((4 * dpx).toInt(), 0, (4 * dpx).toInt(), 0)
+                    addView(TextView(this@MainActivity).apply {
+                        text = "字"; gravity = Gravity.CENTER; textSize = 18f; setTextColor(p.zh); typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        background = android.graphics.drawable.GradientDrawable().apply {
+                            cornerRadius = 14 * dpx; setColor(p.bg or 0xFF000000.toInt())
+                            setStroke(((if (sel) 3 else 1) * dpx).toInt(), if (sel) getColor(R.color.brand) else 0x33888888)
+                        }
+                    }, LinearLayout.LayoutParams((52 * dpx).toInt(), (52 * dpx).toInt()))
+                    addView(TextView(this@MainActivity).apply {
+                        text = p.label; textSize = 12f; gravity = Gravity.CENTER
+                        setTextColor(getColor(if (sel) R.color.brand else R.color.text2))
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (4 * dpx).toInt() })
+                    setOnClickListener { prefs.palette = p.id; renderPalettes(); preview.setColors(p) }
+                }, LinearLayout.LayoutParams((68 * dpx).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+            }
+        }
 
         var loading = false // programmatic updates must not be written back
         fun load() {
@@ -586,6 +612,7 @@ class MainActivity : Activity() {
             lKeepS.text = "至少保留  ${keepS.value.toInt()} 句"
             lKeepC.text = "超过  ${keepC.value.toInt()} 字后移除旧句"
             keepHint.text = "已说完的句子超过 ${keepS.value.toInt()} 句，并且总字数超过 ${keepC.value.toInt()} 字时，才移走最早的一句（正在说的那句不算）。窗口放不下时只显示最新的部分。"
+            preview.setColors(CaptionOverlayView.palette(prefs.palette))
             preview.applyStyle(size.value, alpha.value / 100f)
             // same caption height as the overlay will get (the stage grows with it)
             preview.setMaxContentHeight((resources.displayMetrics.heightPixels * CaptionService.MAX_CAPTION_FRAC).toInt(), Int.MAX_VALUE)
@@ -597,8 +624,8 @@ class MainActivity : Activity() {
                 if (stats.isChecked) "识别 52ms · 翻译 310ms · 延迟 0.7s" else null,
             )
         }
-        loadStyle = { load(); apply() }
-        load(); apply()
+        loadStyle = { load(); renderPalettes(); apply() }
+        load(); renderPalettes(); apply()
         findViewById<View>(R.id.previewStage).post { apply() } // the stage's real width is known after layout
         size.addOnChangeListener { _, v, user -> if (user) { prefs.textSp = v; apply() } }
         alpha.addOnChangeListener { _, v, user -> if (user) { prefs.bgAlpha = v / 100f; apply() } }
@@ -611,6 +638,7 @@ class MainActivity : Activity() {
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
             prefs.setStyle(20f, 0.55f); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
             prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS; prefs.heightFrac = 0f
+            prefs.palette = CaptionOverlayView.PALETTES[0].id; renderPalettes()
             prefs.overlayX = -1; prefs.overlayY = -1
             load(); apply()
         }
@@ -652,7 +680,7 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_START = 1      // runtime permission asked on the way to starting subtitles
         const val REQ_PROJECTION = 2
-        val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "heightFrac", "showJa", "showStats", "keepSentences", "keepChars")
+        val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "heightFrac", "showJa", "showStats", "keepSentences", "keepChars", "palette")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
         const val LOGS_BEFORE_SCROLL = 5
     }

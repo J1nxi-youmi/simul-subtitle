@@ -247,6 +247,21 @@
 
                 <TextView
                     style="@style/SliderLabel"
+                    android:text="字幕配色" />
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:scrollbars="none">
+                    <LinearLayout
+                        android:id="@+id/paletteRow"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <TextView
+                    style="@style/SliderLabel"
                     android:id="@+id/labelSize" />
                 <com.google.android.material.slider.Slider
                     android:id="@+id/sliderSize"

@@ -642,6 +642,71 @@ class PipelineTest {
         p.stop(); p.awaitStopped()
         assertEquals("別の話です", out.last { it.isFinal }.ja)
     }
+
+    /** review 27a898c #1: a second loss must not drop the text the first repair kept */
+    @Test
+    fun twoSuccessiveLossesKeepBothEarlierParts() {
+        val asr = object : Asr {
+            // drafts at 1.6 s and 4.0 s, final at 6.0 s; tails are [1.6, 4.0) = 38_400 and [4.0, 6.0) = 32_000
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                25_600 -> "スパチャありがとうございます"
+                64_000, 38_400 -> "いや相当でかいと思うけど"
+                else -> "猫が窓から飛び出した" // 96_000 whole and 32_000 tail
+            }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(2, 2, false, 64_000)); Thread.sleep(100)
+        p.submit(job(2, 3, true, 96_000))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertEquals("スパチャありがとうございますいや相当でかいと思うけど猫が窓から飛び出した", out.last { it.isFinal }.ja)
+    }
+
+    /** review 27a898c #2: an older draft that a newer, still-kept draft already corrected is not brought back */
+    @Test
+    fun anOlderCorrectedDraftIsNotResurrected() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                25_600 -> "あしたはあめがふります"; 51_200 -> "あしたは晴れます今日はゲーム配信を始めます"
+                else -> "明日は晴天。今日はゲーム配信を始めます"
+            }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(1, 2, false, 51_200)); Thread.sleep(100)
+        p.submit(job(1, 3, true, 76_800))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertEquals("明日は晴天。今日はゲーム配信を始めます", out.last { it.isFinal }.ja)
+    }
+
+    /** review 27a898c #3: stop during the whole recognition starts no second decode */
+    @Test
+    fun noTailDecodeStartsAfterStop() {
+        val inWhole = CountDownLatch(1); val release = CountDownLatch(1)
+        val calls = Collections.synchronizedList(ArrayList<Int>())
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String {
+                calls.add(samples.size)
+                if (samples.size == 76_800) { inWhole.countDown(); release.await() }
+                return if (samples.size == 25_600) "スパチャありがとうございます" else "いや相当でかいと思うけど"
+            }
+        }
+        val p = Pipeline(asr, FakeMt(1), { })
+        p.start()
+        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(2, 2, true, 76_800))
+        assertTrue(inWhole.await(3, TimeUnit.SECONDS))
+        p.stop(); release.countDown(); p.awaitStopped()
+        assertEquals(listOf(25_600, 76_800), calls.toList())
+    }
 }
 
 class CaptionBoardTest {

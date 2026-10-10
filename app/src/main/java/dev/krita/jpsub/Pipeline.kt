@@ -224,16 +224,20 @@ class Pipeline(
         val whole = asr.recognize(job.samples).trim()
         val hist = segDrafts.getOrPut(job.segmentId) { ArrayList() }
         segDrafts.keys.removeIf { it < job.segmentId - 4 }
-        val lost = hist.lastOrNull { (n, t) ->
-            n < job.samples.size && n >= LOST_MIN_SAMPLES && t.length >= LOST_MIN_CHARS && keptRatio(t, whole) < 0.5
+        // only the newest eligible draft counts: an older one it already replaced is not brought back
+        val last = hist.lastOrNull { (n, t) -> n < job.samples.size && n >= LOST_MIN_SAMPLES && t.length >= LOST_MIN_CHARS }
+        val lost = last?.takeIf { keptRatio(it.second, whole) < 0.5 }
+        // a stopped pipeline must not start another native decode (stop waits for it)
+        val text = if (lost == null || !running) whole else {
+            val rest = job.samples.copyOfRange(lost.first, job.samples.size)
+            val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
+            log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
+                "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
+            lost.second + tail
         }
-        if (!job.isFinal) hist += job.samples.size to whole
-        if (lost == null) return whole
-        val rest = job.samples.copyOfRange(lost.first, job.samples.size)
-        val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
-        log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
-            "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-        return lost.second + tail
+        // the history holds what was shown, so a second loss keeps the text an earlier repair saved
+        if (!job.isFinal) hist += job.samples.size to text
+        return text
     }
 
     private fun asrLoop() {

@@ -128,7 +128,7 @@ class JevTest {
         try {
             val t0 = monoMs()
             val a = Calls(300, dns, java.net.Proxy.NO_PROXY).post(stuckUrl("x"), "{}", emptyMap())
-            assertTrue("deadline: took ${monoMs() - t0} ms", monoMs() - t0 < 1_000)
+            assertTrue("deadline: took ${monoMs() - t0} ms", monoMs() - t0 < 400)
             assertEquals("the lookup is what hangs", 0L, dns.entered.count)
             assertTrue("${a.error}", a.error?.startsWith("deadline") == true)
 
@@ -175,6 +175,17 @@ class JevTest {
         assertFalse(a.usable); assertEquals("finish_reason", a.error); assertTrue(a.response!!.contains("content_filter"))
         reply = { 200 to """{"choices":[{"message":{"content":"半分"}}]}""" }
         assertFalse(online().translate("x")!!.usable)
+    }
+
+    @Test
+    fun redactHandlesBodiesThatAreNotValidJsonAndKeysInNumbers() {
+        // review 06a6be2: trailing text after JSON, and a numeric key echoed as a JSON number
+        val a = Jev.redact("""{"error":"invalid key \u0073k-secret"} upstream error""", "sk-secret")
+        assertFalse(a, a.contains("sk-secret") || a.contains("\\u0073k-secret")); assertTrue(a.contains("***"))
+        val b = Jev.redact("""{"error":"invalid key","key":1234567890}""", "1234567890")
+        assertEquals("""{"error":"invalid key","key":***}""", b)
+        val c = Jev.redact("""{"e":"\u0053\u004B-SECRET \u0073\u006b\u002dsecret"}""", "sk-secret")
+        assertFalse(c, c.contains("\\u0073\\u006b\\u002dsecret")); assertTrue(c, c.contains("SECRET")) // other case untouched
     }
 
     @Test

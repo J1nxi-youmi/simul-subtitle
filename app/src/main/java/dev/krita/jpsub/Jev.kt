@@ -75,25 +75,18 @@ class Jev(
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
 
         /**
-         * [body] for the log without [secret]. Unchanged (the raw response) when the secret is in neither the text nor
-         * any decoded JSON value or field name; otherwise JSON is cleaned value by value, so escapes cannot hide it.
+         * [body] for the log without [secret], as text (a body need not be valid JSON): every spelling of the key, with any
+         * of its characters written literally or as a JSON escape (\uXXXX, \" \\ \/), is replaced by ***. A body without
+         * the key is returned unchanged (the raw response).
          */
         fun redact(body: String, secret: String): String {
-            var hit = false
-            fun scrub(s: String) = if (secret in s) { hit = true; s.replace(secret, "***") } else s
-            fun clean(v: Any?): Any? = when (v) {
-                is String -> scrub(v)
-                is Map<*, *> -> v.entries.associate { (k, x) -> scrub(k.toString()) to clean(x) }
-                is List<*> -> v.map(::clean)
-                else -> v
+            if (secret.isEmpty()) return body
+            val alt = secret.toList().joinToString("") { c: Char ->
+                val u = "%04x".format(c.code)
+                val esc = when (c) { '"' -> "|\\\\\""; '\\' -> "|\\\\\\\\"; '/' -> "|\\\\/"; else -> "" }
+                "(?:${Regex.escape(c.toString())}|\\\\u(?i:$u)$esc)"
             }
-            val parsed = runCatching { Json.parse(body) }
-            val cleaned = parsed.getOrNull().let(::clean)
-            return when {
-                !hit && secret !in body -> body
-                parsed.isSuccess -> Json.encode(cleaned)
-                else -> body.replace(secret, "***")
-            }
+            return body.replace(Regex(alt), "***")
         }
         /** Wording tuned on 140 labelled segment pairs without the following text (AUC 0.96, /tmp/jps/case/decision-bench.md). */
         val UNFINISHED = mapOf(
@@ -181,8 +174,8 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                     result.set(r); done.countDown()
                 }
             })
-            // a little past the call timeout so OkHttp's own answer normally wins; cancel() wakes this at once
-            done.await(deadlineMs + 200, TimeUnit.MILLISECONDS)
+            // the deadline is absolute from the start of post(); cancel() wakes this at once
+            done.await(maxOf(0, t0 + deadlineMs - monoMs()), TimeUnit.MILLISECONDS)
             return when {
                 cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled")
                 else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms") }

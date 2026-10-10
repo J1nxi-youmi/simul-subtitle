@@ -294,7 +294,8 @@ class PipelineTest {
         val asked = Collections.synchronizedList(ArrayList<String>())
         val cancelled = AtomicBoolean(false)
         private fun call(answer: Map<String, Any?>?): JevCall {
-            Thread.sleep(delayMs)
+            // like the real client: stop (interrupt here, disconnect there) ends the call with an error, not an exception
+            try { Thread.sleep(delayMs) } catch (e: InterruptedException) { return JevCall("{req}", 0, null, 0, "cancelled", null) }
             return JevCall("{req}", if (answer == null) 0 else 200, answer?.let { Json.encode(it) }, delayMs,
                 if (answer == null) "timeout" else null, answer)
         }
@@ -377,6 +378,48 @@ class PipelineTest {
         p.start(); p.submit(job(1, 3, true, 10))
         assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
         assertEquals(listOf(true to 3), out2.map { it.isFinal to it.revision })
+    }
+
+    @Test
+    fun theJevCheckIsTimedApartFromTheTranslationAndTheFinalNamesItsSourceRevision() {
+        val out = runFinal(FakeJudge(choice = "ok", delayMs = 150))
+        val f = out.last { it.isFinal }
+        assertTrue("check ${f.timing.checkMs}", f.timing.checkMs >= 150)
+        assertTrue("mt ${f.timing.mtMs}", f.timing.mtMs < 150)
+        assertEquals(4, f.revision); assertEquals(3, f.sourceRevision) // raw ASR/MT/Jev events are logged as rev 3
+    }
+
+    @Test
+    fun aJevCallCutShortByStopIsStillLogged() {
+        val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val judge = FakeJudge(unfinishedP = 0.9, delayMs = 400)
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, log = { events.add(it) })
+        p.start()
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        Thread.sleep(100)
+        p.stop(); p.awaitStopped()
+        assertEquals("stopped", events.single { it["ev"] == "jev" }["action"])
+    }
+
+    @Test
+    fun theLogTellsWhetherTheSegmenterUsedAHintOrItCameTooLate() {
+        val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = FakeJudge(unfinishedP = 0.9, delayMs = 150), log = { events.add(it) })
+        p.start()
+        // seg 1: the segmenter reads the answer (twice: logged once)
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        p.holdHint(1, 2)
+        // seg 2: finalized before Jev answered
+        p.submit(AsrJob(2, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        Thread.sleep(30)
+        p.submit(AsrJob(2, 3, true, FloatArray(10), monoMs()))
+        Thread.sleep(400)
+        p.stop(); p.awaitStopped()
+        val used = events.filter { it["ev"] == "hint_used" }
+        assertEquals(listOf(1L to true), used.map { it["seg"] to it["hold"] })
+        assertEquals("late", events.single { it["ev"] == "jev" && it["kind"] == "unfinished" && it["seg"] == 2L }["action"])
     }
 }
 

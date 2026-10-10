@@ -45,9 +45,11 @@ class MainActivity : Activity() {
     private val styleListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key in STYLE_KEYS) loadStyle()
         // the overlay toolbar flipped the mode: keep the home screen's choice in sync
-        if (key == "finalOnly") modeGroup?.let { g ->
-            (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == prefs.finalOnly }?.let { if (g.checkedButtonId != it.id) g.check(it.id) }
-        }
+        if (key == "finalOnly") syncMode()
+    }
+
+    private fun syncMode() = modeGroup?.let { g ->
+        (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == prefs.finalOnly }?.let { if (g.checkedButtonId != it.id) g.check(it.id) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,7 +79,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        loadStyle() // the overlay toolbar may have changed size / opacity meanwhile
+        loadStyle() // the overlay toolbar may have changed size / opacity / mode meanwhile (no listener while paused)
+        syncMode()
         prefs.listen(styleListener)
         renderPermissions()
         renderLogs()
@@ -279,7 +282,7 @@ class MainActivity : Activity() {
             })
             jevBox.addView(row)
             jevBox.addView(TextView(this).apply {
-                text = "只把识别出的日语和译文发给 ${p.label}，不发送声音。key 用本机硬件密钥加密保存，不会写进使用记录。"
+                text = "只把识别出的日语和译文发给 ${p.label}，不发送声音。key 用 Android Keystore 加密保存在本机，不会写进使用记录。"
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             })
         }
@@ -300,15 +303,19 @@ class MainActivity : Activity() {
             })
             return
         }
-        for (f in files.take(MAX_LOGS_SHOWN)) {
+        val shown = if (showAllLogs) files else files.take(MAX_LOGS_SHOWN)
+        for (f in shown) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            // session-20261010-151200.jsonl → 2026-10-10 15:12:00
-            val n = f.name.removePrefix("session-").removeSuffix(".jsonl")
-            val title = if (n.length == 15) "${n.substring(0, 4)}-${n.substring(4, 6)}-${n.substring(6, 8)} ${n.substring(9, 11)}:${n.substring(11, 13)}:${n.substring(13, 15)}" else f.name
+            // session-20261010-151200[-1].jsonl[.part] → 2026-10-10 15:12:00
+            val n = f.name.removePrefix("session-").substringBefore(".jsonl")
+            val title = if (n.length >= 15) "${n.substring(0, 4)}-${n.substring(4, 6)}-${n.substring(6, 8)} ${n.substring(9, 11)}:${n.substring(11, 13)}:${n.substring(13, 15)}${n.substring(15)}" else f.name
             texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
+            val complete = SessionLog.complete(f)
             texts.addView(TextView(this).apply {
-                text = "%.1f KB".format(f.length() / 1024.0); textSize = 12.5f; setTextColor(getColor(R.color.text2))
+                // .part: still running, or the session failed / was killed before the log was finished
+                text = "%.1f KB".format(f.length() / 1024.0) + if (complete) "" else " · 未完成（正在记录或中断）"
+                textSize = 12.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
@@ -316,10 +323,12 @@ class MainActivity : Activity() {
             })
             box.addView(row)
         }
-        if (files.size > MAX_LOGS_SHOWN) box.addView(TextView(this).apply {
-            text = "只显示最近 $MAX_LOGS_SHOWN 个（共 ${files.size} 个）"; textSize = 12.5f; setTextColor(getColor(R.color.text2))
+        if (files.size > MAX_LOGS_SHOWN) box.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = if (showAllLogs) "只看最近 $MAX_LOGS_SHOWN 个" else "查看全部（共 ${files.size} 个）"
+            setOnClickListener { showAllLogs = !showAllLogs; renderLogs() }
         })
     }
+    private var showAllLogs = false
 
     private fun share(f: java.io.File) {
         val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.logs", f)

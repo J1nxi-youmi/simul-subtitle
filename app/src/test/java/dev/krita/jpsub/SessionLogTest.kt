@@ -1,0 +1,91 @@
+package dev.krita.jpsub
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.StringWriter
+import java.io.Writer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
+
+class SessionLogTest {
+    @get:Rule val tmp = TemporaryFolder()
+
+    @Test
+    fun sessionsStartedInTheSameSecondGetTheirOwnFiles() {
+        val root = tmp.newFolder()
+        val a = SessionLog(SessionLog.dir(root)); val b = SessionLog(SessionLog.dir(root))
+        a.write(mapOf("ev" to "a")); b.write(mapOf("ev" to "b"))
+        assertTrue(a.close()); assertTrue(b.close())
+        assertTrue(a.file.name != b.file.name)
+        assertTrue(a.file.readText().contains("\"ev\":\"a\""))
+        assertTrue(b.file.readText().contains("\"ev\":\"b\""))
+        assertEquals(2, SessionLog.list(root).count(SessionLog::complete))
+    }
+
+    @Test
+    fun aFileIsOnlyListedAsCompleteAfterAClose() {
+        val root = tmp.newFolder()
+        val log = SessionLog(SessionLog.dir(root))
+        log.write(mapOf("ev" to "x"))
+        val open = SessionLog.list(root).single()
+        assertFalse(SessionLog.complete(open))
+        assertTrue(log.close())
+        val done = SessionLog.list(root).single()
+        assertTrue(SessionLog.complete(done))
+        assertTrue(done.readLines().single().contains("\"ev\":\"x\""))
+    }
+
+    @Test
+    fun aStalledDiskDropsEventsVisiblyInsteadOfGrowingWithoutBound() {
+        val release = CountDownLatch(1)
+        val stuck = object : Writer() {
+            val out = StringWriter()
+            override fun write(c: CharArray, off: Int, len: Int) { release.await(); out.write(c, off, len) }
+            override fun flush() {}
+            override fun close() {}
+        }
+        val reported = AtomicReference<String?>()
+        val log = SessionLog(tmp.root, capacity = 4, open = { stuck }, onFail = { reported.set(it) })
+        repeat(20) { log.write(mapOf("ev" to "e$it")) }
+        assertNotNull(log.failed); assertNotNull(reported.get())
+        release.countDown()
+        assertFalse("an incomplete log is never reported as complete", log.close())
+    }
+
+    @Test
+    fun aCloseThatTimesOutIsReported() {
+        val never = CountDownLatch(1)
+        val stuck = object : Writer() {
+            override fun write(c: CharArray, off: Int, len: Int) { never.await() }
+            override fun flush() {}
+            override fun close() {}
+        }
+        val reported = AtomicReference<String?>()
+        val log = SessionLog(tmp.root, open = { stuck }, onFail = { reported.set(it) })
+        log.write(mapOf("ev" to "x"))
+        assertFalse(log.close(timeoutMs = 200))
+        assertNotNull(reported.get())
+        never.countDown()
+    }
+
+    @Test
+    fun aWriteErrorOnTheLastEventIsStillReported() {
+        val broken = object : Writer() {
+            override fun write(c: CharArray, off: Int, len: Int) { throw java.io.IOException("disk full") }
+            override fun flush() {}
+            override fun close() {}
+        }
+        val reported = AtomicReference<String?>()
+        val log = SessionLog(tmp.root, open = { broken }, onFail = { reported.set(it) })
+        log.write(mapOf("ev" to "session_end"))
+        assertFalse(log.close())
+        assertEquals("disk full", reported.get())
+        assertNull(SessionLog.list(tmp.root).firstOrNull()?.takeIf { SessionLog.complete(it) })
+    }
+}

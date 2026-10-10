@@ -120,7 +120,7 @@ class CaptionService : Service() {
             val provider = prefs.jevProvider
             val key = if (prefs.jevOn) prefs.jevKey(provider) else null
             val judge = key?.let { Jev(provider, it) }
-            val sl = SessionLog(SessionLog.dir(root))
+            val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
@@ -167,7 +167,7 @@ class CaptionService : Service() {
             setStatus("出错：${e.message}")
         } finally {
             // the pipeline workers have exited (or never started), so this is the last event
-            log?.let { it.write(mapOf("ev" to "session_end", "overloaded" to overloaded)); it.close() }
+            log?.let { it.write(mapOf("ev" to "session_end", "overloaded" to overloaded)); it.close() } // failure → onFail
             // Detach the translator under the same lock onDestroy uses for cancel(), so no thread can call
             // into it after this point; the (slow) native free then happens outside the lock.
             synchronized(cancelLock) { pipeline = null; translator = null }
@@ -240,10 +240,10 @@ class CaptionService : Service() {
         val t = c.timing
         Log.i(TAG, "seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} audio=${t.audioMs} wait=${t.segmentWaitMs} " +
             "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} | ${c.ja} → ${c.zh}")
-        log.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "final" to c.isFinal, "ja" to c.ja,
+        log.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "source_rev" to c.sourceRevision,
+            "final" to c.isFinal, "ja" to c.ja,
             "zh" to c.zh, "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
-            "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "done_ms" to t.mtDoneMs, "hal" to !c.timeEstimated))
-        if (log.failed != null && !logWarned) { logWarned = true; refresh() }
+            "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs, "hal" to !c.timeEstimated))
         if (board.accept(c)) refresh()
     }
 

@@ -20,14 +20,18 @@ class TranslationTest {
     }
 
     @Test
-    fun rawOutputIsKeptAndATrailingTranslatorsNoteIsNotShown() {
+    fun onlyANoteThatEchoesThePromptIsDropped() {
         // real output for "あ" in the VTuber scene (Mac e2e, 2026-10-10)
+        val prompt = indexPrompt("あ", Scene.VTUBER)
         val raw = "啊\n\n（注：这是日本虚拟主播在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。）"
         val r = MtResult.parse(native('e', raw, 120, 46))
         assertEquals(raw, r.raw)
-        assertEquals("啊", r.text)
-        assertEquals("注意：这里很滑", MtResult.parse(native('e', "注意：这里很滑", 1, 1)).text) // not a trailing note
-        assertEquals("（注：只有注释）", MtResult.parse(native('e', "（注：只有注释）", 1, 1)).text)
+        assertEquals("啊", dropEchoedNote(r.text, prompt))
+        // a note that is not the prompt's own text is part of the translation
+        val real = "下周休播\n（注：周三的回放照常上传）"
+        assertEquals(real, dropEchoedNote(real, indexPrompt("来週はお休み（注：水曜のアーカイブは通常通り）", Scene.VTUBER)))
+        assertEquals("注意：这里很滑", dropEchoedNote("注意：这里很滑", prompt))
+        assertEquals("（注：只有注释）", dropEchoedNote("（注：只有注释）", prompt))
     }
 
     @Test

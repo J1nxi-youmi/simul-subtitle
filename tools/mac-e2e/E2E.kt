@@ -35,6 +35,10 @@ fun main() {
         val t = c.timing
         println("%6.2fs seg%d.%d%s audio=%d wait=%d asrQ=%d asr=%d mtQ=%d mt=%d mtDone=%d | %s → %s".format((System.currentTimeMillis()-t0)/1000.0, c.segmentId, c.revision, if (c.isFinal) "F" else "d", t.audioMs, t.segmentWaitMs, t.asrQueueMs, t.asrMs, t.mtQueueMs, t.mtMs, t.mtDoneMs, c.ja, c.zh))
         if (c.isFinal && c.segmentId != dropFinal) doneFinals.add(c.segmentId)
+        jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs(), "ev" to "caption", "seg" to c.segmentId,
+            "rev" to c.revision, "source_rev" to c.sourceRevision, "final" to c.isFinal, "ja" to c.ja, "zh" to c.zh,
+            "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
+            "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs))); w.write("\n") } }
         board.accept(c)
     }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge,
        log = { e -> jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs()) + e)); w.write("\n") } } })

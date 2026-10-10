@@ -12,48 +12,94 @@ import java.util.concurrent.LinkedBlockingQueue
  * with its full prompt and raw output, every Jev request with its raw response, and every caption shown.
  * Each line is one JSON object with "ev" (event type) and "t" (monoMs). No audio, no API keys.
  *
- * Writes happen on one background thread so the pipeline never waits on storage. [write] never blocks; a failed write
- * sets [failed] (shown in the overlay) and later events are dropped instead of retried.
+ * Writes happen on one background thread so the pipeline never waits on storage. [write] never blocks: the queue is
+ * bounded, and a full queue or a failed write sets [failed], calls [onFail] once (the overlay shows it), and later
+ * events are dropped. The file is written as `….jsonl.part` and renamed to `.jsonl` only by a [close] that wrote
+ * everything, so an interrupted, failed or still-running session is never mistaken for a complete one.
  */
-class SessionLog(dir: File) {
-    val file: File = File(dir, "session-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.jsonl")
+class SessionLog(
+    dir: File,
+    capacity: Int = 10_000,
+    open: (File) -> Writer = { it.bufferedWriter() },
+    private val onFail: (String) -> Unit = {},
+) {
+    private val done: File
+    /** the file being written; after a successful [close] the complete file is at [file] */
+    private val part: File
+    init {
+        dir.mkdirs()
+        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        var i = 0
+        while (true) {
+            val name = "session-$ts" + (if (i == 0) "" else "-$i")
+            val d = File(dir, "$name.jsonl"); val p = File(dir, "$name.jsonl$PART")
+            if (!d.exists() && p.createNewFile()) { done = d; part = p; break }
+            i++
+        }
+    }
+    @Volatile var file: File = part
+        private set
     @Volatile var failed: String? = null
         private set
-    private val queue = LinkedBlockingQueue<Any>()
+    private val queue = LinkedBlockingQueue<Any>(capacity)
     private val end = Any()
     private val thread = Thread({
         var w: Writer? = null
         try {
-            dir.mkdirs()
-            w = file.bufferedWriter()
+            w = open(part)
             while (true) {
                 val e = queue.take()
                 if (e === end) break
                 w.write(e as String); w.write("\n")
                 if (queue.isEmpty()) w.flush() // a crash loses at most what is still queued
             }
+            w.flush()
         } catch (t: Throwable) {
-            failed = t.message ?: t.toString()
+            fail(t.message ?: t.toString())
         } finally {
-            runCatching { w?.close() }.onFailure { if (failed == null) failed = it.toString() }
+            runCatching { w?.close() }.onFailure { fail(it.toString()) }
         }
     }, "jpsub-log").apply { isDaemon = true; start() }
 
-    fun write(event: Map<String, Any?>) {
+    @Synchronized private fun fail(why: String) {
         if (failed != null) return
-        queue.add(Json.encode(mapOf("t" to monoMs()) + event))
+        failed = why
+        queue.clear() // the writer is dead or the log is already incomplete: free the memory, unblock close()
+        onFail(why)
     }
 
-    /** Writes everything queued, then closes the file. Call once, after the pipeline workers have exited. */
-    fun close(timeoutMs: Long = 3_000) {
-        queue.add(end)
-        thread.join(timeoutMs)
+    fun write(event: Map<String, Any?>) {
+        if (failed != null) return
+        if (!queue.offer(Json.encode(mapOf("t" to monoMs()) + event))) fail("日志写入跟不上，后面的记录已丢弃")
+    }
+
+    /**
+     * Writes everything queued, then closes the file. Call once, after the pipeline workers have exited.
+     * @return true only if every event was written and the file is complete; otherwise [failed] says why.
+     */
+    fun close(timeoutMs: Long = 3_000): Boolean {
+        val t0 = monoMs()
+        while (!queue.offer(end)) { // full only while the writer is stuck
+            if (failed != null) { queue.clear(); continue }
+            if (monoMs() - t0 >= timeoutMs) break
+            Thread.sleep(10)
+        }
+        thread.join((timeoutMs - (monoMs() - t0)).coerceAtLeast(1))
+        if (thread.isAlive) fail("关闭日志超时，文件可能不完整")
+        if (failed != null) return false
+        if (!part.renameTo(done)) { fail("无法完成日志文件"); return false }
+        file = done
+        return true
     }
 
     companion object {
+        private const val PART = ".part"
         fun dir(root: File) = File(root, "logs")
-        /** Newest first. */
+        /** Newest first; includes unfinished `.part` files (see [complete]). */
         fun list(root: File): List<File> =
-            dir(root).listFiles { f -> f.name.endsWith(".jsonl") }?.sortedByDescending { it.name } ?: emptyList()
+            dir(root).listFiles { f -> f.name.endsWith(".jsonl") || f.name.endsWith(".jsonl$PART") }
+                ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name }) ?: emptyList()
+        /** false for a session that is still running, failed, or was interrupted */
+        fun complete(f: File) = f.name.endsWith(".jsonl")
     }
 }

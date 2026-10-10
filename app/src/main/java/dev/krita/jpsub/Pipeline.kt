@@ -30,6 +30,8 @@ data class Caption(
     val audioEndAt: Long = 0,
     /** see [AsrJob.timeEstimated] */
     val timeEstimated: Boolean = false,
+    /** the ASR/MT revision this caption comes from; a checked final is shown as revision + 1 but logged under this */
+    val sourceRevision: Int = revision,
 )
 
 data class Timing(
@@ -39,9 +41,12 @@ data class Timing(
     val asrQueueMs: Long,
     val asrMs: Long,
     val mtQueueMs: Long,
+    /** the local translation(s) only; a Jev check and its retry are in [checkMs] */
     val mtMs: Long,
     /** from the last captured sample until MT finished (UI delivery is measured separately by the app) */
     val mtDoneMs: Long,
+    /** Jev mistranslation check of a final, including a retranslation it asked for (0 without Jev) */
+    val checkMs: Long = 0,
 )
 
 interface Asr { fun recognize(samples: FloatArray): String }
@@ -94,7 +99,15 @@ class Pipeline(
     private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Pair<AsrJob, String>?>(null)
 
     /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
-    fun holdHint(segmentId: Long, revision: Int): Boolean? = hints[segmentId to revision]
+    fun holdHint(segmentId: Long, revision: Int): Boolean? {
+        val h = hints[segmentId to revision] ?: return null
+        // the segmenter asks on every frame: log only the first read, which is when the answer took effect
+        if (hintsUsed.add(segmentId to revision)) log(mapOf("ev" to "hint_used", "seg" to segmentId, "rev" to revision, "hold" to h))
+        return h
+    }
+    private val hintsUsed: MutableSet<Pair<Long, Int>> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** newest segment handed over as final: a Jev answer for it or an older one came too late to matter */
+    @Volatile private var lastFinalSeg = -1L
 
     // Shared lock for both queues so pending-final accounting is consistent.
     private val lock = Object()
@@ -157,6 +170,7 @@ class Pipeline(
             if (!running || overloaded || failed) return false
             asrQueue.removeIf { it.job.segmentId == job.segmentId && !it.job.isFinal }
             if (job.isFinal) {
+                if (job.segmentId > lastFinalSeg) lastFinalSeg = job.segmentId
                 pendingFinalAudioMs += audioMs(job)
                 if (pendingFinalAudioMs > maxPendingAudioMs) overloaded = true
             }
@@ -222,15 +236,21 @@ class Pipeline(
         while (running && !failed) {
             val (job, ja) = pendingJudge.getAndSet(null) ?: run { Thread.sleep(10); null } ?: continue
             val call = judge.unfinished(ja)
-            if (!running) return
+            if (!running) { logJev("unfinished", job.segmentId, job.revision, call, "stopped"); return }
             val p = call.noul
             val unfinished = p?.let { it >= UNFINISHED_THRESHOLD }
             if (unfinished != null) {
                 hints[job.segmentId to job.revision] = unfinished
                 hints.keys.removeIf { it.first < job.segmentId - 8 }
+                hintsUsed.removeIf { it.first < job.segmentId - 8 }
             }
-            logJev("unfinished", job.segmentId, job.revision, call,
-                when (unfinished) { true -> "hold"; false -> "finish"; null -> "none" })
+            // "hold"/"finish" is only the advice; a "hint_used" event shows when the segmenter acted on it
+            logJev("unfinished", job.segmentId, job.revision, call, when {
+                unfinished == null -> "none"
+                job.segmentId <= lastFinalSeg -> "late"
+                unfinished -> "hold"
+                else -> "finish"
+            })
         }
     }
 
@@ -259,7 +279,7 @@ class Pipeline(
         interim(zh) // live mode shows the first translation while Jev checks it
         val job = j.q.job
         val call = judge.mistranslation(j.ja, zh)
-        if (!running) return zh
+        if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
         val note = call.choice?.let { FIX_NOTES[it] }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")
@@ -267,7 +287,7 @@ class Pipeline(
         }
         logJev("mistranslation", job.segmentId, job.revision, call, "retranslate:${call.choice}")
         val r = translate(job, 2, j.ja, listOf(note))
-        return r?.takeIf { it.usable }?.text ?: zh
+        return r?.takeIf { it.usable }?.let { dropEchoedNote(it.text, indexPrompt(j.ja, scene, listOf(note))) } ?: zh
     }
 
     private fun mtLoop() {
@@ -275,15 +295,18 @@ class Pipeline(
             val j = take(mtQueue) { it.q.job.isFinal } ?: continue
             val job = j.q.job
             val start = clock()
+            var checkMs = 0L
             val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList())
             if (!running) return
-            var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
+            var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.let { dropEchoedNote(it.text, indexPrompt(j.ja, scene)) }
             if (zh == null) {
                 if (!job.isFinal) continue
                 zh = "[翻译失败] ${j.ja}"
             } else if (job.isFinal) {
                 // the interim line takes the final's revision; the final then goes out as revision + 1
+                val c0 = clock()
                 zh = checked(j, zh) { onCaption(caption(j, false, job.revision, it, start, clock())) }
+                checkMs = clock() - c0
                 if (!running) return
             }
             val end = clock()
@@ -291,13 +314,13 @@ class Pipeline(
                 if (job.isFinal) pendingFinalAudioMs -= audioMs(job)
                 pendingFinals() + inFlightFinals
             }
-            onCaption(caption(j, job.isFinal, job.revision + if (judge != null && job.isFinal) 1 else 0, zh, start, end))
+            onCaption(caption(j, job.isFinal, job.revision + if (judge != null && job.isFinal) 1 else 0, zh, start, end, checkMs))
             if (job.isFinal) synchronized(lock) { inFlightFinals-- }
             onBacklog(backlog - if (job.isFinal) 1 else 0)
         }
     }
 
-    private fun caption(j: MtJob, final: Boolean, revision: Int, zh: String, start: Long, end: Long): Caption {
+    private fun caption(j: MtJob, final: Boolean, revision: Int, zh: String, start: Long, end: Long, checkMs: Long = 0): Caption {
         val job = j.q.job
         return Caption(
             job.segmentId, revision, final, j.ja, zh.trim(),
@@ -307,11 +330,13 @@ class Pipeline(
                 asrQueueMs = j.asrStartAt - j.q.submittedAt,
                 asrMs = j.asrEndAt - j.asrStartAt,
                 mtQueueMs = start - j.asrEndAt,
-                mtMs = end - start,
+                mtMs = end - start - checkMs,
                 mtDoneMs = end - job.audioEndAt,
+                checkMs = checkMs,
             ),
             job.audioEndAt,
             job.timeEstimated,
+            sourceRevision = job.revision,
         )
     }
 

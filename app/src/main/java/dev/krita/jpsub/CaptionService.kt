@@ -52,7 +52,7 @@ class CaptionService : Service() {
     private var pipeline: Pipeline? = null
     private var translator: Mt? = null
 
-    private val board = CaptionBoard(maxLines = 2)
+    private val board = CaptionBoard(maxFinals = 2)
     // main thread only
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0

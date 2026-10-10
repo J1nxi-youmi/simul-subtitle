@@ -724,11 +724,39 @@ class CaptionBoardTest {
     }
 
     @Test
-    fun keepsLastTwoSegmentsAndIgnoresStaleOldDrafts() {
-        val b = CaptionBoard(maxLines = 2)
+    fun keepsTwoFinalsPlusTheDraftAndIgnoresStaleOldDrafts() {
+        val b = CaptionBoard(maxFinals = 2)
         b.accept(cap(1, 1, true)); b.accept(cap(2, 1, true)); b.accept(cap(3, 1, false))
-        assertEquals(listOf(2L, 3L), b.snapshot().map { it.segmentId })
+        // the draft is an extra line: it does not push out a finished sentence
+        assertEquals(listOf(1L, 2L, 3L), b.snapshot().map { it.segmentId })
         assertFalse(b.accept(cap(1, 5, false)))
+        b.accept(cap(3, 2, true))
+        assertEquals(listOf(2L, 3L), b.snapshot().map { it.segmentId })
+    }
+
+    /** User report: a sentence read as finished was later a different sentence. Finals never change on screen. */
+    @Test
+    fun aShownFinalNeverChangesWhileLaterSpeechComesIn() {
+        val b = CaptionBoard(maxFinals = 2)
+        b.accept(cap(1, 3, true, zh = "顺便一提啊……"))
+        for (rev in 1..6) b.accept(cap(2, rev, false, zh = "草稿$rev"))
+        assertEquals(listOf("顺便一提啊……", "草稿6"), b.snapshot().map { it.zh })
+        assertEquals(listOf(true, false), b.snapshot().map { it.isFinal })
+        b.accept(cap(2, 7, true, zh = "定稿2"))
+        assertEquals(listOf("顺便一提啊……", "定稿2"), b.snapshot().map { it.zh })
+    }
+
+    @Test
+    fun aDraftOfALaterSegmentReplacesTheDraftLineButNotFinals() {
+        val b = CaptionBoard()
+        b.accept(cap(1, 1, true)); b.accept(cap(2, 1, false)); b.accept(cap(3, 1, false))
+        assertEquals(listOf(1L, 3L), b.snapshot().map { it.segmentId })
+        // a late draft of segment 2 cannot come back once 3 is the draft
+        assertFalse(b.accept(cap(2, 2, false)))
+        // segment 2's final still lands, in order, and keeps the newer draft line
+        assertTrue(b.accept(cap(2, 3, true)))
+        assertEquals(listOf(1L, 2L, 3L), b.snapshot().map { it.segmentId })
+        assertEquals(listOf(true, true, false), b.snapshot().map { it.isFinal })
     }
 
     @Test

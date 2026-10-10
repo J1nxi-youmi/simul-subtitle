@@ -159,8 +159,13 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                 sb.setSpan(ForegroundColorSpan(0xCCDCD8F0.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             val s = sb.length
+            // the draft line is visibly separate from the finished sentences above: dimmer, smaller, marked "…"
+            if (!l.isFinal) sb.append("… ")
             sb.append(l.zh)
-            if (!l.isFinal) sb.setSpan(ForegroundColorSpan(0xFFB9B5C9.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (!l.isFinal) {
+                sb.setSpan(ForegroundColorSpan(0xFFB9B5C9.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(android.text.style.RelativeSizeSpan(0.85f), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
         }
         text.text = sb
         stats.text = statsLine ?: ""

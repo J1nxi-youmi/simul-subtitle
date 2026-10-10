@@ -422,21 +422,36 @@ class Pipeline(
     private fun pendingFinals() = asrQueue.count { it.job.isFinal } + mtQueue.count { it.q.job.isFinal }
 }
 
-/** UI-side guard: newer revisions only, nothing after a segment's final, no late drafts of older segments. */
-class CaptionBoard(private val maxLines: Int = 2) {
-    private val lines = LinkedHashMap<Long, Caption>()
+/**
+ * What the overlay shows: the last [maxFinals] finished sentences, which never change once shown, and below them
+ * one separate draft line for the sentence still being spoken. A draft never replaces or pushes out a final.
+ * Guards: newer revisions only, nothing after a segment's final, no late drafts of older segments.
+ */
+class CaptionBoard(private val maxFinals: Int = 2) {
+    private val finals = ArrayDeque<Caption>()
+    private var draft: Caption? = null
 
     /** @return true if the board changed */
     @Synchronized
     fun accept(c: Caption): Boolean {
-        val cur = lines[c.segmentId]
-        if (cur != null && (cur.isFinal || cur.revision >= c.revision)) return false
-        if (cur == null && !c.isFinal && lines.keys.any { it > c.segmentId }) return false
-        if (c.zh.isEmpty() && c.isFinal) lines.remove(c.segmentId) else lines[c.segmentId] = c
-        while (lines.size > maxLines) lines.remove(lines.keys.first())
+        val lastFinal = finals.lastOrNull()?.segmentId ?: Long.MIN_VALUE
+        if (c.segmentId <= lastFinal && finals.any { it.segmentId == c.segmentId }) return false
+        val d = draft
+        if (c.isFinal) {
+            if (c.segmentId < lastFinal) return false
+            if (d != null && d.segmentId <= c.segmentId) draft = null
+            if (c.zh.isEmpty()) return d != null && draft == null
+            finals.addLast(c)
+            while (finals.size > maxFinals) finals.removeFirst()
+            return true
+        }
+        if (c.segmentId <= lastFinal) return false
+        if (d != null && (c.segmentId < d.segmentId || (c.segmentId == d.segmentId && c.revision <= d.revision))) return false
+        draft = c
         return true
     }
 
+    /** finals oldest first, then the draft (if any) */
     @Synchronized
-    fun snapshot(): List<Caption> = lines.values.toList()
+    fun snapshot(): List<Caption> = finals.toList() + listOfNotNull(draft)
 }

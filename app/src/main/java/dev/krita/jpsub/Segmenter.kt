@@ -58,6 +58,8 @@ class Segmenter(
     private var cutRevision = -1
     private var cutIndex = 0
     private var cutAtFrames = 0
+    /** this utterance's forced cut was judged unfinished or superseded: no further cut question until the hard limit */
+    private var cutClosed = false
     private val hardMaxMs = if (hintWaitMs > 0) 2 * maxUtteranceMs else maxUtteranceMs
 
     /**
@@ -95,11 +97,12 @@ class Segmenter(
             // a held pause is bounded by maxHoldSilenceMs; no forced cut inside it (the final drops the silence)
             inPause && (durMs >= hardMaxMs || !holding(silMs)) -> finalize(speechEnd, continueSpeech = false)
             inPause -> if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
+                cutRevision = -1 // a newer candidate end replaces any open forced-cut question
                 tailRevision = ++revision
                 tailAtFrames = frames.size
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
-            durMs >= maxUtteranceMs -> forcedCutStep(durMs)
+            durMs >= maxUtteranceMs && forcedCutStep(durMs) -> Unit
             framesSinceDraft * frameMs >= draftEveryMs && durMs >= minDraftMs && f.speech -> {
                 framesSinceDraft = 0
                 emit(AsrJob(segmentId, ++revision, false, concat(frames.size), now, estimated))
@@ -118,21 +121,28 @@ class Segmenter(
         return holdHint(segmentId, tailRevision) ?: ((frames.size - tailAtFrames) * frameMs < hintWaitMs)
     }
 
-    /** Without a judge, cut now. With one, ask about the cut first; an unfinished head keeps growing up to [hardMaxMs]. */
-    private fun forcedCutStep(durMs: Int) {
-        if (hintWaitMs <= 0 || durMs >= hardMaxMs) { finalize(forcedCut(), continueSpeech = true); return }
+    /**
+     * Without a judge, cut now. With one, ask about the cut first; an unfinished head keeps growing up to [hardMaxMs].
+     * One question per utterance: once answered "unfinished" (or replaced by a pause candidate) it is closed and a later
+     * answer about it is ignored. @return true if this frame was consumed (cut or candidate emitted), false = go on
+     * with the normal draft logic while the speaker keeps talking.
+     */
+    private fun forcedCutStep(durMs: Int): Boolean {
+        if (hintWaitMs <= 0 || durMs >= hardMaxMs) { finalize(forcedCut(), continueSpeech = true); return true }
+        if (cutClosed) return false
         if (cutRevision < 0) {
             cutIndex = forcedCut()
             cutRevision = ++revision
             cutAtFrames = frames.size
             emit(AsrJob(segmentId, cutRevision, false, concat(cutIndex), frames[cutIndex - 1].endAt, frames[cutIndex - 1].estimated, endOfSpeech = true))
-            return
+            return true
         }
         when (holdHint(segmentId, cutRevision)) {
-            true -> Unit
-            false -> finalize(cutIndex, continueSpeech = true)
-            null -> if ((frames.size - cutAtFrames) * frameMs >= hintWaitMs) finalize(cutIndex, continueSpeech = true)
+            true -> { cutClosed = true; cutRevision = -1 }
+            false -> { finalize(cutIndex, continueSpeech = true); return true }
+            null -> if ((frames.size - cutAtFrames) * frameMs >= hintWaitMs) { finalize(cutIndex, continueSpeech = true); return true }
         }
+        return false
     }
 
     /**
@@ -163,6 +173,7 @@ class Segmenter(
         emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
         tailRevision = -1
         cutRevision = -1
+        cutClosed = false
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
         if (continueSpeech) {

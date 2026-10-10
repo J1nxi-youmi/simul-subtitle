@@ -20,6 +20,7 @@ class JevTest {
     private val lastBody = AtomicReference<String?>()
     @Volatile private var reply: (Int) -> Pair<Int, String> = { 200 to "{}" }
     @Volatile private var delayMs = 0L
+    @Volatile private var trickleMs = 0L
     @Volatile private var redirectTo: String? = null
 
     init {
@@ -44,7 +45,10 @@ class JevTest {
                         val (code, text) = reply(hits.get())
                         val b = text.toByteArray()
                         out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray())
-                        out.write(b); out.flush()
+                        out.flush()
+                        // trickle: one byte every trickleMs, each gap shorter than any read timeout
+                        if (trickleMs > 0) for (x in b) { out.write(x.toInt()); out.flush(); Thread.sleep(trickleMs) }
+                        else { out.write(b); out.flush() }
                     }
                 }.apply { isDaemon = true; start() }
             }
@@ -55,6 +59,33 @@ class JevTest {
 
     private fun jev(deadline: Long = 2_000) =
         Jev(JevProvider.OFFICIAL, "sk-secret", deadline, url = "http://127.0.0.1:$port/v1/systemone")
+
+    @Test
+    fun aSlowlyTricklingResponseIsStillCutAtTheDeadline() {
+        // every byte arrives well within the read timeout, so only a whole-call deadline can stop this
+        reply = { 200 to "{\"answers\":{\"x\":{\"noul\":0.5}}," + " ".repeat(200) + "\"pad\":1}" }
+        trickleMs = 50
+        val t0 = monoMs()
+        val c = jev(deadline = 600).unfinished("はい")
+        assertTrue("took ${monoMs() - t0} ms", monoMs() - t0 < 1_500)
+        assertNull(c.answer); assertTrue(c.error!!, c.error!!.startsWith("deadline"))
+    }
+
+    @Test
+    fun cancelAbortsBothKindsOfRequestInFlightAtOnce() {
+        delayMs = 3_000
+        val j = jev(deadline = 5_000)
+        val a = AtomicReference<JevCall?>(); val b = AtomicReference<JevCall?>()
+        val ta = Thread { a.set(j.unfinished("はい")) }.apply { start() }
+        val tb = Thread { b.set(j.mistranslation("はい", "是")) }.apply { start() }
+        val until = monoMs() + 2_000
+        while (hits.get() < 2 && monoMs() < until) Thread.sleep(10)
+        assertEquals(2, hits.get())
+        val t0 = monoMs(); j.cancel(); ta.join(2_000); tb.join(2_000)
+        assertFalse(ta.isAlive || tb.isAlive)
+        assertTrue("took ${monoMs() - t0} ms", monoMs() - t0 < 1_500)
+        assertEquals("cancelled", a.get()!!.error); assertEquals("cancelled", b.get()!!.error)
+    }
 
     @Test
     fun parsesTheOfficialResponseShape() {

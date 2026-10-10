@@ -304,6 +304,41 @@ class SegmenterTest {
     }
 
     @Test
+    fun aStaleForcedCutAnswerNeverCutsAtTheOldPlace() {
+        // forced-cut candidate (unfinished) → long utterance continues → a pause candidate → speech resumes →
+        // the judge now says "finished" about the *old* cut: that must not cut back at the old position
+        val jobs = ArrayList<AsrJob>()
+        var firstCut: AsrJob? = null
+        var pauseSeen = false
+        val s = Segmenter({ jobs.add(it); if (it.endOfSpeech) { if (firstCut == null) firstCut = it else pauseSeen = true } },
+            maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { seg, rev ->
+                val c = firstCut
+                when {
+                    c != null && seg == c.segmentId && rev == c.revision -> !pauseSeen // unfinished first, "finished" later
+                    else -> true // keep every later candidate open
+                }
+            })
+        // 3 s speech (cut candidate at 3 s), 0.6 s more, 0.5 s pause (candidate), then 1 s speech
+        run(listOf(true to 3008, true to 608, false to 512, true to 1024, false to 1600), s)
+        s.flush()
+        val cut = firstCut!!
+        val finals = jobs.filter { it.isFinal }
+        assertTrue("no final may end at the old cut", finals.none { frameIds(it).last() == frameIds(cut).last() })
+    }
+
+    @Test
+    fun draftsKeepComingWhileAJudgedForcedCutIsHeldOpen() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> true })
+        run(listOf(true to 5504), s)
+        // past the 3 s cut point the speaker is still talking: the live caption must keep updating
+        val lateDrafts = jobs.filter { !it.isFinal && !it.endOfSpeech && it.samples.size > 3500 * 16 }
+        assertTrue("drafts after the cut point: ${lateDrafts.size}", lateDrafts.size >= 2)
+    }
+
+    @Test
     fun holdingLosesNoFrameAndForcedCutStillApplies() {
         val jobs = ArrayList<AsrJob>()
         val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900, holdHint = { _, _ -> true })

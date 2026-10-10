@@ -38,14 +38,15 @@ class Jev(
     /** tests point this at a local server */
     private val url: String = provider.url,
 ) : Judge {
-    @Volatile private var current: HttpURLConnection? = null
+    /** Every request in flight (the pipeline asks from two threads); cancel closes all of them. */
+    private val inFlight: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     @Volatile private var cancelled = false
     private val timer = Timer("jev-deadline", true)
 
     override fun unfinished(text: String) = ask(mapOf("current" to text), UNFINISHED)
     override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), MISTRANSLATION)
 
-    override fun cancel() { cancelled = true; current?.disconnect(); timer.cancel() }
+    override fun cancel() { cancelled = true; inFlight.forEach { it.disconnect() }; timer.cancel() }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
         val body = Json.encode(mapOf("model" to provider.model, "state" to state, "questions" to mapOf("x" to question)))
@@ -55,7 +56,8 @@ class Jev(
         // connect/read timeouts bound each phase; the timer bounds the whole call by closing the socket
         val c = URL(url).openConnection() as HttpURLConnection
         val deadline = runCatching { timer.schedule(deadlineMs) { c.disconnect() } }.getOrNull()
-        current = c
+        inFlight.add(c)
+        if (cancelled) c.disconnect() // cancel() ran between the check above and the registration
         return try {
             c.instanceFollowRedirects = false // never resend the key to another host
             c.connectTimeout = deadlineMs.toInt(); c.readTimeout = deadlineMs.toInt()
@@ -64,18 +66,31 @@ class Jev(
             c.setRequestProperty("Authorization", "Bearer $apiKey")
             c.outputStream.use { it.write(body.toByteArray()) }
             status = c.responseCode
-            resp = (if (status in 200..299) c.inputStream else c.errorStream)?.use { String(it.readBytes()) }
+            // read in chunks against the deadline: disconnect() does not always unblock a body read in progress
+            resp = (if (status in 200..299) c.inputStream else c.errorStream)?.use { input ->
+                val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
+                while (true) {
+                    if (cancelled) throw IOException("cancelled")
+                    if (monoMs() - t0 >= deadlineMs) throw IOException("deadline")
+                    val n = input.read(buf); if (n < 0) break
+                    out.write(buf, 0, n)
+                    if (out.size() > MAX_RESPONSE) throw IOException("response over $MAX_RESPONSE bytes")
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
             val answer = if (status == 200) ((Json.parse(resp!!) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> else null
             JevCall(body, status, resp, monoMs() - t0, if (answer == null) "HTTP $status" else null, answer)
         } catch (e: Exception) {
             val why = when { cancelled -> "cancelled"; monoMs() - t0 >= deadlineMs -> "deadline ${deadlineMs}ms"; else -> e.toString() }
             JevCall(body, status, resp, monoMs() - t0, why, null)
         } finally {
-            deadline?.cancel(); current = null; c.disconnect()
+            deadline?.cancel(); inFlight.remove(c); c.disconnect()
         }
     }
 
     companion object {
+        /** A real answer is < 1 KB; anything far larger is not a Jev response. */
+        private const val MAX_RESPONSE = 64 * 1024
         /** Wording tuned on 140 labelled segment pairs without the following text (AUC 0.96, /tmp/jps/case/decision-bench.md). */
         val UNFINISHED = mapOf(
             "type" to "noul",

@@ -233,6 +233,17 @@ class JevTest {
     }
 
     @Test
+    fun zenIsCalledWithoutAnyKeyAndParsesTheSameShape() {
+        // recorded from opencode.ai/zen/v1/systemone on 2026-10-10 (no Authorization header; a wrong key gets 401)
+        reply = { 200 to """{"model":"jev-1.13-free","answers":{"x":{"type":"noul","noul":0.96}},"usage":{"input_tokens":320,"output_tokens":20}}""" }
+        val c = Jev(JevProvider.ZEN, "", url = "http://127.0.0.1:$port/zen/v1/systemone").unfinished("スパチャありがとうございま")
+        assertEquals(0.96, c.noul!!, 1e-9); assertNull(c.error)
+        assertNull("no Authorization header for Zen", lastAuth.get())
+        assertEquals("jev-1.13-free", (Json.parse(lastBody.get()!!) as Map<*, *>)["model"])
+        assertEquals(JevProvider.ZEN, JevProvider.entries.first())
+    }
+
+    @Test
     fun parsesTheOfficialResponseShape() {
         // recorded from api.typesafe.ai on 2026-10-10
         reply = { 200 to """{"model":"jev-1.13.0","answers":{"x":{"type":"noul","noul":0.66}},"usage":{"input_tokens":379,"output_tokens":49}}""" }

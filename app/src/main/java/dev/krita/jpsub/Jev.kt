@@ -20,7 +20,10 @@ import org.json.JSONTokener
 // TypeSafe Jev (System One decision model) client and the two questions the pipeline asks it.
 // Pure Kotlin + OkHttp so the Mac harness (tools/mac-e2e) runs the same code.
 
-enum class JevProvider(val label: String, val url: String, val model: String) {
+/** [needsKey] false: no Authorization header is sent (Zen rejects a wrong key with 401 but answers without one). */
+enum class JevProvider(val label: String, val url: String, val model: String, val needsKey: Boolean = true) {
+    // free and keyless, but undocumented: it may get rate limits or a login at any time (tested 2026-10-10)
+    ZEN("Zen 免费", "https://opencode.ai/zen/v1/systemone", "jev-1.13-free", needsKey = false),
     OFFICIAL("TypeSafe 官方", "https://api.typesafe.ai/v1/systemone", "jev-latest"),
     OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1/systemone", "~typesafe/jev-latest"),
 }
@@ -61,8 +64,9 @@ class Jev(
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
         val body = Json.encode(mapOf("model" to provider.model, "state" to state, "questions" to mapOf("x" to question)))
         // an illegal header value would make the HTTP library put the key into its exception message
-        if (!validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
-        val r = calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"), beforeSend)
+        if (provider.needsKey && !validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
+        val auth = if (provider.needsKey) mapOf("Authorization" to "Bearer $apiKey") else emptyMap()
+        val r = calls.post(url, body, auth, beforeSend)
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null

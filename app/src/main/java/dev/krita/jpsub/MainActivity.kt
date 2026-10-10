@@ -303,6 +303,13 @@ class MainActivity : Activity() {
             val p = prefs.jevProvider
             jevBox.addView(label("接口"))
             jevBox.addView(choice(JevProvider.entries.map { it to it.label }, p) { prefs.jevProvider = it; main.post { renderJev() } })
+            if (!p.needsKey) {
+                jevBox.addView(TextView(this).apply {
+                    text = "不用填 key。只把识别出的日语和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以换下面两个付费接口。"
+                    textSize = 12.5f; setTextColor(getColor(R.color.text2))
+                })
+                return
+            }
             val saved = prefs.jevKey(p)
             jevBox.addView(label(if (saved != null) "${p.label} API key：已保存（…${saved.takeLast(4)}）" else "${p.label} API key：未填写"))
             val input = android.widget.EditText(this).apply {

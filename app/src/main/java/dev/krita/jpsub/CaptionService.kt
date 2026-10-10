@@ -123,7 +123,7 @@ class CaptionService : Service() {
 
             val scene = prefs.scene
             val provider = prefs.jevProvider
-            val key = if (prefs.jevOn) prefs.jevKey(provider) else null
+            val key = if (!prefs.jevOn) null else if (provider.needsKey) prefs.jevKey(provider) else ""
             val judge = key?.let { Jev(provider, it) }
             val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl

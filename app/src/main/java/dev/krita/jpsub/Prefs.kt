@@ -68,7 +68,8 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("jevOn", false)
         set(v) = sp.edit().putBoolean("jevOn", v).apply()
     var jevProvider: JevProvider
-        get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.OFFICIAL)
+        // a choice saved earlier stays; with none yet, the free Zen endpoint is the default
+        get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)
         set(v) = sp.edit().putString("jevProvider", v.name).apply()
 
     /** API key per provider, encrypted with an Android Keystore key (the stored value is useless off this device). */

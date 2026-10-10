@@ -25,7 +25,12 @@ fun main() {
         override fun cancel() = MacLlama.nativeCancel(h)
     }
     // -Djev=1 uses the real Jev (TYPESAFE_API_KEY); -Dlog=<file> writes the session events as JSONL
-    val judge = if (System.getProperty("jev") != null) Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY")) else null
+    // -Djev=zen: the free keyless Zen endpoint; any other value: TypeSafe official with TYPESAFE_API_KEY
+    val judge = when (System.getProperty("jev")) {
+        null -> null
+        "zen" -> Jev(JevProvider.ZEN, "")
+        else -> Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY"))
+    }
     val jsonl = System.getProperty("log")?.let { File(it).bufferedWriter() }
     val board = CaptionBoard(10)
     val t0 = System.currentTimeMillis()

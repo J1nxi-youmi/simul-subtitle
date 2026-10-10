@@ -161,4 +161,42 @@ class ModelStoreTest {
         assertTrue(ModelStore.MODELS.all { it.url.startsWith("https://") && it.sha256.length == 64 })
         assertEquals(6, ModelStore.MODELS.map { it.path }.toSet().size)
     }
+
+    @Test
+    fun listsCurrentOldAndLeftoverModelFilesButNotLogsOrMarkers() {
+        val asr = spec(path = "asr/a.onnx"); val mt = spec("mt bytes".toByteArray(), path = "mt/m.gguf")
+        val store = ModelStore(tmp.root, listOf(asr, mt))
+        write(store.partFile(asr), good); store.publish(asr)
+        write(File(tmp.root, "mt/hy-mt.gguf"), ByteArray(10)); write(File(tmp.root, "mt/hy-mt.gguf.ok"), ByteArray(64))
+        write(store.partFile(mt), ByteArray(3))           // a half-finished download
+        write(File(tmp.root, "logs/session-1.jsonl"), ByteArray(5))
+        write(File(tmp.root, "timing.csv"), ByteArray(5))  // not a model: not offered
+        val listed = store.listFiles().associateBy { it.path }
+        assertEquals(setOf("asr/a.onnx", "mt/hy-mt.gguf", "mt/m.gguf.part"), listed.keys)
+        assertEquals(ModelStore.Kind.CURRENT, listed["asr/a.onnx"]!!.kind)
+        assertEquals(ModelStore.Kind.OLD, listed["mt/hy-mt.gguf"]!!.kind)
+        assertEquals(ModelStore.Kind.PARTIAL, listed["mt/m.gguf.part"]!!.kind)
+        assertEquals(10L, listed["mt/hy-mt.gguf"]!!.bytes)
+    }
+
+    @Test
+    fun deletingAModelAlsoRemovesItsVerifiedMarkerSoItIsDownloadedAgain() {
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.partFile(s), good); store.publish(s)
+        assertTrue(store.ready())
+        assertTrue(store.delete(store.listFiles().single()))
+        assertFalse(store.file(s).exists()); assertFalse(store.okMarker(s).exists())
+        assertFalse(store.ready())
+        assertTrue(store.listFiles().isEmpty())
+    }
+
+    @Test
+    fun deleteRefusesPathsOutsideTheModelFolders() {
+        val store = ModelStore(tmp.root, listOf(spec()))
+        val log = File(tmp.root, "logs/session-1.jsonl").also { write(it, ByteArray(1)) }
+        assertFalse(store.delete(ModelStore.StoredFile("logs/session-1.jsonl", 1, ModelStore.Kind.OLD)))
+        assertFalse(store.delete(ModelStore.StoredFile("../x", 1, ModelStore.Kind.OLD)))
+        assertTrue(log.exists())
+    }
 }

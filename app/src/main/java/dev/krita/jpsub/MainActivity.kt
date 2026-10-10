@@ -85,6 +85,7 @@ class MainActivity : Activity() {
         prefs.listen(styleListener)
         renderPermissions()
         renderLogs()
+        renderModelFiles()
         render()
         main.post(ticker)
     }
@@ -103,6 +104,8 @@ class MainActivity : Activity() {
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
             val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.activeFiles()
             if (now != listedLogs) renderLogs()
+            // a session or download started/finished, or a download published a file
+            if ((store.listFiles() to modelFilesBusy()) != listedModels) renderModelFiles()
             main.postDelayed(this, 800)
         }
     }
@@ -450,6 +453,79 @@ class MainActivity : Activity() {
             .setPositiveButton("删除") { _, _ -> ok() }
             .show()
     }
+
+    // ---- model files ---------------------------------------------------------------------------------------
+
+    /** Files in the model folders, current and left over, each deletable while nothing can be reading or writing it. */
+    private fun renderModelFiles() {
+        val box = findViewById<LinearLayout>(R.id.modelFileList)
+        box.removeAllViews()
+        val dp = resources.displayMetrics.density
+        val files = store.listFiles()
+        val busy = modelFilesBusy()
+        listedModels = files to busy
+        if (files.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "还没有模型文件。"; textSize = 13.5f; setTextColor(getColor(R.color.text2))
+                setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt())
+            })
+            return
+        }
+        for (f in files) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
+            }
+            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            texts.addView(TextView(this).apply { text = f.path; textSize = 14.5f; setTextColor(getColor(R.color.text)) })
+            texts.addView(TextView(this).apply {
+                text = sizeText(f.bytes) + " · " + when (f.kind) {
+                    ModelStore.Kind.CURRENT -> if (f.path.startsWith("mt/")) "本地翻译用，在线翻译不需要" else "在用，删了需重新下载"
+                    ModelStore.Kind.OLD -> "旧版本留下的，现在不用"
+                    ModelStore.Kind.PARTIAL -> "没下载完的残留"
+                }
+                textSize = 12.5f
+                setTextColor(getColor(if (f.kind == ModelStore.Kind.CURRENT) R.color.text2 else R.color.warn))
+            })
+            row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = busy == null
+                setOnClickListener {
+                    val warn = if (f.kind == ModelStore.Kind.CURRENT) "这是当前要用的模型，删除后需要重新下载（${sizeText(f.bytes)}）才能用。" else "这个文件现在不用，删除后可以腾出 ${sizeText(f.bytes)}。"
+                    confirmDelete("删除 ${f.path}？", warn) {
+                        // re-checked now: a session or download may have started while the dialog was open
+                        val why = modelFilesBusy()
+                        when {
+                            why != null -> Toast.makeText(this@MainActivity, why, Toast.LENGTH_SHORT).show()
+                            !store.delete(f) -> Toast.makeText(this@MainActivity, "删除失败：${f.path}", Toast.LENGTH_SHORT).show()
+                        }
+                        renderModelFiles(); render()
+                    }
+                }
+            })
+            box.addView(row)
+        }
+        box.addView(TextView(this).apply {
+            text = "共 ${sizeText(files.sumOf { it.bytes })}" + (busy?.let { "\n$it" } ?: "")
+            textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            setPadding(0, (6 * dp).toInt(), 0, 0)
+        })
+    }
+
+    /** Why model files cannot be deleted right now, or null. */
+    private fun modelFilesBusy(): String? = when {
+        // also true after stopping until the session thread has freed the native models
+        CaptionService.modelsInUse -> "字幕运行中（或正在释放模型），停止后才能删除"
+        dl.state().let { it.running || it.verifying != null } -> "正在下载或校验模型，完成或取消后才能删除"
+        else -> null
+    }
+
+    private fun sizeText(b: Long) = when {
+        b >= 1L shl 30 -> "%.2f GB".format(b / 1073741824.0)
+        b >= 1L shl 20 -> "%.1f MB".format(b / 1048576.0)
+        else -> "%.1f KB".format(b / 1024.0)
+    }
+    private var listedModels: Pair<List<ModelStore.StoredFile>, String?>? = null
     private var listedLogs: Pair<List<String>, Set<java.io.File>>? = null
     private var translateRunning = false
 

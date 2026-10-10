@@ -84,7 +84,8 @@ class CaptionService : Service() {
         projection = p
         running = true
         showOverlay()
-        Thread({ session(p) }, "jpsub-session").start()
+        sessions.incrementAndGet() // until the session thread has freed every native model (see [modelsInUse])
+        Thread({ try { session(p) } finally { sessions.decrementAndGet() } }, "jpsub-session").start()
         return START_NOT_STICKY
     }
 
@@ -437,6 +438,9 @@ class CaptionService : Service() {
         /** true from start until onDestroy (main thread); the home screen uses it to show 开始/停止. */
         @Volatile var running = false
             private set
+        private val sessions = java.util.concurrent.atomic.AtomicInteger()
+        /** A session thread may still have model files open (also after onDestroy, until its native free is done). */
+        val modelsInUse: Boolean get() = sessions.get() > 0
 
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(

@@ -78,6 +78,39 @@ class ModelStore(
         return if (stuck.isEmpty()) null else "无法删除旧的损坏文件：" + stuck.joinToString("、") { it.name }
     }
 
+    enum class Kind { CURRENT, OLD, PARTIAL }
+    /** A file under a model folder; [path] relative to [root]. */
+    data class StoredFile(val path: String, val bytes: Long, val kind: Kind)
+
+    /**
+     * Every file in the model folders (asr/, vad/, mt/), current or left behind by older versions / downloads;
+     * `.ok` markers are not listed (they go with their file). Unused files first, then by size.
+     */
+    fun listFiles(): List<StoredFile> {
+        val current = specs.map { it.path }.toSet()
+        return MODEL_DIRS.flatMap { d -> File(root, d).listFiles()?.filter { it.isFile }.orEmpty() }
+            .filter { !it.name.endsWith(".ok") }
+            .map { f ->
+                val path = f.relativeTo(root).invariantSeparatorsPath
+                StoredFile(path, f.length(), when {
+                    path in current -> Kind.CURRENT
+                    path.endsWith(".part") -> Kind.PARTIAL
+                    else -> Kind.OLD
+                })
+            }
+            .sortedWith(compareBy<StoredFile> { it.kind == Kind.CURRENT }.thenByDescending { it.bytes })
+    }
+
+    /** Deletes a listed file and its `.ok` marker. Only inside the model folders. @return true if both are gone */
+    fun delete(f: StoredFile): Boolean {
+        val file = File(root, f.path).canonicalFile
+        if (file.parentFile?.name !in MODEL_DIRS || file.parentFile?.parentFile != root.canonicalFile) return false
+        val ok = File(file.path + ".ok")
+        // the marker first: a file without a marker is re-verified, never trusted
+        val okGone = ok.delete() || !ok.exists()
+        return okGone && (file.delete() || !file.exists())
+    }
+
     private fun reject(s: ModelSpec, f: File, r: Result): Result {
         if (!f.delete() && f.exists()) return Result.Io("无法删除损坏的 ${f.name}")
         return r
@@ -92,6 +125,7 @@ class ModelStore(
     }
 
     companion object {
+        private val MODEL_DIRS = listOf("asr", "vad", "mt")
         private const val ASR = "https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en/resolve/12b44671ff48b9aed622551d64e02fea9a2cf870"
         private const val MT = "https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF/resolve/449c9e6457b3632d328c6cbb78ae8e8e0c8059a5"
 

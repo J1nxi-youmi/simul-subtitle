@@ -45,6 +45,29 @@ class Prefs(ctx: Context) {
     /** DownloadManager ids by model path, so a download survives the activity being recreated */
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
+    /** true = only show finished sentences; false = live drafts that are corrected in place. Overlay and home share it. */
+    var finalOnly: Boolean
+        get() = sp.getBoolean("finalOnly", false)
+        set(v) = sp.edit().putBoolean("finalOnly", v).apply()
+
+    /** What the subtitles are about (translator background + term list); read when a session starts. */
+    var scene: Scene
+        get() = runCatching { Scene.valueOf(sp.getString("scene", null) ?: "") }.getOrDefault(Scene.GENERAL)
+        set(v) = sp.edit().putString("scene", v.name).apply()
+
+    /** Use Jev (cloud) for sentence ends and translation checks; needs the key of [jevProvider]. */
+    var jevOn: Boolean
+        get() = sp.getBoolean("jevOn", false)
+        set(v) = sp.edit().putBoolean("jevOn", v).apply()
+    var jevProvider: JevProvider
+        get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.OFFICIAL)
+        set(v) = sp.edit().putString("jevProvider", v.name).apply()
+
+    /** API key per provider, encrypted with an Android Keystore key (the stored value is useless off this device). */
+    fun jevKey(p: JevProvider): String? = sp.getString("jevKey:${p.name}", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+    fun setJevKey(p: JevProvider, key: String?) =
+        sp.edit().apply { if (key.isNullOrBlank()) remove("jevKey:${p.name}") else putString("jevKey:${p.name}", KeyBox.seal(key.trim())) }.apply()
+
 
     fun listen(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(l)
     fun unlisten(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.unregisterOnSharedPreferenceChangeListener(l)
@@ -53,5 +76,30 @@ class Prefs(ctx: Context) {
         const val DEFAULT_WIDTH = 0.90f
         /** Width slider / resize range as a fraction of the screen width. */
         const val MIN_WIDTH = 0.40f
+    }
+}
+
+/** AES-GCM with a non-exportable Android Keystore key; output = base64(iv ‖ ciphertext). */
+private object KeyBox {
+    private const val ALIAS = "jpsub-jev"
+    private fun key(): javax.crypto.SecretKey {
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey(ALIAS, null) as? javax.crypto.SecretKey)?.let { return it }
+        val g = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        g.init(android.security.keystore.KeyGenParameterSpec.Builder(ALIAS,
+            android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE).build())
+        return g.generateKey()
+    }
+    fun seal(s: String): String {
+        val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").apply { init(javax.crypto.Cipher.ENCRYPT_MODE, key()) }
+        return android.util.Base64.encodeToString(c.iv + c.doFinal(s.toByteArray()), android.util.Base64.NO_WRAP)
+    }
+    fun open(b64: String): String {
+        val b = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+        val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(javax.crypto.Cipher.DECRYPT_MODE, key(), javax.crypto.spec.GCMParameterSpec(128, b, 0, 12))
+        return String(c.doFinal(b, 12, b.size - 12))
     }
 }

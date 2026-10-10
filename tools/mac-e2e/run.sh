@@ -49,7 +49,7 @@ C="$(mktemp -d "$W/classes.XXXXXX")"
 "$JH/bin/javac" -d "$C" "$HERE/MacLlama.java"
 P="$ROOT/app/src/main/java/dev/krita/jpsub"
 "$JH/bin/java" -cp "$KC" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -nowarn \
-  -cp "$STD:$W/sherpa-jvm.jar:$C" -d "$C" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$HERE/E2E.kt"
+  -cp "$STD:$W/sherpa-jvm.jar:$C" -d "$C" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$P/Jev.kt" "$HERE/E2E.kt"
 
 # 4. test audio
 WAV="${1:-}"

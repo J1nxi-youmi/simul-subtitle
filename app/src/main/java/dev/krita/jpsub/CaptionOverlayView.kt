@@ -49,6 +49,19 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     var onResize: (dw: Int) -> Unit = {}
     var onStyleChanged: () -> Unit = {}
     var onStop: () -> Unit = {}
+    /** Mode button tapped: the host flips "only finished sentences" in prefs and calls [setFinalOnly]. */
+    var onToggleMode: () -> Unit = {}
+    private val modeBtn = TextView(ctx).apply {
+        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(dp(10f).toInt(), dp(8f).toInt(), dp(10f).toInt(), dp(8f).toInt())
+        setOnClickListener { onToggleMode(); bumpToolbarTimer() }
+    }
+    /** Shows the current mode on the toolbar button; the label is what is on screen now. */
+    fun setFinalOnly(v: Boolean) {
+        modeBtn.text = if (v) "只看定稿" else "边出边改"
+        modeBtn.contentDescription = if (v) "当前只显示说完的句子，点一下改为边出边改" else "当前边出边改，点一下改为只显示说完的句子"
+    }
     /** Toolbar opened/closed: the host widens the window while it is open so the toolbar is never clipped. */
     var onToolbarShown: (Boolean) -> Unit = {}
 
@@ -192,6 +205,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             addView(tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) })
             addView(tag("背景"))
             addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
+            addView(sep())
+            addView(modeBtn)
         }
         toolbar.addView(HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false

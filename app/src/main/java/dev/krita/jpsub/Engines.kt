@@ -78,7 +78,7 @@ class SileroProb(m: ModelFiles) {
     fun release() = vad.release()
 }
 
-class LlamaTranslator(m: ModelFiles, threads: Int, private val scene: Scene = Scene.GENERAL) : Mt {
+class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
     @Volatile private var handle: Long = nativeLoad(m.mt.path, threads)
 
     init {
@@ -86,10 +86,7 @@ class LlamaTranslator(m: ModelFiles, threads: Int, private val scene: Scene = Sc
     }
 
     /** Every sentence stands alone: cross-sentence context made finals worse with HY-MT and is untested with Index. */
-    override fun translate(text: String): String? = run(indexPrompt(text, scene))?.takeIf { it.usable }?.text
-
-    /** Raw call; null only when the session was cancelled. */
-    fun run(prompt: String): MtResult? = nativeTranslate(handle, prompt, MAX_TOKENS)?.let(MtResult::parse)
+    override fun translate(prompt: String): MtResult? = nativeTranslate(handle, prompt, MAX_TOKENS)?.let(MtResult::parse)
 
     /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
     override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }

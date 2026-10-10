@@ -148,6 +148,47 @@
                 android:paddingVertical="6dp" />
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- translation, display mode, Jev -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="翻译" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:id="@+id/translateList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- session logs -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="使用记录" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:id="@+id/logList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="12dp" />
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- subtitle style -->
         <TextView
             style="@style/SectionTitle"
@@ -255,7 +296,7 @@
             android:background="@drawable/tips_bg"
             android:lineSpacingExtra="5dp"
             android:padding="18dp"
-            android:text="1. 点「开始字幕」，在系统弹窗里选择要翻译的 App（或整个屏幕）。\n2. 字幕悬浮在屏幕上：拖动移动位置，拖右下角圆点调整宽度，点一下字幕展开工具栏（字号、透明度、锁定、停止）。\n3. 灰色字是识别中的草稿，说完一句后会变白定稿。\n4. 部分 App（例如开启了版权保护的视频）不允许捕获声音，这时不会出字幕。"
+            android:text="1. 点「开始字幕」，在系统弹窗里选择要翻译的 App（或整个屏幕）。\n2. 字幕悬浮在屏幕上：拖动移动位置，拖右下角圆点调整宽度，点一下字幕展开工具栏（字号、透明度、显示模式、锁定、停止）。\n3. 「边出边改」：灰色字是识别中的草稿，说完一句后变白定稿；「只看定稿」：只显示说完的句子。\n4. 部分 App（例如开启了版权保护的视频）不允许捕获声音，这时不会出字幕。\n5. 每次使用的识别、翻译和 Jev 原始记录保存在「使用记录」里，可以分享出去分析（不含声音和 key）。"
             android:textColor="@color/text2"
             android:textSize="13.5sp" />
     </LinearLayout>

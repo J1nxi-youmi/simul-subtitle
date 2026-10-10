@@ -20,6 +20,17 @@ class TranslationTest {
     }
 
     @Test
+    fun rawOutputIsKeptAndATrailingTranslatorsNoteIsNotShown() {
+        // real output for "あ" in the VTuber scene (Mac e2e, 2026-10-10)
+        val raw = "啊\n\n（注：这是日本虚拟主播在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。）"
+        val r = MtResult.parse(native('e', raw, 120, 46))
+        assertEquals(raw, r.raw)
+        assertEquals("啊", r.text)
+        assertEquals("注意：这里很滑", MtResult.parse(native('e', "注意：这里很滑", 1, 1)).text) // not a trailing note
+        assertEquals("（注：只有注释）", MtResult.parse(native('e', "（注：只有注释）", 1, 1)).text)
+    }
+
+    @Test
     fun generalSceneUsesPlainInstruction() {
         val p = indexPrompt("こんにちは", Scene.GENERAL)
         assertTrue(p.startsWith("<|im_start|>user\n请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\nこんにちは<|im_end|>"))

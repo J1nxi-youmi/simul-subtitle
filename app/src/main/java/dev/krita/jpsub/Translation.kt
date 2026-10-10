@@ -34,20 +34,43 @@ fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList()): 
     return "<|im_start|>user\n$user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 }
 
-/** The model occasionally still emits a think block or a stray "</think>"; the official client strips it too. */
-fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
+/**
+ * The model occasionally still emits a think block or a stray "</think>"; the official client strips it too.
+ * On very short input it sometimes appends a translator's note on its own line ("（注：这是…直播…）", echoing the scene
+ * text); a caption never needs that, so a trailing note paragraph is dropped (the raw output stays in the log).
+ */
+fun stripThink(s: String): String {
+    val t = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
+    val note = Regex("\\n\\s*[（(]?(注|备注|说明)[:：]").find(t) ?: return t
+    return t.substring(0, note.range.first).trim().ifEmpty { t }
+}
 
-/** One translation call as the native code reported it. stop: e=end, l=hit max tokens, p=prompt too long, f=failure. */
-class MtResult(val text: String, val stop: Char, val promptTokens: Int, val outputTokens: Int) {
+/**
+ * One translation call as the native code reported it. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
+ * [raw] is the model output exactly as generated (kept for the session log); [text] is what a caption shows.
+ */
+class MtResult(val raw: String, val stop: Char, val promptTokens: Int, val outputTokens: Int) {
+    val text: String get() = stripThink(raw)
+
     /** Text usable as a caption: generation ended normally or ran into the token cap (kept, it is mostly complete). */
-    val usable get() = stop == 'e' || stop == 'l'
+    val usable get() = (stop == 'e' || stop == 'l') && text.isNotEmpty()
 
     companion object {
         fun parse(b: ByteArray): MtResult {
             val nul = b.indexOf(0)
             val counts = String(b, nul + 1, b.size - nul - 1, Charsets.US_ASCII).split(',')
-            return MtResult(stripThink(String(b, 1, nul - 1, Charsets.UTF_8)), b[0].toInt().toChar(), counts[0].toInt(), counts[1].toInt())
+            return MtResult(String(b, 1, nul - 1, Charsets.UTF_8), b[0].toInt().toChar(), counts[0].toInt(), counts[1].toInt())
         }
     }
 }
+
+/**
+ * Index notes for the translation errors Jev names reliably (37-sentence test, /tmp/jps/case/mt-compare.md): for the
+ * other error classes its attribution was mostly wrong, so those are not acted on.
+ */
+val FIX_NOTES = mapOf(
+    "negation" to "原文没有否定或拒绝的意思，译文不要凭空加入“不”“不用”“没有”等否定；“〜なんて”表示惊讶或感叹，不是否定。",
+    "reversal" to "注意保持原文的肯定/否定和转折关系，不要把意思翻反（例如“寂しくない”是“不寂寞”）。",
+    "literal_metaphor" to "原文里的比喻或直播用语不要按字面直译（例如“流れる”指弹幕/评论滚动得快，不是水流），按语境意译。",
+)
 

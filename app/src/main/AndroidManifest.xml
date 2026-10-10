@@ -12,7 +12,10 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.JpSub"
-        android:largeHeap="true">
+        android:largeHeap="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/no_backup">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -23,5 +26,15 @@
             android:name=".CaptionService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+        <!-- shares session logs (ACTION_SEND) without exposing other files -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/log_paths" />
+        </provider>
     </application>
 </manifest>

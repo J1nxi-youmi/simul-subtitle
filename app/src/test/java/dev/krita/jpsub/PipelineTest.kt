@@ -24,16 +24,21 @@ class PipelineTest {
         val cancelled = AtomicBoolean(false)
         val inside = AtomicInteger(0)
         val calls = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(text: String): String? {
+        override fun translate(prompt: String): MtResult? {
             inside.incrementAndGet()
             try {
-                calls.add(text)
+                calls.add(prompt)
                 val end = System.nanoTime() + delayMs * 1_000_000
                 while (System.nanoTime() < end) if (cancelled.get()) return null
-                return "zh($text)"
+                return MtResult("zh(${source(prompt)})", 'e', 1, 1)
             } finally { inside.decrementAndGet() }
         }
         override fun cancel() = cancelled.set(true)
+    }
+
+    companion object {
+        /** The Japanese text inside a GENERAL-scene Index prompt. */
+        fun source(prompt: String) = prompt.substringAfter("\n\n").substringBefore("<|im_end|>")
     }
 
     private fun job(seg: Long, rev: Int, final: Boolean, n: Int) = AsrJob(seg, rev, final, FloatArray(n), monoMs())
@@ -280,6 +285,98 @@ class PipelineTest {
         assertTrue("wait ${t.segmentWaitMs}", t.segmentWaitMs >= 100)
         assertTrue(t.asrMs >= 20 && t.mtMs >= 30)
         assertTrue(t.mtDoneMs >= t.segmentWaitMs + t.asrMs + t.mtMs)
+    }
+
+    // --- Jev ---
+
+    private class FakeJudge(val unfinishedP: Double? = 0.9, val choice: String? = "ok", val confidence: Double = 0.95,
+                            val delayMs: Long = 0) : Judge {
+        val asked = Collections.synchronizedList(ArrayList<String>())
+        val cancelled = AtomicBoolean(false)
+        private fun call(answer: Map<String, Any?>?): JevCall {
+            Thread.sleep(delayMs)
+            return JevCall("{req}", if (answer == null) 0 else 200, answer?.let { Json.encode(it) }, delayMs,
+                if (answer == null) "timeout" else null, answer)
+        }
+        override fun unfinished(text: String): JevCall { asked.add("u:$text"); return call(unfinishedP?.let { mapOf("noul" to it) }) }
+        override fun mistranslation(ja: String, zh: String): JevCall {
+            asked.add("m:$ja|$zh"); return call(choice?.let { mapOf("choice" to it, "confidence" to confidence) })
+        }
+        override fun cancel() = cancelled.set(true)
+    }
+
+    private fun runFinal(judge: Judge, events: MutableList<Map<String, Any?>> = Collections.synchronizedList(ArrayList()),
+                         mt: FakeMt = FakeMt(1)): List<Caption> {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, log = { events.add(it) })
+        p.start()
+        p.submit(job(1, 3, true, 10))
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        return out
+    }
+
+    @Test
+    fun reliableErrorClassIsTranslatedOnceMoreWithItsNote() {
+        val mt = FakeMt(1)
+        val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val out = runFinal(FakeJudge(choice = "negation"), events, mt)
+        assertEquals(2, mt.calls.size)
+        assertTrue(mt.calls[1].contains(FIX_NOTES["negation"]!!))
+        // the first translation is shown as a draft while Jev checks it, then the final replaces it
+        assertEquals(listOf(false to 3, true to 4), out.map { it.isFinal to it.revision })
+        val b = CaptionBoard(); out.forEach { b.accept(it) }
+        assertTrue(b.snapshot().single().isFinal)
+        val mts = events.filter { it["ev"] == "mt" }
+        assertEquals(listOf(1, 2), mts.map { it["attempt"] })
+        assertEquals("retranslate:negation", events.single { it["ev"] == "jev" }["action"])
+    }
+
+    @Test
+    fun otherClassesLowConfidenceAndFailuresKeepTheFirstTranslation() {
+        for (judge in listOf(FakeJudge(choice = "ok"), FakeJudge(choice = "platform_term"),
+                             FakeJudge(choice = "negation", confidence = 0.4), FakeJudge(choice = null))) {
+            val mt = FakeMt(1)
+            val out = runFinal(judge, mt = mt)
+            assertEquals(1, mt.calls.size)
+            assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
+        }
+    }
+
+    @Test
+    fun endOfSpeechDraftIsJudgedAndTheAnswerIsKeyedByRevision() {
+        val judge = FakeJudge(unfinishedP = 0.9)
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge)
+        p.start()
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        assertEquals(true, p.holdHint(1, 2))
+        assertEquals(null, p.holdHint(1, 3))
+        p.stop(); p.awaitStopped()
+        assertTrue(judge.cancelled.get())
+    }
+
+    @Test
+    fun belowThresholdAnswersFinishAndFailedCallsGiveNoHint() {
+        for ((pr, want) in listOf(0.3 to false, null to null)) {
+            val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = FakeJudge(unfinishedP = pr))
+            p.start()
+            p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            Thread.sleep(200)
+            assertEquals(want, p.holdHint(1, 2))
+            p.stop(); p.awaitStopped()
+        }
+    }
+
+    @Test
+    fun withoutAJudgeNothingChanges() {
+        val out2 = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), FakeMt(1), { out2.add(it); done.countDown() })
+        p.start(); p.submit(job(1, 3, true, 10))
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(listOf(true to 3), out2.map { it.isFinal to it.revision })
     }
 }
 

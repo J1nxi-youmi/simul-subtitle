@@ -32,7 +32,6 @@ import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.TextView
 import java.io.File
-import java.io.FileWriter
 
 /**
  * Foreground service: playback capture → Silero VAD → [Segmenter] → [Pipeline] → overlay.
@@ -58,6 +57,9 @@ class CaptionService : Service() {
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
+    /** this session has a Jev judge: the segmenter asks it at sentence ends */
+    @Volatile private var jevActive = false
+    @Volatile private var logWarned = false
 
     private var overlay: CaptionOverlayView? = null
     private val prefs by lazy { Prefs(this) }
@@ -92,7 +94,7 @@ class CaptionService : Service() {
         var vad: SileroProb? = null
         var asr: SherpaAsr? = null
         var mt: LlamaTranslator? = null
-        var log: FileWriter? = null
+        var log: SessionLog? = null
         var keepOverlay = false
         try {
             // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stopSelf)
@@ -108,21 +110,26 @@ class CaptionService : Service() {
             val t2 = monoMs()
             // Warm-up so the first real sentence does not pay page-in / first-run costs.
             asr.recognize(FloatArray(16_000))
-            mt.translate("こんにちは。")
+            mt.translate(indexPrompt("こんにちは。", Scene.GENERAL))
             val t3 = monoMs()
             Log.i(TAG, "load asr=${t1 - t0}ms mt=${t2 - t1}ms warmup=${t3 - t2}ms")
             if (stopping) return
             setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
 
-            log = runCatching {
-                FileWriter(File(getExternalFilesDir(null), "timing.csv"), true).apply {
-                    write("mono_ms,segment,revision,final,audio_ms,segment_wait_ms,asr_queue_ms,asr_ms,mt_queue_ms,mt_ms,mt_done_ms,ja,zh\n")
-                }
-            }.getOrNull()
-            val csv = log
+            val scene = prefs.scene
+            val provider = prefs.jevProvider
+            val key = if (prefs.jevOn) prefs.jevKey(provider) else null
+            val judge = key?.let { Jev(provider, it) }
+            val sl = SessionLog(SessionLog.dir(root))
+            log = sl
+            sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
+                "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
+                "jev_requested" to prefs.jevOn, "final_only" to prefs.finalOnly, "mt_model" to files.mt.name,
+                "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
+            if (prefs.jevOn && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次只用本地")
             val pl = Pipeline(
                 asr, mt,
-                onCaption = { onCaption(it, csv) },
+                onCaption = { onCaption(it, sl) },
                 onBacklog = { backlog = it; refresh() },
                 onOverload = {
                     overloaded = true // capture loop exits, then accepted finals are drained below
@@ -133,7 +140,11 @@ class CaptionService : Service() {
                     setStatus("出错：${e.message}")
                     main.post { stopSelf() }
                 },
+                scene = scene,
+                judge = judge,
+                log = sl::write,
             )
+            jevActive = judge != null
             synchronized(cancelLock) { pipeline = pl }
             if (stopping) return // onDestroy ran before the pipeline was visible to it
             pl.start()
@@ -155,7 +166,8 @@ class CaptionService : Service() {
             Log.e(TAG, "session failed", e)
             setStatus("出错：${e.message}")
         } finally {
-            runCatching { log?.close() }
+            // the pipeline workers have exited (or never started), so this is the last event
+            log?.let { it.write(mapOf("ev" to "session_end", "overloaded" to overloaded)); it.close() }
             // Detach the translator under the same lock onDestroy uses for cancel(), so no thread can call
             // into it after this point; the (slow) native free then happens outside the lock.
             synchronized(cancelLock) { pipeline = null; translator = null }
@@ -191,7 +203,8 @@ class CaptionService : Service() {
             rec.startRecording()
             check(rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "无法开始录音（可能被其他 App 占用）" }
             setStatus("")
-            val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500)
+            val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500,
+                hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint)
             val frame = FloatArray(seg.frameSize)
             val ts = AudioTimestamp()
             var framesRead = 0L
@@ -223,17 +236,14 @@ class CaptionService : Service() {
         }
     }
 
-    private fun onCaption(c: Caption, log: FileWriter?) {
+    private fun onCaption(c: Caption, log: SessionLog) {
         val t = c.timing
         Log.i(TAG, "seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} audio=${t.audioMs} wait=${t.segmentWaitMs} " +
             "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} | ${c.ja} → ${c.zh}")
-        // Diagnostics must never stop captions (e.g. storage full).
-        runCatching {
-            fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
-            log?.write("${monoMs()},${c.segmentId},${c.revision},${c.isFinal},${t.audioMs},${t.segmentWaitMs},${t.asrQueueMs}," +
-                "${t.asrMs},${t.mtQueueMs},${t.mtMs},${t.mtDoneMs},${q(c.ja)},${q(c.zh)}\n")
-            if (c.isFinal) log?.flush()
-        }
+        log.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "final" to c.isFinal, "ja" to c.ja,
+            "zh" to c.zh, "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
+            "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "done_ms" to t.mtDoneMs, "hal" to !c.timeEstimated))
+        if (log.failed != null && !logWarned) { logWarned = true; refresh() }
         if (board.accept(c)) refresh()
     }
 
@@ -241,12 +251,14 @@ class CaptionService : Service() {
 
     private fun refresh() = main.post {
         val v = overlay ?: return@post
-        val shown = board.snapshot()
+        // "only finished sentences": drafts are hidden (and a draft already on screen disappears), read live from prefs
+        val shown = board.snapshot().let { s -> if (prefs.finalOnly) s.filter { it.isFinal } else s }
         val showJa = prefs.showJa
         val lines = shown.map { CaptionOverlayView.Line(it.zh, if (showJa) it.ja else null, it.isFinal) }
         // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
+            if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
             if (prefs.showStats && status.isEmpty()) shown.lastOrNull()?.let { c ->
                 val t = c.timing
@@ -323,6 +335,8 @@ class CaptionService : Service() {
         v.onStyleChanged = { prefs.setStyle(v.textSp, v.bgAlpha) }
         v.onToolbarShown = { toolbarShown = it; layout() }
         v.onStop = { stopSelf() }
+        v.setFinalOnly(prefs.finalOnly)
+        v.onToggleMode = { prefs.finalOnly = !prefs.finalOnly } // the listener below updates the button and captions
         // taller text / toolbar / rotation: pull the window back on screen once the new height is known
         v.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop) v.post { layout() }
@@ -334,6 +348,7 @@ class CaptionService : Service() {
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
                 "showJa", "showStats" -> refresh()
+                "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }
             }
         }.also { prefs.listen(it) }
         v.setCardWidth(cardW)
@@ -396,6 +411,8 @@ class CaptionService : Service() {
         private const val ASR_THREADS = 2
         private const val MT_THREADS = 4
         private const val DRAIN_TIMEOUT_MS = 60_000L
+        /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
+        private const val JEV_WAIT_MS = 1_000
 
         /** true from start until onDestroy (main thread); the home screen uses it to show 开始/停止. */
         @Volatile var running = false

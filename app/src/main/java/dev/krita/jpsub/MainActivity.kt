@@ -40,9 +40,14 @@ class MainActivity : Activity() {
 
     /** Re-reads the style prefs into the sliders and preview; set up in [setupStyle]. */
     private var loadStyle: () -> Unit = {}
+    private var modeGroup: com.google.android.material.button.MaterialButtonToggleGroup? = null
     /** While visible: the overlay toolbar is not focusable, so using it does not pause/resume this screen. */
     private val styleListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key in STYLE_KEYS) loadStyle()
+        // the overlay toolbar flipped the mode: keep the home screen's choice in sync
+        if (key == "finalOnly") modeGroup?.let { g ->
+            (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == prefs.finalOnly }?.let { if (g.checkedButtonId != it.id) g.check(it.id) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,6 +72,7 @@ class MainActivity : Activity() {
         secondary = findViewById(R.id.secondary)
         permList = findViewById(R.id.permList)
         setupStyle()
+        renderTranslate()
     }
 
     override fun onResume() {
@@ -74,6 +80,7 @@ class MainActivity : Activity() {
         loadStyle() // the overlay toolbar may have changed size / opacity meanwhile
         prefs.listen(styleListener)
         renderPermissions()
+        renderLogs()
         render()
         main.post(ticker)
     }
@@ -200,6 +207,131 @@ class MainActivity : Activity() {
         permList.addView(row)
     }
 
+    // ---- translation / Jev ---------------------------------------------------------------------------------
+
+    private fun label(t: String, top: Int = 14) = TextView(this).apply {
+        text = t; textSize = 13f; setTextColor(getColor(R.color.text2))
+        setPadding(0, (top * resources.displayMetrics.density).toInt(), 0, (6 * resources.displayMetrics.density).toInt())
+    }
+
+    /** Single-choice row of segmented buttons. */
+    private fun <T> choice(options: List<Pair<T, String>>, current: T, onPick: (T) -> Unit) =
+        com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
+            isSingleSelection = true; isSelectionRequired = true
+            options.forEach { (v, t) ->
+                val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    id = View.generateViewId(); text = t; tag = v
+                }
+                addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                if (v == current) check(b.id)
+            }
+            addOnButtonCheckedListener { g, id, checked ->
+                @Suppress("UNCHECKED_CAST") if (checked) onPick(g.findViewById<View>(id).tag as T)
+            }
+        }
+
+    /** Scene, display mode and Jev. Scene and Jev apply to the next start; the mode applies immediately. */
+    private fun renderTranslate() {
+        val box = findViewById<LinearLayout>(R.id.translateList)
+        box.removeAllViews()
+        box.addView(label("场景（下次开始时生效）", top = 0))
+        box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
+        box.addView(label("显示方式（运行中也可在悬浮窗工具栏切换）"))
+        modeGroup = choice(listOf(false to "边出边改", true to "只看定稿"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
+        box.addView(modeGroup)
+
+        val jev = MaterialSwitch(this).apply {
+            text = "用 Jev 判断断句和检查译文（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
+            isChecked = prefs.jevOn
+        }
+        box.addView(jev, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (10 * resources.displayMetrics.density).toInt()
+        })
+        val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(jevBox)
+        fun renderJev() {
+            jevBox.removeAllViews()
+            jevBox.visibility = if (prefs.jevOn) View.VISIBLE else View.GONE
+            if (!prefs.jevOn) return
+            val p = prefs.jevProvider
+            jevBox.addView(label("接口"))
+            jevBox.addView(choice(JevProvider.entries.map { it to it.label }, p) { prefs.jevProvider = it; main.post { renderJev() } })
+            val saved = prefs.jevKey(p)
+            jevBox.addView(label(if (saved != null) "${p.label} API key：已保存（…${saved.takeLast(4)}）" else "${p.label} API key：未填写"))
+            val input = android.widget.EditText(this).apply {
+                hint = if (saved != null) "输入新 key 以替换" else "粘贴 API key"
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                isSingleLine = true; textSize = 14f; setTextColor(getColor(R.color.text))
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            jevBox.addView(input)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "清除"; isEnabled = saved != null
+                setOnClickListener { prefs.setJevKey(p, null); renderJev() }
+            })
+            row.addView(MaterialButton(this).apply {
+                text = "保存"
+                setOnClickListener {
+                    val k = input.text.toString().trim()
+                    if (k.isNotEmpty()) { prefs.setJevKey(p, k); input.setText(""); renderJev() }
+                }
+            })
+            jevBox.addView(row)
+            jevBox.addView(TextView(this).apply {
+                text = "只把识别出的日语和译文发给 ${p.label}，不发送声音。key 用本机硬件密钥加密保存，不会写进使用记录。"
+                textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            })
+        }
+        jev.setOnCheckedChangeListener { _, on -> prefs.jevOn = on; renderJev() }
+        renderJev()
+    }
+
+    // ---- session logs --------------------------------------------------------------------------------------
+
+    private fun renderLogs() {
+        val box = findViewById<LinearLayout>(R.id.logList)
+        box.removeAllViews()
+        val files = SessionLog.list(getExternalFilesDir(null)!!)
+        if (files.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "还没有记录。每次开始字幕都会生成一个文件。"; textSize = 13.5f; setTextColor(getColor(R.color.text2))
+                setPadding(0, (8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt())
+            })
+            return
+        }
+        for (f in files.take(MAX_LOGS_SHOWN)) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            // session-20261010-151200.jsonl → 2026-10-10 15:12:00
+            val n = f.name.removePrefix("session-").removeSuffix(".jsonl")
+            val title = if (n.length == 15) "${n.substring(0, 4)}-${n.substring(4, 6)}-${n.substring(6, 8)} ${n.substring(9, 11)}:${n.substring(11, 13)}:${n.substring(13, 15)}" else f.name
+            texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
+            texts.addView(TextView(this).apply {
+                text = "%.1f KB".format(f.length() / 1024.0); textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            })
+            row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "分享"; setOnClickListener { share(f) }
+            })
+            box.addView(row)
+        }
+        if (files.size > MAX_LOGS_SHOWN) box.addView(TextView(this).apply {
+            text = "只显示最近 $MAX_LOGS_SHOWN 个（共 ${files.size} 个）"; textSize = 12.5f; setTextColor(getColor(R.color.text2))
+        })
+    }
+
+    private fun share(f: java.io.File) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.logs", f)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/octet-stream" // TG and file managers keep .jsonl as a file instead of pasting text
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, f.name)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(send, "分享 ${f.name}"))
+    }
+
     // ---- subtitle style ------------------------------------------------------------------------------------
 
     private fun setupStyle() {
@@ -289,5 +421,6 @@ class MainActivity : Activity() {
         const val REQ_PROJECTION = 2
         val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "showJa", "showStats")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
+        const val MAX_LOGS_SHOWN = 20
     }
 }

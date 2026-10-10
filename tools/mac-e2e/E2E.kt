@@ -18,10 +18,12 @@ fun main() {
     val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
     val mt = object : Mt {
         val h = MacLlama.nativeLoad("$m/mt/index-translate-2b.gguf", 4)
-        override fun translate(text: String): String? =
-            MacLlama.nativeTranslate(h, indexPrompt(text, scene), 160)?.let(MtResult::parse)?.takeIf { it.usable }?.text
+        override fun translate(prompt: String): MtResult? = MacLlama.nativeTranslate(h, prompt, 160)?.let(MtResult::parse)
         override fun cancel() = MacLlama.nativeCancel(h)
     }
+    // -Djev=1 uses the real Jev (TYPESAFE_API_KEY); -Dlog=<file> writes the session events as JSONL
+    val judge = if (System.getProperty("jev") != null) Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY")) else null
+    val jsonl = System.getProperty("log")?.let { File(it).bufferedWriter() }
     val board = CaptionBoard(10)
     val t0 = System.currentTimeMillis()
     val submittedFinals = java.util.Collections.synchronizedList(ArrayList<Long>())
@@ -34,7 +36,8 @@ fun main() {
         println("%6.2fs seg%d.%d%s audio=%d wait=%d asrQ=%d asr=%d mtQ=%d mt=%d mtDone=%d | %s → %s".format((System.currentTimeMillis()-t0)/1000.0, c.segmentId, c.revision, if (c.isFinal) "F" else "d", t.audioMs, t.segmentWaitMs, t.asrQueueMs, t.asrMs, t.mtQueueMs, t.mtMs, t.mtDoneMs, c.ja, c.zh))
         if (c.isFinal && c.segmentId != dropFinal) doneFinals.add(c.segmentId)
         board.accept(c)
-    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) })
+    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge,
+       log = { e -> jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs()) + e)); w.write("\n") } } })
     p.start()
     try {
         val seg = Segmenter({ job ->
@@ -43,7 +46,9 @@ fun main() {
         }, endSilenceMs = (System.getProperty("endSilenceMs") ?: "400").toInt(),
            maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: "7000").toInt(),
            minFinalMs = (System.getProperty("minFinalMs") ?: "1200").toInt(),
-           maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt())
+           maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
+           hintWaitMs = if (judge != null) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
+           holdHint = p::holdHint)
         // stream the wav in real time
         val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))
         val bytes = ais.readAllBytes()
@@ -61,6 +66,7 @@ fun main() {
         check(left == 0) { "$left accepted finals not delivered within 30 s" }
     } finally {
         p.stop(); p.awaitStopped()
+        jsonl?.close()
     }
     println("--- final board ---"); board.snapshot().filter { it.isFinal }.forEach { println(it.zh) }
     failure.get()?.let { throw it }

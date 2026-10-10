@@ -102,7 +102,8 @@ class MainActivity : Activity() {
             primary.setOnClickListener { CaptionService.stop(this); main.postDelayed({ render() }, 300) }
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
-            status(R.color.brand, "准备就绪", if (missingPerm) "开始前需要授予下方的权限，点开始会依次引导。" else "点开始，然后在系统弹窗里选择要翻译的 App。")
+            val hint = if (missingPerm) "开始前需要授予下方的权限，点开始会依次引导。" else "点开始，然后在系统弹窗里选择要翻译的 App。"
+            status(R.color.brand, "准备就绪", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
             primary.setOnClickListener { start() }

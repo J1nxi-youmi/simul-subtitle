@@ -247,7 +247,8 @@ class CaptionService : Service() {
         // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
-            if (prefs.showStats) shown.lastOrNull()?.let { c ->
+            // an operational status (stopped, error) must never be pushed out of the capped area by timings
+            if (prefs.showStats && status.isEmpty()) shown.lastOrNull()?.let { c ->
                 val t = c.timing
                 if (isNotEmpty()) append("  ·  ")
                 append("识别 ${t.asrMs}ms · 翻译 ${t.mtMs}ms")

@@ -27,8 +27,11 @@ class ModelDownloader private constructor(ctx: Context) {
     @Volatile private var verifying: String? = null
     private val errors = LinkedHashMap<String, String>() // path → message, guarded by this
 
+    /** Non-blocking warning shown even when models are ready (e.g. an old rejected copy could not be deleted). */
+    @Volatile var maintenanceWarning: String? = null; private set
+
     init {
-        store.removeRejected()
+        maintenanceWarning = store.removeRejected()
         // files copied by an older version (adb push) were never hash-checked: check them once, in the background
         for (s in store.unverified()) submit(s) { store.verifyInstalled(s) }
     }
@@ -38,7 +41,8 @@ class ModelDownloader private constructor(ctx: Context) {
     fun start() {
         errors.clear(); failed.clear()
         // copies kept by older versions after a failed check: free the space before downloading again
-        store.removeRejected()?.let { errors["bad"] = it; return }
+        maintenanceWarning = store.removeRejected()
+        maintenanceWarning?.let { errors["bad"] = it; return }
         for (s in store.missing()) {
             if (s.path in queued) continue
             // already at the final path but unmarked (e.g. marker write failed after the rename): verify, don't refetch
@@ -79,7 +83,10 @@ class ModelDownloader private constructor(ctx: Context) {
             dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
                 if (!c.moveToFirst()) return@use
                 when (c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                    DownloadManager.STATUS_SUCCESSFUL -> { done += s.size; if (s.path !in failed) submitPublish(s) }
+                    DownloadManager.STATUS_SUCCESSFUL -> {
+                        if (activeAliasBesides(s, id)) { adoptOrphan(s); running = true } // a newer attempt owns the file
+                        else { done += s.size; if (s.path !in failed) submitPublish(s) }
+                    }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                         errors[s.path] = "${s.path.substringAfterLast('/')}：${reasonText(reason)}"
@@ -118,8 +125,8 @@ class ModelDownloader private constructor(ctx: Context) {
     private fun adoptOrphan(s: ModelSpec) {
         val usable = setOf(DownloadManager.STATUS_SUCCESSFUL, DownloadManager.STATUS_RUNNING,
             DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED)
-        if (statusOf(s) in usable) return // the recorded job is fine
-        var adopt = -1L; var adoptDone = false
+        if (statusOf(s) in usable && !activeAliasBesides(s, prefs.downloadId(s.path))) return // the recorded job is fine
+        var adopt = -1L; var adoptActive = false
         dm.query(DownloadManager.Query())?.use { c ->
             val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
             val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
@@ -127,11 +134,25 @@ class ModelDownloader private constructor(ctx: Context) {
             while (c.moveToNext()) {
                 if (c.getString(uriCol) != s.url) continue
                 val st = c.getInt(stCol)
-                if (st !in usable || adoptDone) continue
-                adopt = c.getLong(idCol); adoptDone = st == DownloadManager.STATUS_SUCCESSFUL // finished beats running
+                if (st !in usable || adoptActive) continue
+                // a still-running job owns the .part bytes: an older finished record for the same path must not
+                // make us verify (and on mismatch delete) a half-written file
+                adopt = c.getLong(idCol); adoptActive = st != DownloadManager.STATUS_SUCCESSFUL
             }
         }
         if (adopt >= 0) prefs.setDownloadId(s.path, adopt)
+    }
+
+    /** Another of this app's jobs for [s]'s URL is still writing the shared .part file. */
+    private fun activeAliasBesides(s: ModelSpec, id: Long): Boolean {
+        var found = false
+        dm.query(DownloadManager.Query().setFilterByStatus(
+            DownloadManager.STATUS_RUNNING or DownloadManager.STATUS_PENDING or DownloadManager.STATUS_PAUSED))?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
+            while (c.moveToNext()) if (c.getLong(idCol) != id && c.getString(uriCol) == s.url) found = true
+        }
+        return found
     }
 
     /** Runs [job] for [s] once on the verifier thread; any failure becomes a retryable error, never a crash. */

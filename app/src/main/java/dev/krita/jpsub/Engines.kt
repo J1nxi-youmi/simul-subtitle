@@ -14,7 +14,7 @@ import java.io.File
  * Model files live in the app's external files dir (pushed with adb, see README):
  *   asr/encoder.int8.onnx, asr/decoder.onnx, asr/joiner.int8.onnx, asr/tokens.txt  (ReazonSpeech zipformer)
  *   vad/silero_vad.onnx
- *   mt/hy-mt.gguf  (HY-MT1.5-1.8B)
+ *   mt/index-translate-2b.gguf  (Index-Translate-2B, Qwen3.5)
  */
 /** Final model paths; the files are downloaded, verified and published by [ModelStore] (same paths). */
 class ModelFiles(root: File) {
@@ -23,7 +23,7 @@ class ModelFiles(root: File) {
     val joiner = File(root, "asr/joiner.int8.onnx")
     val tokens = File(root, "asr/tokens.txt")
     val vad = File(root, "vad/silero_vad.onnx")
-    val mt = File(root, "mt/hy-mt.gguf")
+    val mt = File(root, "mt/index-translate-2b.gguf")
 }
 
 class SherpaAsr(m: ModelFiles, threads: Int) : Asr {
@@ -78,20 +78,18 @@ class SileroProb(m: ModelFiles) {
     fun release() = vad.release()
 }
 
-class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
+class LlamaTranslator(m: ModelFiles, threads: Int, private val scene: Scene = Scene.GENERAL) : Mt {
     @Volatile private var handle: Long = nativeLoad(m.mt.path, threads)
 
     init {
         check(handle != 0L) { "failed to load ${m.mt}" }
     }
 
-    override fun translate(text: String): String? {
-        // HY-MT1.5 official ZH<=>XX template. Cross-sentence context was tried and made finals worse
-        // (re-translated the previous sentence / changed meaning), so every sentence stands alone.
-        val prompt = "<｜hy_begin▁of▁sentence｜><｜hy_User｜>将以下文本翻译为中文，注意只需要输出翻译后的结果，不要额外解释：\n\n$text<｜hy_Assistant｜>"
-        val bytes = nativeTranslate(handle, prompt, 128) ?: return null
-        return String(bytes, Charsets.UTF_8)
-    }
+    /** Every sentence stands alone: cross-sentence context made finals worse with HY-MT and is untested with Index. */
+    override fun translate(text: String): String? = run(indexPrompt(text, scene))?.takeIf { it.usable }?.text
+
+    /** Raw call; null only when the session was cancelled. */
+    fun run(prompt: String): MtResult? = nativeTranslate(handle, prompt, MAX_TOKENS)?.let(MtResult::parse)
 
     /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
     override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }
@@ -103,6 +101,8 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
     }
 
     companion object {
+        /** Japanese live speech segments are ≤ 7 s; 160 tokens covers the longest Chinese output measured. */
+        const val MAX_TOKENS = 160
         init { System.loadLibrary("jpsub") }
         @JvmStatic private external fun nativeLoad(path: String, threads: Int): Long
         @JvmStatic private external fun nativeTranslate(h: Long, prompt: String, maxTokens: Int): ByteArray?

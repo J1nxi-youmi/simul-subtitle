@@ -142,7 +142,7 @@ class ModelStoreTest {
     @Test
     fun pinnedManifestMatchesWhatWasMeasured() {
         // The Mac e2e and the phone must use the same bytes; guard against accidental edits.
-        assertEquals(1_210_825_907L, ModelStore(tmp.root).totalBytes())
+        assertEquals(1_389_909_747L, ModelStore(tmp.root).totalBytes())
         assertTrue(ModelStore.MODELS.all { it.url.startsWith("https://") && it.sha256.length == 64 })
         assertEquals(6, ModelStore.MODELS.map { it.path }.toSet().size)
     }

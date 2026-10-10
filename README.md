@@ -9,7 +9,7 @@ AudioPlaybackCapture 16 kHz mono
   → Silero VAD (per 32 ms frame)
   → Segmenter: draft every 0.7 s while talking, final after 0.4 s pause (forced cut ≤ 7 s, inside the longest pause)
   → ASR thread: ReazonSpeech zipformer (sherpa-onnx, int8)
-  → MT thread:  HY-MT1.5-1.8B Q4_K_M (llama.cpp, CPU)
+  → MT thread:  Index-Translate-2B Q4_K_M (llama.cpp, CPU; scene background + term list in the prompt)
   → overlay: grey = draft (may change), white = final
 ```
 
@@ -26,7 +26,7 @@ Requirements: JDK 17, Android SDK (platform 35, build-tools 35, NDK 27.2.1247901
 
 ```bash
 git clone --recursive <this repo>            # llama.cpp is a submodule
-./setup.sh                                   # sherpa-onnx AAR + models (~1.2 GB) into app/libs, models/
+./setup.sh                                   # sherpa-onnx AAR + models (~1.4 GB) into app/libs, models/
 export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
 ./gradlew :app:testDebugUnitTest :app:assembleRelease
 ```
@@ -83,6 +83,9 @@ These are Mac numbers; the phone has not been measured yet.
 
 - **ASR: ReazonSpeech, not SenseVoice.** SenseVoice int8 with `language=ja` dropped most kana on the test clip.
 - **ASR input padded with 0.3 s silence.** ReazonSpeech drops the first word when speech starts at sample 0.
+- **MT: Index-Translate-2B, not HY-MT.** On 37 hard sentences from a VTuber stream it distorted meaning in ~5 vs
+  ~7 (Hy-MT2-1.8B) and handled stream slang better; it is ~45 % slower on the Mac. Prompt = the model's own
+  instTrans format (terms found in the sentence as a hard constraint, the scene as a soft one), greedy, no penalty.
 - **No cross-sentence MT context.** HY-MT's context template made finals worse (re-translated the previous
   sentence, changed meaning), so each sentence is translated alone.
 - Models are pushed with adb instead of bundled, to keep the APK at ~40 MB.

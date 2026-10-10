@@ -15,7 +15,7 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
     fun file(s: ModelSpec) = File(root, s.path)
     fun partFile(s: ModelSpec) = File(root, s.path + ".part")
 
-    /** Written next to a file after its SHA-256 matched, so readiness never needs to re-hash 1.2 GB. */
+    /** Written next to a file after its SHA-256 matched, so readiness never needs to re-hash 1.4 GB. */
     fun okMarker(s: ModelSpec) = File(root, s.path + ".ok")
 
     /** Cheap check used on every screen resume: verified marker + right size at the final path. */
@@ -49,8 +49,8 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
 
     /**
      * Verifies a finished download in [partFile] and, only if size and SHA-256 match, renames it to the final
-     * path. A bad file is deleted so the retry has room (the MT model alone is 1.1 GB).
-     * Slow for the 1.1 GB model: call off the main thread.
+     * path. A bad file is deleted so the retry has room (the MT model alone is 1.3 GB).
+     * Slow for the 1.3 GB model: call off the main thread.
      */
     fun publish(s: ModelSpec): Result {
         val part = partFile(s)
@@ -86,7 +86,7 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
 
     companion object {
         private const val ASR = "https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en/resolve/12b44671ff48b9aed622551d64e02fea9a2cf870"
-        private const val MT = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/265b2e615a7dc9b06c435dc878829ad99a512ba2"
+        private const val MT = "https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF/resolve/449c9e6457b3632d328c6cbb78ae8e8e0c8059a5"
 
         val MODELS = listOf(
             ModelSpec("asr/encoder.int8.onnx", "$ASR/encoder-epoch-35-avg-1.int8.onnx", 70_876_409,
@@ -99,8 +99,8 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
                 "144f8a4f639373a1bdf7eabb2437482ef64b0cc5db24ad27cce65f293e4faa24"),
             ModelSpec("vad/silero_vad.onnx", "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", 643_854,
                 "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"),
-            ModelSpec("mt/hy-mt.gguf", "$MT/HY-MT1.5-1.8B-Q4_K_M.gguf", 1_133_080_512,
-                "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"),
+            ModelSpec("mt/index-translate-2b.gguf", "$MT/Index-Translate-2B.Q4_K_M.gguf", 1_312_164_352,
+                "044b313d29342bd3b2c77cbb64023ca0d209bd9b3247763f9d162767ef2d746a"),
         )
 
         fun sha256(f: File): String {

@@ -9,14 +9,14 @@ cd "$(dirname "$0")"
 SHERPA=1.13.8
 REAZON=sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download
-HF=https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main
+HF=https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF/resolve/449c9e6457b3632d328c6cbb78ae8e8e0c8059a5
 
 fetch() { [ -s "$2" ] || { echo "↓ $2"; curl -fL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }; }
 
 mkdir -p app/libs models/asr models/vad models/mt
 fetch "$GH/v$SHERPA/sherpa-onnx-$SHERPA.aar" "app/libs/sherpa-onnx-$SHERPA.aar"
 fetch "$GH/asr-models/silero_vad.onnx" models/vad/silero_vad.onnx
-fetch "$HF/HY-MT1.5-1.8B-Q4_K_M.gguf" models/mt/hy-mt.gguf
+fetch "$HF/Index-Translate-2B.Q4_K_M.gguf" models/mt/index-translate-2b.gguf
 if [ ! -s models/asr/tokens.txt ]; then
   fetch "$GH/asr-models/$REAZON.tar.bz2" "models/$REAZON.tar.bz2"
   tar xjf "models/$REAZON.tar.bz2" -C models

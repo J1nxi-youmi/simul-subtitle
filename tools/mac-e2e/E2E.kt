@@ -15,12 +15,11 @@ fun main() {
         .setTransducer(OfflineTransducerModelConfig.builder().setEncoder("$m/asr/encoder.int8.onnx").setDecoder("$m/asr/decoder.onnx").setJoiner("$m/asr/joiner.int8.onnx").build())
         .setTokens("$m/asr/tokens.txt").setNumThreads(2).setModelType("transducer").build()).setDecodingMethod("greedy_search").build())
     val asr = object : Asr { override fun recognize(samples: FloatArray): String { val s = rec.createStream(); val pd = FloatArray(samples.size + 9600); System.arraycopy(samples, 0, pd, 4800, samples.size); s.acceptWaveform(pd, 16000); rec.decode(s); val t = rec.getResult(s).text; s.release(); return t } }
+    val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
     val mt = object : Mt {
-        val h = MacLlama.nativeLoad("$m/mt/hy-mt.gguf", 4)
-        override fun translate(text: String): String? {
-            val u = "将以下文本翻译为中文，注意只需要输出翻译后的结果，不要额外解释：\n\n$text"
-            return MacLlama.nativeTranslate(h, "<｜hy_begin▁of▁sentence｜><｜hy_User｜>$u<｜hy_Assistant｜>", 128)?.toString(Charsets.UTF_8)
-        }
+        val h = MacLlama.nativeLoad("$m/mt/index-translate-2b.gguf", 4)
+        override fun translate(text: String): String? =
+            MacLlama.nativeTranslate(h, indexPrompt(text, scene), 160)?.let(MtResult::parse)?.takeIf { it.usable }?.text
         override fun cancel() = MacLlama.nativeCancel(h)
     }
     val board = CaptionBoard(10)

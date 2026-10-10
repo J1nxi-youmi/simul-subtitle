@@ -41,6 +41,7 @@ class SessionLog(
     }
     @Volatile var file: File = part
         private set
+    init { active = part }
     @Volatile var failed: String? = null
         private set
     private val queue = LinkedBlockingQueue<Any>(capacity)
@@ -80,7 +81,9 @@ class SessionLog(
      * Writes everything queued, then closes the file. Call once, after the pipeline workers have exited.
      * @return true only if every event was written and the file is complete; otherwise [failed] says why.
      */
-    fun close(timeoutMs: Long = 3_000): Boolean {
+    fun close(timeoutMs: Long = 3_000): Boolean = try { finish(timeoutMs) } finally { if (active == part) active = null }
+
+    private fun finish(timeoutMs: Long): Boolean {
         closing = true
         thread.join(timeoutMs)
         if (thread.isAlive) fail("关闭日志超时，文件可能不完整") // the writer still exits once the disk returns
@@ -100,6 +103,12 @@ class SessionLog(
         private const val PART = ".part"
         private val NAMES = Any()
         fun dir(root: File) = File(root, "logs")
+        /**
+         * The `.part` file a session is writing right now, null when none: it is still growing and is renamed on close,
+         * so it must not be shared (a shared URI would point at a file that is about to move).
+         */
+        @Volatile var active: File? = null
+            private set
         /** Newest first; includes unfinished `.part` files (see [complete]). */
         fun list(root: File): List<File> =
             dir(root).listFiles { f -> f.name.endsWith(".jsonl") || f.name.endsWith(".jsonl$PART") }

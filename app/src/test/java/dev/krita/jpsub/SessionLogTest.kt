@@ -36,9 +36,12 @@ class SessionLogTest {
         log.write(mapOf("ev" to "x"))
         val open = SessionLog.list(root).single()
         assertFalse(SessionLog.complete(open))
+        assertEquals(open, SessionLog.active) // the home screen does not offer it for sharing
         assertTrue(log.close())
+        assertNull(SessionLog.active)
         val done = SessionLog.list(root).single()
         assertTrue(SessionLog.complete(done))
+        assertFalse(open.exists()) // a URI made from the listed .part before close would point at nothing
         assertTrue(done.readLines().single().contains("\"ev\":\"x\""))
     }
 

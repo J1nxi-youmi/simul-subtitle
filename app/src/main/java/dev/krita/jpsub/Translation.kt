@@ -68,7 +68,7 @@ class MtResult(
 
 /** The models behind the free public Index-Translate API (only 35B-A3B is listed by /v1/models; all three answer). */
 enum class OnlineModel(val id: String, val label: String) {
-    B35("Index-Translate-35B-A3B", "35B-A3B（质量最好）"),
+    B35("Index-Translate-35B-A3B", "35B-A3B（推荐）"),
     B9("Index-Translate-9B", "9B"),
     B2("Index-Translate-2B", "2B（最快）"),
 }
@@ -101,10 +101,13 @@ class OnlineTranslator(
         val usage = j?.get("usage") as? Map<*, *>
         val stop = when {
             r.status != 200 || content == null -> 'f'
+            choice["finish_reason"] == "stop" -> 'e'
             choice["finish_reason"] == "length" -> 'l'
-            else -> 'e'
+            else -> 'f' // missing or unknown: not a translation we can trust; the raw response is kept
         }
-        val error = r.error ?: when { r.status != 200 -> "HTTP ${r.status}"; content == null -> "bad response"; else -> null }
+        val error = r.error ?: when {
+            r.status != 200 -> "HTTP ${r.status}"; content == null -> "bad response"; stop == 'f' -> "finish_reason"; else -> null
+        }
         return MtResult(content ?: "", stop, (usage?.get("prompt_tokens") as? Number)?.toInt(),
             (usage?.get("completion_tokens") as? Number)?.toInt(), request = body, response = r.body, http = r.status, error = error)
     }

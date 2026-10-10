@@ -34,14 +34,14 @@ class SessionLog(
             while (true) {
                 val name = "session-$ts" + (if (i == 0) "" else "-$i")
                 val d = File(dir, "$name.jsonl"); val p = File(dir, "$name.jsonl$PART")
-                if (!d.exists() && p.createNewFile()) { done = d; part = p; break }
+                // created and marked active under one lock: a listing (also under it) never sees it unmarked
+                if (!d.exists() && p.createNewFile()) { done = d; part = p; ACTIVE.add(p); break }
                 i++
             }
         }
     }
     @Volatile var file: File = part
         private set
-    init { ACTIVE.add(part) }
     @Volatile var failed: String? = null
         private set
     private val queue = LinkedBlockingQueue<Any>(capacity)
@@ -115,13 +115,16 @@ class SessionLog(
          * and are renamed on close, so they must not be shared (a shared URI would point at a file that is about to move).
          */
         private val ACTIVE: MutableSet<File> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-        fun isActive(f: File) = f in ACTIVE
+        // list/isActive take the lock a new log is created and marked under, so a listed `.part` that is still being
+        // written is always reported active (it stays so until renamed, also under the lock, or its writer exits)
+        fun isActive(f: File) = synchronized(NAMES) { f in ACTIVE }
         /** for change detection on the home screen */
-        fun activeFiles(): Set<File> = ACTIVE.toSet()
+        fun activeFiles(): Set<File> = synchronized(NAMES) { ACTIVE.toSet() }
         /** Newest first; includes unfinished `.part` files (see [complete]). */
-        fun list(root: File): List<File> =
+        fun list(root: File): List<File> = synchronized(NAMES) {
             dir(root).listFiles { f -> f.name.endsWith(".jsonl") || f.name.endsWith(".jsonl$PART") }
                 ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name }) ?: emptyList()
+        }
         /** false for a session that is still running, failed, or was interrupted */
         fun complete(f: File) = f.name.endsWith(".jsonl")
     }

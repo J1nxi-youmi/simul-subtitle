@@ -111,27 +111,87 @@ class JevTest {
         assertTrue(res.request!!.contains("本当に"))
     }
 
-    @Test
-    fun aHangingDnsLookupStillEndsAtTheDeadlineAndOnStop() {
-        val dnsEntered = java.util.concurrent.CountDownLatch(1)
+    /** lookups of "stuck.invalid" hang until [release]; afterwards they resolve to the local test server */
+    private inner class HangingDns : okhttp3.Dns {
         val release = java.util.concurrent.CountDownLatch(1)
-        val dns = object : okhttp3.Dns {
-            override fun lookup(hostname: String): List<java.net.InetAddress> { dnsEntered.countDown(); release.await(); return okhttp3.Dns.SYSTEM.lookup(hostname) }
+        @Volatile var entered = java.util.concurrent.CountDownLatch(1)
+        override fun lookup(hostname: String): List<InetAddress> {
+            entered.countDown(); release.await()
+            return listOf(InetAddress.getByName("127.0.0.1"))
         }
+    }
+    private fun stuckUrl(path: String) = "http://stuck.invalid:$port/$path"
+
+    @Test(timeout = 20_000)
+    fun aHangingDnsLookupStillEndsAtTheDeadlineAndOnStop() {
+        val dns = HangingDns()
         try {
             val t0 = monoMs()
-            val a = Calls(300, dns, java.net.Proxy.NO_PROXY).post("http://never.invalid/x", "{}", emptyMap())
+            val a = Calls(300, dns, java.net.Proxy.NO_PROXY).post(stuckUrl("x"), "{}", emptyMap())
             assertTrue("deadline: took ${monoMs() - t0} ms", monoMs() - t0 < 1_000)
-            assertEquals("the lookup is what hangs", 0L, dnsEntered.count)
+            assertEquals("the lookup is what hangs", 0L, dns.entered.count)
             assertTrue("${a.error}", a.error?.startsWith("deadline") == true)
+
+            dns.entered = java.util.concurrent.CountDownLatch(1)
             val c = Calls(5_000, dns, java.net.Proxy.NO_PROXY)
             val r = AtomicReference<HttpResult?>()
-            val th = Thread { r.set(c.post("http://never.invalid/y", "{}", emptyMap())) }.apply { start() }
-            Thread.sleep(100)
+            val th = Thread { r.set(c.post(stuckUrl("y"), "{}", emptyMap())) }.apply { start() }
+            assertTrue("second request reached the lookup", dns.entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
             val t1 = monoMs(); c.cancel(); th.join(1_000)
             assertFalse(th.isAlive); assertTrue("stop: took ${monoMs() - t1} ms", monoMs() - t1 < 500)
             assertEquals("cancelled", r.get()?.error)
-        } finally { release.countDown() }
+        } finally { dns.release.countDown() }
+        // both calls were cancelled while resolving: once the lookup returns they must not be sent
+        Thread.sleep(500); assertEquals(0, hits.get())
+    }
+
+    @Test(timeout = 30_000)
+    fun stuckWorkIsBoundedAcrossSessionsAndExtraRequestsFailAtOnce() {
+        val dns = HangingDns()
+        val results = mutableListOf<HttpResult>()
+        try {
+            repeat(Calls.MAX_PENDING + 4) { i ->
+                // a fresh "session" each time, as after stop and start
+                results += Calls(100, dns, java.net.Proxy.NO_PROXY).post(stuckUrl("$i"), "{}", emptyMap())
+                assertTrue("pending ${Calls.pendingNow()}", Calls.pendingNow() <= Calls.MAX_PENDING)
+            }
+            assertEquals(Calls.MAX_PENDING, Calls.pendingNow())
+            val t0 = monoMs()
+            val busy = Calls(5_000, dns, java.net.Proxy.NO_PROXY).post(stuckUrl("z"), "{}", emptyMap())
+            assertEquals("busy", busy.error); assertTrue(monoMs() - t0 < 200)
+            assertEquals(4, results.count { it.error == "busy" })
+        } finally { dns.release.countDown() }
+        // slots come back when OkHttp has really finished the calls, and none of them is sent
+        val until = monoMs() + 5_000
+        while (Calls.pendingNow() > 0 && monoMs() < until) Thread.sleep(20)
+        assertEquals(0, Calls.pendingNow())
+        Thread.sleep(300); assertEquals(0, hits.get())
+    }
+
+    @Test
+    fun anUnknownFinishReasonIsNotAUsableTranslation() {
+        reply = { 200 to """{"choices":[{"message":{"content":"半分"},"finish_reason":"content_filter"}]}""" }
+        val a = online().translate("x")!!
+        assertFalse(a.usable); assertEquals("finish_reason", a.error); assertTrue(a.response!!.contains("content_filter"))
+        reply = { 200 to """{"choices":[{"message":{"content":"半分"}}]}""" }
+        assertFalse(online().translate("x")!!.usable)
+    }
+
+    @Test
+    fun redactKeepsCleanResponsesByteForByteAndCatchesEveryEscapedKey() {
+        val raw = """{ "answers" : {"x":{"noul":0.25}},  "unicode":"\u672c" }"""
+        assertEquals(raw, Jev.redact(raw, "sk-secret"))
+        assertEquals("not json", Jev.redact("not json", "sk-secret"))
+        val k = "sk-a\"b\\c"
+        for (body in listOf(
+            "\"invalid key \\u0073k-a\\\"b\\\\c\"", // a top-level JSON string
+            """{"e":["x \u0073k-a\"b\\c"]}""",
+            """{"\u0073k-a\"b\\c":1}""",
+        )) {
+            val out = Jev.redact(body, k)
+            assertFalse(out, out.contains(k) || (runCatching { Json.parse(out) }.getOrNull()?.toString() ?: "").contains(k))
+            assertTrue(out, out.contains("***"))
+        }
     }
 
     @Test

@@ -74,17 +74,26 @@ class Jev(
         /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
 
-        /** [body] for the log without [secret]: decoded JSON is cleaned value by value (escapes cannot hide it). */
+        /**
+         * [body] for the log without [secret]. Unchanged (the raw response) when the secret is in neither the text nor
+         * any decoded JSON value or field name; otherwise JSON is cleaned value by value, so escapes cannot hide it.
+         */
         fun redact(body: String, secret: String): String {
+            var hit = false
+            fun scrub(s: String) = if (secret in s) { hit = true; s.replace(secret, "***") } else s
             fun clean(v: Any?): Any? = when (v) {
-                is String -> v.replace(secret, "***")
-                is Map<*, *> -> v.entries.associate { (k, x) -> k.toString().replace(secret, "***") to clean(x) }
+                is String -> scrub(v)
+                is Map<*, *> -> v.entries.associate { (k, x) -> scrub(k.toString()) to clean(x) }
                 is List<*> -> v.map(::clean)
                 else -> v
             }
-            // only a JSON object/array is re-encoded (org.json also "parses" a bare word as a string)
-            val parsed = runCatching { Json.parse(body) }.getOrNull()
-            return if (parsed is Map<*, *> || parsed is List<*>) Json.encode(clean(parsed)) else body.replace(secret, "***")
+            val parsed = runCatching { Json.parse(body) }
+            val cleaned = parsed.getOrNull().let(::clean)
+            return when {
+                !hit && secret !in body -> body
+                parsed.isSuccess -> Json.encode(cleaned)
+                else -> body.replace(secret, "***")
+            }
         }
         /** Wording tuned on 140 labelled segment pairs without the following text (AUC 0.96, /tmp/jps/case/decision-bench.md). */
         val UNFINISHED = mapOf(
@@ -121,13 +130,13 @@ class HttpResult(val status: Int, val body: String?, val ms: Long, val error: St
  * [cancel] marks the session stopped and cancels every registered call, and a call cancelled before it is
  * enqueued never sends anything (OkHttp's cancellation is terminal). Data already sent cannot be taken back.
  * The caller waits at most [deadlineMs] (and returns at once on [cancel]) even where OkHttp cannot interrupt the
- * work, e.g. a blocking DNS lookup: that keeps only an OkHttp dispatcher thread busy until the lookup returns.
+ * work, e.g. a blocking DNS lookup. Such leftover work is bounded process-wide: at most [MAX_PENDING] requests
+ * (all sessions) may be unfinished in OkHttp; beyond that a request fails at once with "busy" instead of queueing.
  */
 class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypass a system proxy */ proxy: java.net.Proxy? = null) {
-    private val client = OkHttpClient.Builder()
+    // one dispatcher / connection pool for the process; per-session settings are a cheap derived client
+    private val client = BASE.newBuilder()
         .callTimeout(deadlineMs, TimeUnit.MILLISECONDS) // the whole call, including a slowly trickling body
-        .followRedirects(false).followSslRedirects(false) // never resend a key to another host
-        .retryOnConnectionFailure(false)
         .dns(dns).apply { proxy?.let { proxy(it) } }
         .build()
     /** registered calls and the latch their caller waits on */
@@ -138,6 +147,7 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
 
     fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {}): HttpResult {
         val t0 = monoMs()
+        if (cancelled) return HttpResult(0, null, 0, "cancelled")
         val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
             .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
         val call = client.newCall(req)
@@ -145,11 +155,17 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         val result = AtomicReference<HttpResult?>()
         inFlight[call] = done
         // cancel() either saw the call in the map or set the flag before this check
-        if (cancelled) call.cancel()
+        if (cancelled) { inFlight.remove(call); return HttpResult(0, null, 0, "cancelled") }
+        var admitted = false
         try {
             beforeSend()
+            if (cancelled) return HttpResult(0, null, monoMs() - t0, "cancelled")
+            // the slot is returned when OkHttp is really done with the call, not when this caller gives up
+            if (!PENDING.tryAcquire()) return HttpResult(0, null, monoMs() - t0, "busy")
+            admitted = true
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    PENDING.release()
                     result.set(HttpResult(0, null, monoMs() - t0, why(e, t0))); done.countDown()
                 }
                 override fun onResponse(call: Call, response: Response) {
@@ -161,6 +177,7 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                             else HttpResult(resp.code, src?.buffer?.readUtf8(), monoMs() - t0, null)
                         }
                     } catch (e: IOException) { HttpResult(response.code, null, monoMs() - t0, why(e, t0)) }
+                    finally { PENDING.release() }
                     result.set(r); done.countDown()
                 }
             })
@@ -170,8 +187,12 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                 cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled")
                 else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms") }
             }
+        } catch (e: InterruptedException) {
+            call.cancel(); Thread.currentThread().interrupt()
+            return HttpResult(0, null, monoMs() - t0, "cancelled")
         } finally {
             inFlight.remove(call)
+            if (!admitted) call.cancel()
         }
     }
 
@@ -186,6 +207,15 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
     companion object {
         private val JSON = "application/json".toMediaType()
         private const val MAX_RESPONSE = 64 * 1024
+        /** Jev asks from two threads and MT from one, so a few requests per session; more means stuck work */
+        const val MAX_PENDING = 8
+        private val PENDING = java.util.concurrent.Semaphore(MAX_PENDING)
+        private val BASE = OkHttpClient.Builder()
+            .followRedirects(false).followSslRedirects(false) // never resend a key to another host
+            .retryOnConnectionFailure(false)
+            .build()
+        /** tests */
+        fun pendingNow() = MAX_PENDING - PENDING.availablePermits()
     }
 }
 

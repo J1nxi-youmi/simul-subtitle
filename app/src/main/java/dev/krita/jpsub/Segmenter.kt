@@ -28,9 +28,12 @@ class Segmenter(
     private val minFinalMs: Int = 0,
     private val maxHoldSilenceMs: Int = 1_500,
     /**
-     * > 0 enables the judged hold: at [endSilenceMs] a draft with [AsrJob.endOfSpeech] covering the utterance up to the
-     * pause is emitted, and [holdHint] is asked about exactly that revision. true = unfinished (hold up to
-     * [maxHoldSilenceMs]), false = finished (final now), null = no answer yet (wait until this much silence, then final).
+     * > 0 enables the judged hold. A candidate end is a pause of [endSilenceMs] or a forced cut at [maxUtteranceMs];
+     * for each one a draft with [AsrJob.endOfSpeech] holding exactly the audio up to that end is emitted, and
+     * [holdHint] is asked about that revision: true = unfinished (keep listening), false = finished (final now),
+     * null = no answer yet (wait at most this long after the candidate was emitted, then final).
+     * Bounds: a pause still ends at [maxHoldSilenceMs]; a forced cut that was judged unfinished is cut for good at
+     * twice [maxUtteranceMs]. Answers for an older revision are never used.
      */
     private val hintWaitMs: Int = 0,
     /** Read on the audio thread; must not block. */
@@ -48,8 +51,14 @@ class Segmenter(
     private var framesSinceDraft = 0
     private var segmentId = 0L
     private var revision = 0
-    /** revision of the end-of-speech draft for the current pause, -1 = none yet */
+    /** end-of-speech candidate for the current pause: its revision (-1 = none) and frames.size when it was emitted */
     private var tailRevision = -1
+    private var tailAtFrames = 0
+    /** forced-cut candidate: revision (-1 = none), where it cuts, and frames.size when it was emitted */
+    private var cutRevision = -1
+    private var cutIndex = 0
+    private var cutAtFrames = 0
+    private val hardMaxMs = if (hintWaitMs > 0) 2 * maxUtteranceMs else maxUtteranceMs
 
     /**
      * @param now [monoMs] capture time of this frame's last sample
@@ -81,15 +90,16 @@ class Segmenter(
         val silMs = silentFrames * frameMs
         // keep ~100 ms of the trailing silence
         val speechEnd = (frames.size - silentFrames + 100 / frameMs).coerceIn(1, frames.size)
+        val inPause = silMs >= endSilenceMs
         when {
-            silMs >= endSilenceMs && !holding(silMs) -> finalize(speechEnd, continueSpeech = false)
-            durMs >= maxUtteranceMs -> finalize(forcedCut(), continueSpeech = true)
-            silMs >= endSilenceMs -> {
-                if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
-                    tailRevision = ++revision
-                    emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
-                }
+            // a held pause is bounded by maxHoldSilenceMs; no forced cut inside it (the final drops the silence)
+            inPause && (durMs >= hardMaxMs || !holding(silMs)) -> finalize(speechEnd, continueSpeech = false)
+            inPause -> if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
+                tailRevision = ++revision
+                tailAtFrames = frames.size
+                emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
+            durMs >= maxUtteranceMs -> forcedCutStep(durMs)
             framesSinceDraft * frameMs >= draftEveryMs && durMs >= minDraftMs && f.speech -> {
                 framesSinceDraft = 0
                 emit(AsrJob(segmentId, ++revision, false, concat(frames.size), now, estimated))
@@ -104,8 +114,25 @@ class Segmenter(
         if (silMs >= maxHoldSilenceMs) return false
         if (speechMs() < minFinalMs) return true
         if (hintWaitMs <= 0) return false
-        if (tailRevision < 0) return true // the end-of-speech draft is emitted on this frame
-        return holdHint(segmentId, tailRevision) ?: (silMs < hintWaitMs)
+        if (tailRevision < 0) return true // the candidate is emitted on this frame
+        return holdHint(segmentId, tailRevision) ?: ((frames.size - tailAtFrames) * frameMs < hintWaitMs)
+    }
+
+    /** Without a judge, cut now. With one, ask about the cut first; an unfinished head keeps growing up to [hardMaxMs]. */
+    private fun forcedCutStep(durMs: Int) {
+        if (hintWaitMs <= 0 || durMs >= hardMaxMs) { finalize(forcedCut(), continueSpeech = true); return }
+        if (cutRevision < 0) {
+            cutIndex = forcedCut()
+            cutRevision = ++revision
+            cutAtFrames = frames.size
+            emit(AsrJob(segmentId, cutRevision, false, concat(cutIndex), frames[cutIndex - 1].endAt, frames[cutIndex - 1].estimated, endOfSpeech = true))
+            return
+        }
+        when (holdHint(segmentId, cutRevision)) {
+            true -> Unit
+            false -> finalize(cutIndex, continueSpeech = true)
+            null -> if ((frames.size - cutAtFrames) * frameMs >= hintWaitMs) finalize(cutIndex, continueSpeech = true)
+        }
     }
 
     /**
@@ -135,6 +162,7 @@ class Segmenter(
     private fun finalize(count: Int, continueSpeech: Boolean) {
         emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
         tailRevision = -1
+        cutRevision = -1
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
         if (continueSpeech) {

@@ -171,8 +171,8 @@ class SegmenterTest {
         return jobs to j
     }
 
-    // middle pause 1088 ms: longer than hintWaitMs (900), shorter than maxHold (1500) → the answer decides
-    private val midPause = listOf(true to 1504, false to 1088, true to 1504, false to 1600)
+    // middle pause 1408 ms: past the wait (candidate at ~416 ms + 900 ms), short of maxHold (1500) → the answer decides
+    private val midPause = listOf(true to 1504, false to 1408, true to 1504, false to 1600)
     private val shortPause = listOf(true to 1504, false to 608, true to 1504, false to 1600)
 
     @Test
@@ -209,7 +209,7 @@ class SegmenterTest {
         val s = Segmenter({ jobs.add(it); if (it.endOfSpeech && firstTail == null) firstTail = it }, minFinalMs = 1200,
             maxHoldSilenceMs = 1500, hintWaitMs = 900,
             holdHint = { seg, rev -> if (firstTail?.let { it.segmentId == seg && it.revision == rev } == true) true else null })
-        run(listOf(true to 1504, false to 608, true to 1504, false to 1088, true to 1504, false to 1600), s)
+        run(listOf(true to 1504, false to 608, true to 1504, false to 1408, true to 1504, false to 1600), s)
         val tails = jobs.filter { it.endOfSpeech && it.segmentId == 1L }
         assertEquals(2, tails.size)
         assertTrue(tails[1].revision > tails[0].revision)
@@ -223,15 +223,96 @@ class SegmenterTest {
         assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
     }
 
+    /** A judge that answers [latencyMs] after the end-of-speech draft was emitted (ASR + network), in audio time. */
+    private fun timedJudge(answer: Boolean, latencyMs: Int, pattern: List<Pair<Boolean, Int>>, hintWaitMs: Int = 1000,
+                           maxHoldSilenceMs: Int = 2500, maxUtteranceMs: Int = 7000): List<AsrJob> {
+        val jobs = ArrayList<AsrJob>()
+        var now = 0L
+        val sentAt = HashMap<Pair<Long, Int>, Long>()
+        val s = Segmenter({ jobs.add(it); if (it.endOfSpeech) sentAt[it.segmentId to it.revision] = now },
+            minFinalMs = 1200, maxHoldSilenceMs = maxHoldSilenceMs, hintWaitMs = hintWaitMs, maxUtteranceMs = maxUtteranceMs,
+            holdHint = { seg, rev -> sentAt[seg to rev]?.let { if (now - it >= latencyMs) answer else null } })
+        var idx = 0
+        for ((speech, ms) in pattern) repeat(ms / 32) {
+            idx++; now = idx * 32L
+            s.accept(FloatArray(frame) { idx.toFloat() }, if (speech) 0.9f else 0.1f, now)
+        }
+        s.flush()
+        return jobs
+    }
+
+    @Test
+    fun realisticJudgeLatencyStillJoinsTheContinuation() {
+        // ASR ~100 ms + Jev ~550 ms after the candidate; the speaker resumes ~800 ms after the candidate (1216 ms pause)
+        val jobs = timedJudge(answer = true, latencyMs = 650, pattern = listOf(true to 1504, false to 1216, true to 1504, false to 3000))
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun realisticJudgeLatencyFinishedAnswerFinalizesWithoutWaitingForMaxHold() {
+        val jobs = timedJudge(answer = false, latencyMs = 650, pattern = listOf(true to 1504, false to 3000))
+        val f = jobs.single { it.isFinal }
+        // final at ~416 ms (candidate) + 650 ms answer, well before the 2.5 s hold limit
+        val tail = jobs.single { it.endOfSpeech }
+        assertEquals(frameIds(tail), frameIds(f))
+        assertTrue(jobs.indexOf(f) > jobs.indexOf(tail))
+    }
+
+    @Test
+    fun judgeSlowerThanTheBudgetFinalizesAtTheBudget() {
+        val jobs = timedJudge(answer = true, latencyMs = 5000, pattern = listOf(true to 1504, false to 1700, true to 1504, false to 3000))
+        assertEquals(listOf(1L, 2L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun longSilenceDuringAHoldProducesNoSilentFinalAndLosesNothing() {
+        // utterance near the forced-cut limit, then a held pause that crosses maxUtteranceMs, then more speech
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> true })
+        val total = run(listOf(true to 2496, false to 1600, true to 1504, false to 1600), s)
+        s.flush()
+        val finals = jobs.filter { it.isFinal }
+        val ids = finals.flatMap(::frameIds)
+        // trailing silence of a final is dropped as usual; every speech frame is kept exactly once, in order
+        assertEquals(ids.sorted().distinct(), ids)
+        assertTrue(ids.containsAll((1..78).toList() + (129..175).toList()))
+        assertEquals(2, finals.size)
+    }
+
+    /** A forced cut is a candidate too: an unfinished head is carried into the next chunk, up to the hard limit. */
+    @Test
+    fun forcedCutWithUnfinishedAnswerCarriesTheHeadIntoTheNextChunk() {
+        // 3 s speech, short pause (no natural final), 2 s speech; normal cut limit 3 s, hard limit 6 s
+        val jobs = timedJudge(answer = true, latencyMs = 100, maxUtteranceMs = 3000,
+            pattern = listOf(true to 2496, false to 256, true to 2016, false to 3000))
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(1, finals.size)
+        assertTrue(finals[0].samples.size <= 6000 * 16 + 512)
+    }
+
+    @Test
+    fun forcedCutNeverExceedsTheHardLimit() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> true })
+        val total = run(listOf(true to 20_000), s)
+        s.flush()
+        val finals = jobs.filter { it.isFinal }
+        assertTrue(finals.all { it.samples.size <= 6000 * 16 + 512 })
+        assertEquals((1..total).toList(), finals.flatMap(::frameIds))
+    }
+
     @Test
     fun holdingLosesNoFrameAndForcedCutStillApplies() {
         val jobs = ArrayList<AsrJob>()
         val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900, holdHint = { _, _ -> true })
-        val total = run(listOf(true to 640, false to 608, true to 640, false to 608, true to 2016), s)
+        val total = run(listOf(true to 640, false to 608, true to 640, false to 608, true to 6016), s)
         s.flush()
         val finals = jobs.filter { it.isFinal }
         assertTrue(finals.size >= 2)
-        assertTrue(finals.all { it.samples.size <= 3000 * 16 + frame })
+        // with a judge saying "unfinished", a forced cut waits up to the hard limit (2 × maxUtteranceMs)
+        assertTrue(finals.all { it.samples.size <= 6000 * 16 + frame })
         assertEquals((1..total).toList(), finals.flatMap(::frameIds))
     }
 

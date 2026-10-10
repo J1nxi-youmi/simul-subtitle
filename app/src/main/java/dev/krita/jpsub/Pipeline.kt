@@ -211,12 +211,37 @@ class Pipeline(
         return null
     }
 
+    /** Raw recognitions of this segment's drafts (audio length, text), newest last; asr thread only. */
+    private val segDrafts = HashMap<Long, MutableList<Pair<Int, String>>>()
+
+    /**
+     * ReazonSpeech sometimes drops everything before an internal pause when the same utterance is recognized again
+     * with more audio (measured: "スパチありがとうございま" at 1.6 s became "いや相当でかいと思うけど" at 4.8 s; the audio is
+     * an exact prefix, fp32 does the same). If the newest earlier draft that is long enough to be real content is
+     * mostly missing from the new result, its text is kept and only the audio after it is recognized.
+     */
+    private fun recognizeKeepingLostDraft(job: AsrJob): String {
+        val whole = asr.recognize(job.samples).trim()
+        val hist = segDrafts.getOrPut(job.segmentId) { ArrayList() }
+        segDrafts.keys.removeIf { it < job.segmentId - 4 }
+        val lost = hist.lastOrNull { (n, t) ->
+            n < job.samples.size && n >= LOST_MIN_SAMPLES && t.length >= LOST_MIN_CHARS && keptRatio(t, whole) < 0.5
+        }
+        if (!job.isFinal) hist += job.samples.size to whole
+        if (lost == null) return whole
+        val rest = job.samples.copyOfRange(lost.first, job.samples.size)
+        val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
+        log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
+            "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
+        return lost.second + tail
+    }
+
     private fun asrLoop() {
         while (running && !failed) {
             val q = take(asrQueue) { it.job.isFinal } ?: continue
             if (!q.job.isFinal && !q.job.endOfSpeech && skipDisplayDraft()) continue
             val start = clock()
-            val ja = asr.recognize(q.job.samples).trim()
+            val ja = recognizeKeepingLostDraft(q.job)
             val end = clock()
             if (!running) return
             val job = q.job
@@ -374,6 +399,19 @@ class Pipeline(
         const val UNFINISHED_THRESHOLD = 0.65
         /** Below this Jev confidence an error class is not acted on (untested guess). */
         const val FIX_MIN_CONFIDENCE = 0.6
+        /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
+        const val LOST_MIN_SAMPLES = 24_000
+        const val LOST_MIN_CHARS = 5
+        /** share of [a]'s characters found, in order, in [b] */
+        fun keptRatio(a: String, b: String): Double {
+            // longest common subsequence; strings are a sentence long
+            val dp = IntArray(b.length + 1)
+            for (x in a) {
+                var prev = 0
+                for (j in 1..b.length) { val cur = dp[j]; dp[j] = if (x == b[j - 1]) prev + 1 else maxOf(dp[j], dp[j - 1]); prev = cur }
+            }
+            return dp[b.length].toDouble() / maxOf(a.length, 1)
+        }
     }
 
     // caller holds lock

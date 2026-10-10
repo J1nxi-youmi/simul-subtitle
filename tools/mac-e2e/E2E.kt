@@ -48,6 +48,12 @@ fun main() {
     p.start()
     try {
         val seg = Segmenter({ job ->
+            // -DdumpJobs=<dir>: write every ASR job's audio as raw float32 (seg-rev.f32) to re-check recognition offline
+            System.getProperty("dumpJobs")?.let { d ->
+                val b = java.nio.ByteBuffer.allocate(job.samples.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                job.samples.forEach { b.putFloat(it) }
+                File(d).mkdirs(); File(d, "${job.segmentId}-${job.revision}.f32").writeBytes(b.array())
+            }
             val ok = p.submit(job)
             if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
         }, endSilenceMs = (System.getProperty("endSilenceMs") ?: "400").toInt(),

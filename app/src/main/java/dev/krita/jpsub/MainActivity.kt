@@ -274,7 +274,7 @@ class MainActivity : Activity() {
         }
         box.addView(TextView(this).apply {
             text = (if (prefs.mtOnline)
-                "B站免费公网接口：识别出的日文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。35B 质量最好，9B/2B 更快。"
+                "B站免费公网接口：识别出的日文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。推荐 35B；9B/2B 是备选。"
             else "在手机上翻译，需要先下载约 1.3 GB 模型；比在线慢很多，长句可能积压。") +
                 if (running) "\n运行中不能切换，停止后再改。" else ""
             textSize = 12.5f; setTextColor(getColor(R.color.text2))

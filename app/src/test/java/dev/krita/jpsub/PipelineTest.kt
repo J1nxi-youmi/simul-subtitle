@@ -584,6 +584,64 @@ class PipelineTest {
         p.stop(); p.awaitStopped()
         assertTrue(out.any { !it.isFinal && it.ja == "ja13" })
     }
+
+    /** Real-log repro (session-20261010-195346 seg 2): the longer recognition lost the thanks for a superchat. */
+    @Test
+    fun aDraftTheLongerRecognitionDroppedIsKeptAndOnlyTheNewAudioIsRecognized() {
+        val seen = Collections.synchronizedList(ArrayList<Int>())
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String { seen.add(samples.size); return when (samples.size) {
+                25_600 -> "スパチャありがとうございます" // 1.6 s
+                76_800 -> "いや相当でかいと思うけど" // whole 4.8 s: the start is gone
+                76_800 - 25_600 -> "いや相当でかいと思うけど"
+                else -> "x"
+            } }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(2, 2, true, 76_800))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertEquals("スパチャありがとうございますいや相当でかいと思うけど", out.last { it.isFinal }.ja)
+        assertEquals(listOf(25_600, 76_800, 51_200), seen.toList())
+    }
+
+    @Test
+    fun aRecognitionThatOnlyRefinesTheDraftIsUsedAsIs() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String =
+                if (samples.size == 25_600) "このうさぎひっくりかえってる" else "このウサギなんかひっくり返ってるうさぎ"
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(1, 2, true, 48_000))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertEquals("このウサギなんかひっくり返ってるうさぎ", out.last { it.isFinal }.ja)
+    }
+
+    @Test
+    fun shortOrBriefDraftsAreNotKept() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) { 14_000 -> "えっとですね"; 4_000 -> "えっ"; else -> "別の話です" }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 4_000)); Thread.sleep(50)
+        p.submit(job(1, 2, false, 14_000)); Thread.sleep(50) // under 1.5 s of audio
+        p.submit(job(1, 3, true, 40_000))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertEquals("別の話です", out.last { it.isFinal }.ja)
+    }
 }
 
 class CaptionBoardTest {

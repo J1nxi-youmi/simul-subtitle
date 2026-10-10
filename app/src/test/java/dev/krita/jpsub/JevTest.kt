@@ -148,13 +148,32 @@ class JevTest {
     }
 
     @Test
-    fun aCancelJustBeforeTheRequestIsRegisteredSendsNothing() {
+    fun aCancelAfterTheCallIsRegisteredButBeforeItRunsSendsNothing() {
         lateinit var j: Jev
-        // cancel lands after the first "cancelled?" check but before the connection is registered
-        j = Jev(JevProvider.OFFICIAL, "sk-secret", 2_000, url = "http://127.0.0.1:$port/v1/systemone", onOpen = { j.cancel() })
+        // cancel lands after the request is registered (so cancel() sees it) and before it is executed
+        j = Jev(JevProvider.OFFICIAL, "sk-secret", 2_000, url = "http://127.0.0.1:$port/v1/systemone", beforeSend = { j.cancel() })
         assertEquals("cancelled", j.unfinished("はい").error)
         Thread.sleep(200)
         assertEquals("no request may reach the server", 0, hits.get())
+    }
+
+    @Test
+    fun aKeyWithControlCharactersNeverReachesTheLog() {
+        val c = Jev(JevProvider.OFFICIAL, "sk-secret\naccident", 2_000, url = "http://127.0.0.1:$port/v1/systemone").unfinished("はい")
+        assertNull(c.answer); assertEquals("bad key", c.error)
+        assertEquals(0, hits.get())
+        val logged = Json.encode(mapOf("request" to c.request, "response" to c.response, "error" to c.error))
+        assertFalse(logged, logged.contains("sk-secret") || logged.contains("accident"))
+    }
+
+    @Test
+    fun aServerEchoingTheKeyIsRedactedAndErrorsCarryNoMessage() {
+        reply = { 401 to """{"error":"invalid key sk-secret"}""" }
+        val c = jev().unfinished("はい")
+        assertEquals(401, c.status); assertFalse(c.response!!, c.response!!.contains("sk-secret"))
+        server.close() // connection refused: only the exception type is logged
+        val d = jev().unfinished("はい")
+        assertTrue(d.error!!, d.error!!.matches(Regex("[A-Za-z.]+")))
     }
 
     @Test

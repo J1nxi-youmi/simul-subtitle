@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.Toast
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -277,7 +278,12 @@ class MainActivity : Activity() {
                 text = "保存"
                 setOnClickListener {
                     val k = input.text.toString().trim()
-                    if (k.isNotEmpty()) { prefs.setJevKey(p, k); input.setText(""); renderJev() }
+                    when {
+                        k.isEmpty() -> {}
+                        // a key with spaces/newlines/non-ASCII would be rejected by HTTP (and echoed in its error)
+                        !Jev.validKey(k) -> Toast.makeText(this@MainActivity, "key 里有空格、换行或非 ASCII 字符，请重新复制", Toast.LENGTH_LONG).show()
+                        else -> { prefs.setJevKey(p, k); input.setText(""); renderJev() }
+                    }
                 }
             })
             jevBox.addView(row)

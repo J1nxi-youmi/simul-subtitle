@@ -42,6 +42,8 @@ jar() { find "$K/$1" -name "$2" | grep -v sources | head -1; }
 STD=$(jar org.jetbrains.kotlin/kotlin-stdlib/2.0.21 'kotlin-stdlib-2.0.21.jar')
 # org.json ships with Android; the app's unit tests fetch the reference jar (testImplementation) and so does this
 STD="$STD:$(jar org.json/json/20240303 'json-20240303.jar')"
+# OkHttp (Jev / online MT), as resolved by the app's Gradle build
+STD="$STD:$(jar com.squareup.okhttp3/okhttp/4.12.0 'okhttp-4.12.0.jar'):$(jar com.squareup.okio/okio-jvm '*.jar')"
 KC="$(jar org.jetbrains.kotlin/kotlin-compiler-embeddable/2.0.21 '*.jar'):$STD"
 for a in kotlin-script-runtime kotlin-reflect kotlin-daemon-embeddable; do KC="$KC:$(jar org.jetbrains.kotlin/$a '*.jar')"; done
 KC="$KC:$(jar org.jetbrains.intellij.deps 'trove4j*.jar'):$(jar org.jetbrains/annotations/13.0 '*.jar'):$(jar org.jetbrains.kotlinx 'kotlinx-coroutines-core-jvm*.jar')"

@@ -1,17 +1,19 @@
 package dev.krita.jpsub
 
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.Timer
-import kotlin.concurrent.schedule
+import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import org.json.JSONTokener
 
 // TypeSafe Jev (System One decision model) client and the two questions the pipeline asks it.
-// Pure Kotlin / java.net so the Mac harness (tools/mac-e2e) runs the same code.
+// Pure Kotlin + OkHttp so the Mac harness (tools/mac-e2e) runs the same code.
 
 enum class JevProvider(val label: String, val url: String, val model: String) {
     OFFICIAL("TypeSafe 官方", "https://api.typesafe.ai/v1/systemone", "jev-latest"),
@@ -41,64 +43,32 @@ class Jev(
     private val deadlineMs: Long = 2_000,
     /** tests point this at a local server */
     private val url: String = provider.url,
-    /** tests: runs between the first cancel check and the registration of the connection */
-    private val onOpen: () -> Unit = {},
+    /** tests: runs after the request is registered for cancel() and before it is executed */
+    private val beforeSend: () -> Unit = {},
 ) : Judge {
-    /** Every request in flight (the pipeline asks from two threads); cancel closes all of them. */
-    private val inFlight: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-    @Volatile private var cancelled = false
-    private val timer = Timer("jev-deadline", true)
+    private val calls = Calls(deadlineMs)
 
     override fun unfinished(text: String) = ask(mapOf("current" to text), UNFINISHED)
     override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), MISTRANSLATION)
 
-    override fun cancel() { cancelled = true; inFlight.forEach { it.disconnect() }; timer.cancel() }
+    override fun cancel() = calls.cancel()
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
         val body = Json.encode(mapOf("model" to provider.model, "state" to state, "questions" to mapOf("x" to question)))
-        val t0 = monoMs()
-        if (cancelled) return JevCall(body, 0, null, 0, "cancelled", null)
-        var status = 0; var resp: String? = null
-        // connect/read timeouts bound each phase; the timer bounds the whole call by closing the socket
-        val c = URL(url).openConnection() as HttpURLConnection
-        onOpen()
-        inFlight.add(c)
-        // cancel() may have run between the check above and the registration; nothing has been sent yet
-        if (cancelled) { inFlight.remove(c); return JevCall(body, 0, null, monoMs() - t0, "cancelled", null) }
-        val deadline = runCatching { timer.schedule(deadlineMs) { c.disconnect() } }.getOrNull()
-        return try {
-            c.instanceFollowRedirects = false // never resend the key to another host
-            c.connectTimeout = deadlineMs.toInt(); c.readTimeout = deadlineMs.toInt()
-            c.requestMethod = "POST"; c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("Authorization", "Bearer $apiKey")
-            c.outputStream.use { it.write(body.toByteArray()) }
-            status = c.responseCode
-            // read in chunks against the deadline: disconnect() does not always unblock a body read in progress
-            resp = (if (status in 200..299) c.inputStream else c.errorStream)?.use { input ->
-                val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
-                while (true) {
-                    if (cancelled) throw IOException("cancelled")
-                    if (monoMs() - t0 >= deadlineMs) throw IOException("deadline")
-                    val n = input.read(buf); if (n < 0) break
-                    out.write(buf, 0, n)
-                    if (out.size() > MAX_RESPONSE) throw IOException("response over $MAX_RESPONSE bytes")
-                }
-                out.toString(Charsets.UTF_8.name())
-            }
-            val answer = if (status == 200) ((Json.parse(resp!!) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> else null
-            JevCall(body, status, resp, monoMs() - t0, if (answer == null) "HTTP $status" else null, answer)
-        } catch (e: Exception) {
-            val why = when { cancelled -> "cancelled"; monoMs() - t0 >= deadlineMs -> "deadline ${deadlineMs}ms"; else -> e.toString() }
-            JevCall(body, status, resp, monoMs() - t0, why, null)
-        } finally {
-            deadline?.cancel(); inFlight.remove(c); c.disconnect()
-        }
+        // an illegal header value would make the HTTP library put the key into its exception message
+        if (!validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
+        val r = calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"), beforeSend)
+        // a server may echo the key back in an error; the session log is shareable
+        val resp = r.body?.replace(apiKey, "***")
+        val answer = if (r.status == 200 && resp != null)
+            runCatching { ((Json.parse(resp) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
+        else null
+        return JevCall(body, r.status, resp, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer)
     }
 
     companion object {
-        /** A real answer is < 1 KB; anything far larger is not a Jev response. */
-        private const val MAX_RESPONSE = 64 * 1024
+        /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
+        fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
         /** Wording tuned on 140 labelled segment pairs without the following text (AUC 0.96, /tmp/jps/case/decision-bench.md). */
         val UNFINISHED = mapOf(
             "type" to "noul",
@@ -123,6 +93,64 @@ class Jev(
                 "ok" to "zh is an acceptable translation",
             ),
         )
+    }
+}
+
+/** One POST as the session log records it. [error] is a fixed code or an exception class name, never a message. */
+class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?)
+
+/**
+ * POSTs of one session (Jev and online MT). Each request is an OkHttp [Call], registered before it runs:
+ * [cancel] marks the session stopped and cancels every registered call, and a call cancelled before it is
+ * executed never sends anything (OkHttp's cancellation is terminal). Data already sent cannot be taken back.
+ */
+class Calls(private val deadlineMs: Long) {
+    private val client = OkHttpClient.Builder()
+        .callTimeout(deadlineMs, TimeUnit.MILLISECONDS) // the whole call, including a slowly trickling body
+        .followRedirects(false).followSslRedirects(false) // never resend a key to another host
+        .retryOnConnectionFailure(false)
+        .build()
+    private val inFlight: MutableSet<Call> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    @Volatile private var cancelled = false
+
+    fun cancel() { cancelled = true; inFlight.forEach { it.cancel() } }
+
+    fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {}): HttpResult {
+        val t0 = monoMs()
+        val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
+            .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+        val call = client.newCall(req)
+        inFlight.add(call)
+        // cancel() either saw the call in the set or set the flag before this check
+        if (cancelled) call.cancel()
+        var status = 0
+        return try {
+            beforeSend()
+            call.execute().use { resp ->
+                status = resp.code
+                val src = resp.body?.source()
+                // a real answer is a few KB; anything far larger is not one
+                if (src != null && src.request(MAX_RESPONSE + 1L)) throw IOException("too large")
+                HttpResult(status, src?.buffer?.readUtf8(), monoMs() - t0, null)
+            }
+        } catch (e: IOException) {
+            val why = when {
+                cancelled -> "cancelled"
+                // callTimeout cancels the call itself, so it is told apart by elapsed time, not isCanceled()
+                monoMs() - t0 >= deadlineMs - 50 -> "deadline ${deadlineMs}ms"
+                call.isCanceled() -> "cancelled"
+                e.message == "too large" -> "response over $MAX_RESPONSE bytes"
+                else -> e.javaClass.name
+            }
+            HttpResult(status, null, monoMs() - t0, why)
+        } finally {
+            inFlight.remove(call)
+        }
+    }
+
+    companion object {
+        private val JSON = "application/json".toMediaType()
+        private const val MAX_RESPONSE = 64 * 1024
     }
 }
 

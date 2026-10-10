@@ -9,6 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.StringWriter
+import java.io.File
 import java.io.Writer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
@@ -61,17 +62,34 @@ class SessionLogTest {
     @Test
     fun aCloseThatTimesOutIsReported() {
         val never = CountDownLatch(1)
+        val closed = CountDownLatch(1)
         val stuck = object : Writer() {
             override fun write(c: CharArray, off: Int, len: Int) { never.await() }
             override fun flush() {}
-            override fun close() {}
+            override fun close() { closed.countDown() }
         }
         val reported = AtomicReference<String?>()
         val log = SessionLog(tmp.root, open = { stuck }, onFail = { reported.set(it) })
         log.write(mapOf("ev" to "x"))
         assertFalse(log.close(timeoutMs = 200))
         assertNotNull(reported.get())
+        // the disk recovers: the writer must still finish and close the file, not wait for events forever
         never.countDown()
+        assertTrue("writer never closed", closed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun aFinishedLogIsNeverOverwrittenByAnotherSession() {
+        // another session finished a file with this name between our name choice and our own finish
+        val root = tmp.newFolder()
+        val log = SessionLog(SessionLog.dir(root))
+        log.write(mapOf("ev" to "mine"))
+        val target = File(SessionLog.dir(root), log.file.name.removeSuffix(".part"))
+        target.writeText("theirs\n")
+        assertTrue(log.close())
+        assertEquals("theirs\n", target.readText())
+        assertTrue(log.file.readText().contains("\"ev\":\"mine\""))
+        assertTrue(log.file != target)
     }
 
     @Test

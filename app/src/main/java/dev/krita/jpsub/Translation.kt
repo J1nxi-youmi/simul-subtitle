@@ -37,21 +37,6 @@ fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList()): 
 /** The model occasionally still emits a think block or a stray "</think>"; the official client strips it too. */
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
-/**
- * On very short input the model sometimes appends the prompt's own constraint text as a note on its own line
- * ("（注：这是…直播…）" echoing the scene background). Only such an echo is dropped: a trailing paragraph that starts
- * like a note AND whose characters mostly (≥ 60 %) appear in [prompt]. Anything else, including a real note that the
- * source text itself contains, is kept. The raw output stays in the session log either way.
- */
-fun dropEchoedNote(text: String, prompt: String): String {
-    val m = Regex("\\n\\s*[（(](注|备注|说明)[:：]").find(text) ?: return text
-    val head = text.substring(0, m.range.first).trim()
-    if (head.isEmpty()) return text
-    val chars = text.substring(m.range.first).filter { it.isLetterOrDigit() }.drop(1) // drop the 注/备/说 marker
-    if (chars.isEmpty()) return text
-    val inPrompt = chars.count { prompt.indexOf(it) >= 0 }
-    return if (inPrompt * 10 >= chars.length * 6) head else text
-}
 
 /**
  * One translation call as the native code reported it. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.

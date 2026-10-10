@@ -390,6 +390,15 @@ class PipelineTest {
     }
 
     @Test
+    fun aRetranslationCountsAsTranslationTimeNotAsCheckTime() {
+        val mt = FakeMt(120)
+        val f = runFinal(FakeJudge(choice = "negation", delayMs = 50), mt = mt).last { it.isFinal }
+        assertEquals(2, mt.calls.size)
+        assertTrue("mt ${f.timing.mtMs}", f.timing.mtMs >= 240)
+        assertTrue("check ${f.timing.checkMs}", f.timing.checkMs in 50..200)
+    }
+
+    @Test
     fun aJevCallCutShortByStopIsStillLogged() {
         val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
         val judge = FakeJudge(unfinishedP = 0.9, delayMs = 400)

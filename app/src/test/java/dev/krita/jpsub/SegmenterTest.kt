@@ -328,6 +328,19 @@ class SegmenterTest {
     }
 
     @Test
+    fun aPauseCandidateClosesAnUnansweredForcedCutQuestion() {
+        // the judge never answers: forced-cut question at 3 s → pause candidate → speech resumes. One question per
+        // utterance: no new forced-cut question may be asked before the hard limit.
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> null })
+        // pause candidate at ~3.6 s, inside the 900 ms answer window of the 3 s question; ends at 4.7 s (< 6 s hard limit)
+        run(listOf(true to 3008, true to 208, false to 512, true to 1024), s)
+        assertEquals("forced-cut question + pause candidate only", 2, jobs.count { it.endOfSpeech })
+        assertTrue("the unanswered old question must not cut either", jobs.none { it.isFinal })
+    }
+
+    @Test
     fun draftsKeepComingWhileAJudgedForcedCutIsHeldOpen() {
         val jobs = ArrayList<AsrJob>()
         val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,

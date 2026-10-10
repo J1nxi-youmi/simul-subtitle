@@ -45,7 +45,7 @@ data class Timing(
     val mtMs: Long,
     /** from the last captured sample until MT finished (UI delivery is measured separately by the app) */
     val mtDoneMs: Long,
-    /** Jev mistranslation check of a final, including a retranslation it asked for (0 without Jev) */
+    /** the Jev mistranslation call of a final (0 without Jev); a retranslation it asked for is in [mtMs] */
     val checkMs: Long = 0,
 )
 
@@ -273,12 +273,14 @@ class Pipeline(
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the
      * matching note. Returns the text to show (the retry if it produced one, else [zh]).
      */
-    private fun checked(j: MtJob, zh: String, interim: (String) -> Unit): String {
+    private fun checked(j: MtJob, zh: String, judgeMs: (Long) -> Unit, interim: (String) -> Unit): String {
         val judge = judge ?: return zh
         if (zh.isEmpty()) return zh
         interim(zh) // live mode shows the first translation while Jev checks it
         val job = j.q.job
+        val c0 = clock()
         val call = judge.mistranslation(j.ja, zh)
+        judgeMs(clock() - c0) // the Jev call only; a retranslation below is translation time
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
         val note = call.choice?.let { FIX_NOTES[it] }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
@@ -287,7 +289,7 @@ class Pipeline(
         }
         logJev("mistranslation", job.segmentId, job.revision, call, "retranslate:${call.choice}")
         val r = translate(job, 2, j.ja, listOf(note))
-        return r?.takeIf { it.usable }?.let { dropEchoedNote(it.text, indexPrompt(j.ja, scene, listOf(note))) } ?: zh
+        return r?.takeIf { it.usable }?.text ?: zh
     }
 
     private fun mtLoop() {
@@ -298,15 +300,13 @@ class Pipeline(
             var checkMs = 0L
             val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList())
             if (!running) return
-            var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.let { dropEchoedNote(it.text, indexPrompt(j.ja, scene)) }
+            var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
             if (zh == null) {
                 if (!job.isFinal) continue
                 zh = "[翻译失败] ${j.ja}"
             } else if (job.isFinal) {
                 // the interim line takes the final's revision; the final then goes out as revision + 1
-                val c0 = clock()
-                zh = checked(j, zh) { onCaption(caption(j, false, job.revision, it, start, clock())) }
-                checkMs = clock() - c0
+                zh = checked(j, zh, { checkMs = it }) { onCaption(caption(j, false, job.revision, it, start, clock())) }
                 if (!running) return
             }
             val end = clock()

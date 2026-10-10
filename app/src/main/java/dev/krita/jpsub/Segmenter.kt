@@ -97,7 +97,8 @@ class Segmenter(
             // a held pause is bounded by maxHoldSilenceMs; no forced cut inside it (the final drops the silence)
             inPause && (durMs >= hardMaxMs || !holding(silMs)) -> finalize(speechEnd, continueSpeech = false)
             inPause -> if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
-                cutRevision = -1 // a newer candidate end replaces any open forced-cut question
+                // a newer candidate end replaces an open forced-cut question, and closes it for this utterance
+                if (cutRevision >= 0) { cutRevision = -1; cutClosed = true }
                 tailRevision = ++revision
                 tailAtFrames = frames.size
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))

@@ -148,6 +148,16 @@ class JevTest {
     }
 
     @Test
+    fun aCancelJustBeforeTheRequestIsRegisteredSendsNothing() {
+        lateinit var j: Jev
+        // cancel lands after the first "cancelled?" check but before the connection is registered
+        j = Jev(JevProvider.OFFICIAL, "sk-secret", 2_000, url = "http://127.0.0.1:$port/v1/systemone", onOpen = { j.cancel() })
+        assertEquals("cancelled", j.unfinished("はい").error)
+        Thread.sleep(200)
+        assertEquals("no request may reach the server", 0, hits.get())
+    }
+
+    @Test
     fun jsonRoundTrip() {
         val v = mapOf("s" to "引号\"\\\n\u0001", "n" to 1, "d" to 0.5, "b" to true, "z" to null, "l" to listOf(1, "a"))
         val back = Json.parse(Json.encode(v)) as Map<*, *>

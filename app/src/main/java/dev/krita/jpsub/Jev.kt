@@ -41,6 +41,8 @@ class Jev(
     private val deadlineMs: Long = 2_000,
     /** tests point this at a local server */
     private val url: String = provider.url,
+    /** tests: runs between the first cancel check and the registration of the connection */
+    private val onOpen: () -> Unit = {},
 ) : Judge {
     /** Every request in flight (the pipeline asks from two threads); cancel closes all of them. */
     private val inFlight: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -59,9 +61,11 @@ class Jev(
         var status = 0; var resp: String? = null
         // connect/read timeouts bound each phase; the timer bounds the whole call by closing the socket
         val c = URL(url).openConnection() as HttpURLConnection
-        val deadline = runCatching { timer.schedule(deadlineMs) { c.disconnect() } }.getOrNull()
+        onOpen()
         inFlight.add(c)
-        if (cancelled) c.disconnect() // cancel() ran between the check above and the registration
+        // cancel() may have run between the check above and the registration; nothing has been sent yet
+        if (cancelled) { inFlight.remove(c); return JevCall(body, 0, null, monoMs() - t0, "cancelled", null) }
+        val deadline = runCatching { timer.schedule(deadlineMs) { c.disconnect() } }.getOrNull()
         return try {
             c.instanceFollowRedirects = false // never resend the key to another host
             c.connectTimeout = deadlineMs.toInt(); c.readTimeout = deadlineMs.toInt()

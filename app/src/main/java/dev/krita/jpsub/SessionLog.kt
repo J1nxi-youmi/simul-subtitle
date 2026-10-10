@@ -30,11 +30,13 @@ class SessionLog(
         dir.mkdirs()
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         var i = 0
-        while (true) {
-            val name = "session-$ts" + (if (i == 0) "" else "-$i")
-            val d = File(dir, "$name.jsonl"); val p = File(dir, "$name.jsonl$PART")
-            if (!d.exists() && p.createNewFile()) { done = d; part = p; break }
-            i++
+        synchronized(NAMES) {
+            while (true) {
+                val name = "session-$ts" + (if (i == 0) "" else "-$i")
+                val d = File(dir, "$name.jsonl"); val p = File(dir, "$name.jsonl$PART")
+                if (!d.exists() && p.createNewFile()) { done = d; part = p; break }
+                i++
+            }
         }
     }
     @Volatile var file: File = part
@@ -42,14 +44,15 @@ class SessionLog(
     @Volatile var failed: String? = null
         private set
     private val queue = LinkedBlockingQueue<Any>(capacity)
-    private val end = Any()
+    /** set by [close]; the writer stops once the queue is empty, so no lost or cleared end marker can strand it */
+    @Volatile private var closing = false
     private val thread = Thread({
         var w: Writer? = null
         try {
             w = open(part)
             while (true) {
-                val e = queue.take()
-                if (e === end) break
+                val e = queue.poll(50, java.util.concurrent.TimeUnit.MILLISECONDS)
+                if (e == null) { if (closing || failed != null) break else continue }
                 w.write(e as String); w.write("\n")
                 if (queue.isEmpty()) w.flush() // a crash loses at most what is still queued
             }
@@ -64,12 +67,12 @@ class SessionLog(
     @Synchronized private fun fail(why: String) {
         if (failed != null) return
         failed = why
-        queue.clear() // the writer is dead or the log is already incomplete: free the memory, unblock close()
+        queue.clear() // the writer is dead or the log is already incomplete: free the memory
         onFail(why)
     }
 
     fun write(event: Map<String, Any?>) {
-        if (failed != null) return
+        if (failed != null || closing) return
         if (!queue.offer(Json.encode(mapOf("t" to monoMs()) + event))) fail("日志写入跟不上，后面的记录已丢弃")
     }
 
@@ -78,22 +81,24 @@ class SessionLog(
      * @return true only if every event was written and the file is complete; otherwise [failed] says why.
      */
     fun close(timeoutMs: Long = 3_000): Boolean {
-        val t0 = monoMs()
-        while (!queue.offer(end)) { // full only while the writer is stuck
-            if (failed != null) { queue.clear(); continue }
-            if (monoMs() - t0 >= timeoutMs) break
-            Thread.sleep(10)
-        }
-        thread.join((timeoutMs - (monoMs() - t0)).coerceAtLeast(1))
-        if (thread.isAlive) fail("关闭日志超时，文件可能不完整")
+        closing = true
+        thread.join(timeoutMs)
+        if (thread.isAlive) fail("关闭日志超时，文件可能不完整") // the writer still exits once the disk returns
         if (failed != null) return false
-        if (!part.renameTo(done)) { fail("无法完成日志文件"); return false }
-        file = done
+        // only this process writes the log dir: naming and finishing under one lock means no name is ever reused
+        val target = synchronized(NAMES) {
+            var t = done
+            var i = 1
+            while (t.exists()) t = File(done.parentFile, done.name.removeSuffix(".jsonl") + "-x${i++}.jsonl")
+            t.takeIf { part.renameTo(it) }
+        } ?: run { fail("无法完成日志文件"); return false }
+        file = target
         return true
     }
 
     companion object {
         private const val PART = ".part"
+        private val NAMES = Any()
         fun dir(root: File) = File(root, "logs")
         /** Newest first; includes unfinished `.part` files (see [complete]). */
         fun list(root: File): List<File> =

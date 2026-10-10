@@ -149,7 +149,7 @@ class CaptionService : Service() {
             if (stopping) return // onDestroy ran before the pipeline was visible to it
             pl.start()
             try {
-                capture(p, pl, vad)
+                capture(p, pl, vad, sl)
                 if (overloaded && !stopping) {
                     // Drain is bounded; afterwards it waits for in-progress native calls to return (cancelled, but
                     // not interruptible), so the count is final and nothing is delivered later.
@@ -180,7 +180,7 @@ class CaptionService : Service() {
 
     /** Blocking capture loop on the session thread; returns when stopping or on a read error. */
     @SuppressLint("MissingPermission") // checked in MainActivity
-    private fun capture(p: MediaProjection, pl: Pipeline, vad: SileroProb) {
+    private fun capture(p: MediaProjection, pl: Pipeline, vad: SileroProb, log: SessionLog) {
         val cfg = AudioPlaybackCaptureConfiguration.Builder(p)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -208,6 +208,7 @@ class CaptionService : Service() {
             val frame = FloatArray(seg.frameSize)
             val ts = AudioTimestamp()
             var framesRead = 0L
+            var statSq = 0.0; var statN = 0; var statMaxP = 0f
             // Non-blocking reads: stopping is only a flag, so onDestroy never touches AudioRecord and the
             // session thread is the only one that calls stop()/release().
             while (!stopping && !overloaded) {
@@ -227,7 +228,17 @@ class CaptionService : Service() {
                     (ts.nanoTime + (framesRead - ts.framePosition) * 1_000_000_000L / 16_000) / 1_000_000
                 } else monoMs() // read time: underestimates latency by the time spent in the AudioRecord buffer
                 val f = frame.copyOf()
-                seg.accept(f, vad.prob(f), capturedAt, estimated = !hal)
+                val prob = vad.prob(f)
+                seg.accept(f, prob, capturedAt, estimated = !hal)
+                // once every ~5 s: proves audio arrives and what the VAD makes of it (silence vs. no capture)
+                var e = 0.0; for (x in f) e += x * x
+                statSq += e; statN += f.size; if (prob > statMaxP) statMaxP = prob
+                if (framesRead % (16_000 * 5) < frame.size) {
+                    val rms = Math.sqrt(statSq / statN.coerceAtLeast(1))
+                    Log.i(TAG, "capture: frames=$framesRead rms=${"%.4f".format(rms)} vadMax=${"%.2f".format(statMaxP)} hal=$hal")
+                    log.write(mapOf("ev" to "capture", "samples" to framesRead, "rms" to rms, "vad_max" to statMaxP.toDouble(), "hal" to hal))
+                    statSq = 0.0; statN = 0; statMaxP = 0f
+                }
             }
             seg.flush()
         } finally {

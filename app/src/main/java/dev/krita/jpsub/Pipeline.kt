@@ -269,13 +269,24 @@ class Pipeline(
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>): MtResult? {
         val prompt = indexPrompt(ja, scene, notes)
+        // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
+        // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
+        // The pipeline (and so this cache) lives for one session, with one translator.
+        val hit = lastMt?.takeIf { it.seg == job.segmentId && it.prompt == prompt }
         val t0 = clock()
-        val r = mt.translate(prompt)
+        val r = hit?.result ?: mt.translate(prompt)
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "raw" to r?.raw, "stop" to r?.stop?.toString(), "prompt_tokens" to r?.promptTokens,
-            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs, "ms" to clock() - t0))
+            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs, "ms" to clock() - t0,
+            // reused: the token counts / prefill / decode are those of the earlier call (rev reused_from)
+            "reused" to (hit != null), "reused_from" to hit?.rev))
+        if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r)
         return r
     }
+
+    private class LastMt(val seg: Long, val rev: Int, val prompt: String, val result: MtResult)
+    /** MT thread only. */
+    private var lastMt: LastMt? = null
 
     /**
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the

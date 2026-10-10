@@ -505,6 +505,64 @@ class PipelineTest {
     }
 
     @Test
+    fun aFinalWithTheSameTextAsItsLastDraftReusesTheTranslation() {
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val drafted = CountDownLatch(1); val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() else drafted.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 10))
+        assertTrue(drafted.await(2, TimeUnit.SECONDS))
+        p.submit(job(1, 2, true, 10)) // speech ended: same audio, same recognized text
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(1, mt.calls.size)
+        assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
+    }
+
+    /** Returns null (cancel-like: nothing usable) for the first [failFirst] calls. */
+    private class FlakyMt(var failFirst: Int) : Mt {
+        val calls = Collections.synchronizedList(ArrayList<String>())
+        override fun translate(prompt: String): MtResult? {
+            calls.add(source(prompt))
+            return if (calls.size <= failFirst) MtResult("", 'f', 0, 0) else MtResult("zh(${source(prompt)})", 'e', 1, 1)
+        }
+        override fun cancel() {}
+    }
+
+    @Test
+    fun reuseIsPerSegmentAndNeverOfAFailure() {
+        val mt = FlakyMt(failFirst = 1)
+        val logs = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val finals = CountDownLatch(2)
+        val drafted = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) finals.countDown() else drafted.countDown() }, log = { logs.add(it) })
+        p.start()
+        p.submit(job(1, 1, false, 10)) // fails: nothing shown, nothing cached
+        Thread.sleep(100)
+        p.submit(job(1, 2, true, 10)) // so the final translates again
+        p.submit(job(2, 3, true, 10)) // same text in another segment: translated, not reused
+        assertTrue(finals.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(listOf("ja10", "ja10", "ja10"), mt.calls)
+        assertTrue(logs.filter { it["ev"] == "mt" }.none { it["reused"] == true })
+    }
+
+    @Test
+    fun aReusedFinalIsStillCheckedByJev() {
+        val mt = FakeMt(1); val judge = FakeJudge(choice = "ok")
+        val logs = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val drafted = CountDownLatch(1); val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() else drafted.countDown() }, judge = judge, log = { logs.add(it) })
+        p.start()
+        p.submit(job(1, 1, false, 10)); assertTrue(drafted.await(2, TimeUnit.SECONDS))
+        p.submit(job(1, 2, true, 10))
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(1, mt.calls.size)
+        assertTrue(judge.asked.toString(), judge.asked.contains("m:ja10|zh(ja10)"))
+        val reused = logs.single { it["ev"] == "mt" && it["reused"] == true }
+        assertEquals(1, reused["reused_from"]); assertEquals(2, reused["rev"])
+    }
+
+    @Test
     fun finalOnlySkipsDisplayDraftsButStillJudgesSentenceEnds() {
         val asr = CountingAsr(); val mt = FakeMt(1)
         val judge = FakeJudge(unfinishedP = 0.9)

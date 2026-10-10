@@ -694,7 +694,14 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQ_PROJECTION && resultCode == RESULT_OK && data != null) {
-            CaptionService.start(this, resultCode, data)
+            // Android 15: with "a single app" the chosen app can come to the front before this result arrives;
+            // then we count as background and the system refuses the foreground service. Say so instead of crashing.
+            try {
+                CaptionService.start(this, resultCode, data)
+            } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
+                status(R.color.err, "系统拦下了启动", "选完 App 后它先跑到了前台，Android 不允许此时开启字幕。回到这里再点一次「开始字幕」即可。")
+                return
+            }
             moveTaskToBack(true)
         }
     }

@@ -72,16 +72,13 @@ class ModelDownloader private constructor(ctx: Context) {
         }
     }
 
-    /** A DownloadManager job (pending / running / paused) for any model, whatever the mode needs: its .part must not be deleted. */
+    /**
+     * Any of this app's DownloadManager jobs still pending / running / paused, whatever the mode needs and also an
+     * orphan whose id was never saved: its .part must not be deleted. (The query only returns this app's jobs.)
+     */
     @Synchronized
-    fun anyTransfer(): Boolean = queued.isNotEmpty() || store.specs.any { s ->
-        val id = prefs.downloadId(s.path).takeIf { it >= 0 } ?: return@any false
-        dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
-            c.moveToFirst() && c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)).let {
-                it != DownloadManager.STATUS_SUCCESSFUL && it != DownloadManager.STATUS_FAILED
-            }
-        } ?: false
-    }
+    fun anyTransfer(): Boolean = queued.isNotEmpty() || (dm.query(DownloadManager.Query().setFilterByStatus(
+        DownloadManager.STATUS_RUNNING or DownloadManager.STATUS_PENDING or DownloadManager.STATUS_PAUSED))?.use { it.count > 0 } ?: false)
 
     /** Snapshot for the UI; also hands finished downloads to the verifier (once). */
     @Synchronized

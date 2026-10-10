@@ -12,8 +12,8 @@ android {
         applicationId = "dev.krita.jpsub"
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake {
@@ -61,6 +61,7 @@ android {
 dependencies {
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.google.android.material:material:1.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

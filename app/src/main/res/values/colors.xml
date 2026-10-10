@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand">#FF6D5DF6</color>
+    <color name="brand_pink">#FFEC4899</color>
+    <color name="bg">#FFF6F5FB</color>
+    <color name="card">#FFFFFFFF</color>
+    <color name="text">#FF1C1B22</color>
+    <color name="text2">#FF6B6878</color>
+    <color name="ok">#FF16A34A</color>
+    <color name="warn">#FFD97706</color>
+    <color name="err">#FFDC2626</color>
+</resources>

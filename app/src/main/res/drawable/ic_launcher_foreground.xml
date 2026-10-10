@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Safe zone is the centre 66dp circle (21..87). A speech bubble carrying a sound wave and two subtitle lines. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- bubble -->
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M36,30h36a10,10 0 0,1 10,10v22a10,10 0 0,1 -10,10h-18l-10,9v-9h-8a10,10 0 0,1 -10,-10v-22a10,10 0 0,1 10,-10z" />
+    <!-- sound wave (Japanese audio) -->
+    <path android:fillColor="#FF6D5DF6" android:pathData="M38,44h3v8h-3zM44,40h3v16h-3zM50,43h3v10h-3z" />
+    <!-- subtitle lines (Chinese text) -->
+    <path android:fillColor="#FFEC4899" android:pathData="M58,43h14a2,2 0 0,1 0,4h-14a2,2 0 0,1 0,-4z" />
+    <path android:fillColor="#FFB4ACFA" android:pathData="M58,50h10a2,2 0 0,1 0,4h-10a2,2 0 0,1 0,-4z" />
+    <path android:fillColor="#FF8B5CF6" android:pathData="M38,61h34a2,2 0 0,1 0,4h-34a2,2 0 0,1 0,-4z" />
+</vector>

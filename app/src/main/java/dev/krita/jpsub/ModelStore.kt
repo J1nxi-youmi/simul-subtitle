@@ -1,0 +1,85 @@
+package dev.krita.jpsub
+
+import java.io.File
+import java.security.MessageDigest
+
+/** One model file: where it lives in the app's files dir, where it comes from, and what it must be. */
+class ModelSpec(val path: String, val url: String, val size: Long, val sha256: String)
+
+/**
+ * The fixed model set, pinned to exact revisions so a download is byte-identical to what was measured.
+ * A file counts as installed only once it has been verified and published under [ModelSpec.path];
+ * downloads land in "<path>.part" first, so a half-written or wrong file never reaches the native code.
+ */
+class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
+    fun file(s: ModelSpec) = File(root, s.path)
+    fun partFile(s: ModelSpec) = File(root, s.path + ".part")
+
+    /** Cheap check (no hashing) used on every screen resume: right size at the final path. */
+    fun isInstalled(s: ModelSpec) = file(s).let { it.isFile && it.length() == s.size }
+    fun missing() = specs.filter { !isInstalled(it) }
+    fun ready() = missing().isEmpty()
+    fun totalBytes() = specs.sumOf { it.size }
+    fun installedBytes() = specs.filter(::isInstalled).sumOf { it.size }
+
+    /**
+     * Verifies a finished download in [partFile] and, only if size and SHA-256 match, renames it to the final
+     * path. A bad file is renamed to "<path>.bad" (kept for inspection, overwritten by the next attempt).
+     * Slow for the 1.1 GB model: call off the main thread.
+     */
+    fun publish(s: ModelSpec): Result {
+        val part = partFile(s)
+        if (!part.isFile) return Result.Missing
+        if (part.length() != s.size) return reject(s, part, Result.WrongSize(part.length()))
+        val got = sha256(part)
+        if (!got.equals(s.sha256, ignoreCase = true)) return reject(s, part, Result.WrongHash(got))
+        val dst = file(s)
+        dst.parentFile?.mkdirs()
+        if (!part.renameTo(dst)) return Result.Io("无法写入 ${dst.path}")
+        return Result.Ok
+    }
+
+    private fun reject(s: ModelSpec, part: File, r: Result): Result {
+        val bad = File(root, s.path + ".bad")
+        bad.delete() // previous rejected attempt for the same file only
+        part.renameTo(bad)
+        return r
+    }
+
+    sealed class Result {
+        object Ok : Result()
+        object Missing : Result()
+        data class WrongSize(val got: Long) : Result()
+        data class WrongHash(val got: String) : Result()
+        data class Io(val msg: String) : Result()
+    }
+
+    companion object {
+        private const val ASR = "https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en/resolve/12b44671ff48b9aed622551d64e02fea9a2cf870"
+        private const val MT = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/265b2e615a7dc9b06c435dc878829ad99a512ba2"
+
+        val MODELS = listOf(
+            ModelSpec("asr/encoder.int8.onnx", "$ASR/encoder-epoch-35-avg-1.int8.onnx", 70_876_409,
+                "ead1579e118b821a767242a8eb9272634b0e63ba16f8dfc4d126732406eae268"),
+            ModelSpec("asr/decoder.onnx", "$ASR/decoder-epoch-35-avg-1.onnx", 5_165_084,
+                "90b60985672df5023e187e9d25aa2dc93abc4286bfacf71a35a78a6b76d88df5"),
+            ModelSpec("asr/joiner.int8.onnx", "$ASR/joiner-epoch-35-avg-1.int8.onnx", 1_033_417,
+                "c7f4ba40a8ae307a6c30b5c06e2570add04466bcb45bab62699f0ec5d00ed495"),
+            ModelSpec("asr/tokens.txt", "$ASR/tokens.txt", 26_631,
+                "144f8a4f639373a1bdf7eabb2437482ef64b0cc5db24ad27cce65f293e4faa24"),
+            ModelSpec("vad/silero_vad.onnx", "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", 643_854,
+                "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"),
+            ModelSpec("mt/hy-mt.gguf", "$MT/HY-MT1.5-1.8B-Q4_K_M.gguf", 1_133_080_512,
+                "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"),
+        )
+
+        fun sha256(f: File): String {
+            val md = MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { input ->
+                val buf = ByteArray(1 shl 20)
+                while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) }
+            }
+            return md.digest().joinToString("") { "%02x".format(it) }
+        }
+    }
+}

@@ -59,7 +59,8 @@ class CaptionService : Service() {
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
 
-    private var overlay: TextView? = null
+    private var overlay: CaptionOverlayView? = null
+    private val prefs by lazy { Prefs(this) }
     @Volatile private var status = "加载模型…"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -79,16 +80,18 @@ class CaptionService : Service() {
             override fun onStop() { stopSelf() } // user revoked sharing
         }, main)
         projection = p
+        running = true
         showOverlay()
         Thread({ session(p) }, "jpsub-session").start()
         return START_NOT_STICKY
     }
 
     private fun session(p: MediaProjection) {
-        val files = ModelFiles(getExternalFilesDir(null)!!)
-        val missing = files.missing()
+        val root = getExternalFilesDir(null)!!
+        val files = ModelFiles(root)
+        val missing = ModelStore(root).missing()
         if (missing.isNotEmpty()) {
-            setStatus("缺少模型文件：\n" + missing.joinToString("\n") { it.path })
+            setStatus("模型未下载完整，请回到 App 首页下载：\n" + missing.joinToString("、") { it.path.substringAfterLast('/') })
             return
         }
         var vad: SileroProb? = null
@@ -242,34 +245,24 @@ class CaptionService : Service() {
     private fun refresh() = main.post {
         val v = overlay ?: return@post
         val shown = board.snapshot()
-        val sb = SpannableStringBuilder()
-        for (c in shown) {
-            if (sb.isNotEmpty()) sb.append('\n')
-            val start = sb.length
-            sb.append(c.zh)
-            if (!c.isFinal) sb.setSpan(ForegroundColorSpan(0xFFBBBBBB.toInt()), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
+        val showJa = prefs.showJa
+        val lines = shown.map { CaptionOverlayView.Line(it.zh, if (showJa) it.ja else null, it.isFinal) }
+        // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
-            shown.lastOrNull()?.let { c ->
+            if (prefs.showStats) shown.lastOrNull()?.let { c ->
                 val t = c.timing
-                if (isNotEmpty()) append("  ")
-                append("识别${t.asrMs}ms 翻译${t.mtMs}ms")
+                if (isNotEmpty()) append("  ·  ")
+                append("识别 ${t.asrMs}ms · 翻译 ${t.mtMs}ms")
                 // capture → this text update, for the caption actually rendered now; "~" = no HAL timestamp
                 lastUpdateMs[c.segmentId to c.revision]?.let { ms ->
-                    append(" 延迟${if (c.timeEstimated) "~" else ""}${"%.1f".format(ms / 1000.0)}s")
+                    append(" · 延迟 ${if (c.timeEstimated) "~" else ""}${"%.1f".format(ms / 1000.0)}s")
                 }
             }
-            if (backlog >= 2 && !overloaded) append("  ⚠处理跟不上(积压$backlog 句)")
+            if (backlog >= 2 && !overloaded) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 处理跟不上（积压 $backlog 句）")
         }
-        if (diag.isNotEmpty()) {
-            if (sb.isNotEmpty()) sb.append('\n')
-            val start = sb.length
-            sb.append(diag)
-            sb.setSpan(RelativeSizeSpan(0.55f), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.setSpan(ForegroundColorSpan(0xFF88CCFF.toInt()), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        v.text = sb
+        if (lines.isEmpty() && status.isEmpty()) v.setLines(listOf(CaptionOverlayView.Line("正在听…", null, false)), diag.ifEmpty { null })
+        else v.setLines(lines, diag.ifEmpty { null })
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {
@@ -282,43 +275,35 @@ class CaptionService : Service() {
         if (lastUpdateMs.size > 64) lastUpdateMs.keys.removeAll { k -> shown.none { it.segmentId to it.revision == k } }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
     private fun showOverlay() {
         val wm = getSystemService(WindowManager::class.java)
-        val tv = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            setBackgroundColor(0x99000000.toInt())
-            setPadding(24, 12, 24, 12)
-            gravity = Gravity.CENTER
-            setShadowLayer(4f, 0f, 0f, Color.BLACK)
-        }
+        val dm = resources.displayMetrics
+        val v = CaptionOverlayView(this, interactive = true)
+        v.applyStyle(prefs.textSp, prefs.bgAlpha)
+        val width = (dm.widthPixels * prefs.widthFrac).toInt()
         val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+            width,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP
-            y = resources.displayMetrics.heightPixels * 2 / 3
+            gravity = Gravity.TOP or Gravity.START
+            x = prefs.overlayX.takeIf { it >= 0 } ?: ((dm.widthPixels - width) / 2)
+            y = prefs.overlayY.takeIf { it >= 0 } ?: (dm.heightPixels * 2 / 3)
         }
-        // Drag vertically to move; long-press to stop.
-        var downY = 0f; var startY = 0; var downAt = 0L; var moved = false
-        tv.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { downY = e.rawY; startY = lp.y; downAt = e.eventTime; moved = false }
-                MotionEvent.ACTION_MOVE -> {
-                    val dy = (e.rawY - downY).toInt()
-                    if (kotlin.math.abs(dy) > 10) moved = true
-                    lp.y = startY + dy; wm.updateViewLayout(tv, lp)
-                }
-                MotionEvent.ACTION_UP -> if (!moved && e.eventTime - downAt > 800) stopSelf()
-            }
-            true
+        fun clamp() {
+            lp.width = lp.width.coerceIn((dm.widthPixels * 0.35f).toInt(), dm.widthPixels)
+            lp.x = lp.x.coerceIn(0, (dm.widthPixels - lp.width).coerceAtLeast(0))
+            lp.y = lp.y.coerceIn(0, (dm.heightPixels - v.height.coerceAtLeast(1)).coerceAtLeast(0))
         }
-        wm.addView(tv, lp)
-        overlay = tv
+        v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; clamp(); wm.updateViewLayout(v, lp) }
+        v.onResize = { dw -> lp.width += dw; clamp(); wm.updateViewLayout(v, lp) }
+        v.onMoveEnd = { prefs.overlayX = lp.x; prefs.overlayY = lp.y; prefs.widthFrac = lp.width.toFloat() / dm.widthPixels }
+        v.onStyleChanged = { prefs.textSp = v.textSp; prefs.bgAlpha = v.bgAlpha }
+        v.onStop = { stopSelf() }
+        wm.addView(v, lp)
+        overlay = v
         refresh()
     }
 
@@ -326,6 +311,7 @@ class CaptionService : Service() {
         // Never block the main thread and never free native objects here: the session thread
         // notices `stopping`, finishes, waits for the pipeline workers and releases everything itself.
         stopping = true
+        running = false
         // Only flags + an atomic store into a still-alive translator (the session thread detaches it under the
         // same lock before freeing). The session thread notices `stopping` within ~10 ms (non-blocking reads).
         synchronized(cancelLock) { pipeline?.stop() ?: translator?.cancel() }
@@ -343,9 +329,11 @@ class CaptionService : Service() {
             this, 0, Intent(this, CaptionService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, "cap")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_caption)
+            .setColor(getColor(R.color.brand))
             .setContentTitle("日语字幕运行中")
-            .setContentText("长按字幕或点“停止”结束")
+            .setContentText("点字幕可调整样式；点这里的「停止」结束")
+            .setContentIntent(PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .addAction(Notification.Action.Builder(null, "停止", stop).build())
             .setOngoing(true)
             .build()
@@ -361,10 +349,18 @@ class CaptionService : Service() {
         private const val MT_THREADS = 4
         private const val DRAIN_TIMEOUT_MS = 60_000L
 
+        /** true from start until onDestroy (main thread); the home screen uses it to show 开始/停止. */
+        @Volatile var running = false
+            private set
+
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(
                 Intent(ctx, CaptionService::class.java).putExtra(EXTRA_CODE, code).putExtra(EXTRA_DATA, data),
             )
+        }
+
+        fun stop(ctx: Context) {
+            ctx.startService(Intent(ctx, CaptionService::class.java).setAction(ACTION_STOP))
         }
     }
 }

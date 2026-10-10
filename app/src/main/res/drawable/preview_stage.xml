@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- stands in for a video frame behind the subtitle preview -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="16dp" />
+    <gradient android:angle="315" android:startColor="#FF2B3A67" android:centerColor="#FF5C4B8A" android:endColor="#FFB9846F" />
+</shape>

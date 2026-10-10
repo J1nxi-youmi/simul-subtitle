@@ -16,6 +16,7 @@ import java.io.File
  *   vad/silero_vad.onnx
  *   mt/hy-mt.gguf  (HY-MT1.5-1.8B)
  */
+/** Final model paths; the files are downloaded, verified and published by [ModelStore] (same paths). */
 class ModelFiles(root: File) {
     val encoder = File(root, "asr/encoder.int8.onnx")
     val decoder = File(root, "asr/decoder.onnx")
@@ -23,7 +24,6 @@ class ModelFiles(root: File) {
     val tokens = File(root, "asr/tokens.txt")
     val vad = File(root, "vad/silero_vad.onnx")
     val mt = File(root, "mt/hy-mt.gguf")
-    fun missing(): List<File> = listOf(encoder, decoder, joiner, tokens, vad, mt).filter { !it.isFile }
 }
 
 class SherpaAsr(m: ModelFiles, threads: Int) : Asr {

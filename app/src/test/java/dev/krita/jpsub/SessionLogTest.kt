@@ -36,9 +36,9 @@ class SessionLogTest {
         log.write(mapOf("ev" to "x"))
         val open = SessionLog.list(root).single()
         assertFalse(SessionLog.complete(open))
-        assertEquals(open, SessionLog.active) // the home screen does not offer it for sharing
+        assertTrue(SessionLog.isActive(open)) // the home screen does not offer it for sharing
         assertTrue(log.close())
-        assertNull(SessionLog.active)
+        assertFalse(SessionLog.isActive(open))
         val done = SessionLog.list(root).single()
         assertTrue(SessionLog.complete(done))
         assertFalse(open.exists()) // a URI made from the listed .part before close would point at nothing
@@ -77,8 +77,24 @@ class SessionLogTest {
         assertFalse(log.close(timeoutMs = 200))
         assertNotNull(reported.get())
         // the disk recovers: the writer must still finish and close the file, not wait for events forever
+        assertTrue("a file whose writer is still alive must not be shareable", SessionLog.isActive(log.file))
         never.countDown()
         assertTrue("writer never closed", closed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val until = System.currentTimeMillis() + 2000
+        while (SessionLog.isActive(log.file) && System.currentTimeMillis() < until) Thread.sleep(10)
+        assertFalse("released once the writer has really exited", SessionLog.isActive(log.file))
+    }
+
+    @Test
+    fun anOlderSessionStillFinishingStaysProtectedWhenANewOneStarts() {
+        val root = tmp.newFolder()
+        val old = SessionLog(SessionLog.dir(root))
+        val new = SessionLog(SessionLog.dir(root))
+        assertTrue(SessionLog.isActive(old.file)); assertTrue(SessionLog.isActive(new.file))
+        assertTrue(new.close())
+        assertTrue(SessionLog.isActive(old.file))
+        assertTrue(old.close())
+        assertFalse(SessionLog.isActive(old.file))
     }
 
     @Test

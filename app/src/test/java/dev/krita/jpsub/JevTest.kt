@@ -92,8 +92,46 @@ class JevTest {
     @Test
     fun aStoppedOnlineTranslatorSendsNothingMore() {
         val t = online(); t.cancel()
-        assertNull(t.translate("x"))
+        val r = t.translate("x")!!
+        assertFalse(r.usable); assertEquals("cancelled", r.error)
         Thread.sleep(200); assertEquals(0, hits.get())
+    }
+
+    @Test
+    fun aCancelledOnlineRequestIsStillLoggedWithWhatWasSent() {
+        delayMs = 3_000
+        val t = online(deadline = 5_000)
+        val r = AtomicReference<MtResult?>()
+        val th = Thread { r.set(t.translate("请翻译\n\n本当に？")) }.apply { start() }
+        val until = monoMs() + 2_000
+        while (hits.get() < 1 && monoMs() < until) Thread.sleep(10)
+        t.cancel(); th.join(2_000)
+        val res = r.get()!!
+        assertFalse(res.usable); assertEquals("cancelled", res.error)
+        assertTrue(res.request!!.contains("本当に"))
+    }
+
+    @Test
+    fun aHangingDnsLookupStillEndsAtTheDeadlineAndOnStop() {
+        val dnsEntered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val dns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<java.net.InetAddress> { dnsEntered.countDown(); release.await(); return okhttp3.Dns.SYSTEM.lookup(hostname) }
+        }
+        try {
+            val t0 = monoMs()
+            val a = Calls(300, dns, java.net.Proxy.NO_PROXY).post("http://never.invalid/x", "{}", emptyMap())
+            assertTrue("deadline: took ${monoMs() - t0} ms", monoMs() - t0 < 1_000)
+            assertEquals("the lookup is what hangs", 0L, dnsEntered.count)
+            assertTrue("${a.error}", a.error?.startsWith("deadline") == true)
+            val c = Calls(5_000, dns, java.net.Proxy.NO_PROXY)
+            val r = AtomicReference<HttpResult?>()
+            val th = Thread { r.set(c.post("http://never.invalid/y", "{}", emptyMap())) }.apply { start() }
+            Thread.sleep(100)
+            val t1 = monoMs(); c.cancel(); th.join(1_000)
+            assertFalse(th.isAlive); assertTrue("stop: took ${monoMs() - t1} ms", monoMs() - t1 < 500)
+            assertEquals("cancelled", r.get()?.error)
+        } finally { release.countDown() }
     }
 
     @Test
@@ -207,6 +245,10 @@ class JevTest {
         reply = { 401 to """{"error":"invalid key sk-secret"}""" }
         val c = jev().unfinished("はい")
         assertEquals(401, c.status); assertFalse(c.response!!, c.response!!.contains("sk-secret"))
+        // a JSON-escaped echo is the same key
+        reply = { 401 to """{"error":"invalid key \u0073k-secret","sk-secret":1}""" }
+        val e = jev().unfinished("はい")
+        assertFalse(e.response!!, e.response!!.contains("sk-secret") || Json.parse(e.response!!).toString().contains("sk-secret"))
         server.close() // connection refused: only the exception type is logged
         val d = jev().unfinished("はい")
         assertTrue(d.error!!, d.error!!.matches(Regex("[A-Za-z.]+")))

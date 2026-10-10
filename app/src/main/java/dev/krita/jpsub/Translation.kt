@@ -93,7 +93,8 @@ class OnlineTranslator(
             "chat_template_kwargs" to mapOf("enable_thinking" to false),
         ))
         val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"))
-        if (r.error == "cancelled") return null
+        // a stopped call is still logged with what was sent; the pipeline checks running before showing anything
+        if (r.error == "cancelled") return MtResult("", 'f', null, null, request = body, http = r.status, error = "cancelled")
         val j = r.body?.let { runCatching { Json.parse(it) as? Map<*, *> }.getOrNull() }
         val choice = (j?.get("choices") as? List<*>)?.firstOrNull() as? Map<*, *>
         val content = (choice?.get("message") as? Map<*, *>)?.get("content") as? String

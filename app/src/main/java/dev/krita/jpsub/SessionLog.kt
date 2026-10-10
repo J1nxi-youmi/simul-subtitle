@@ -41,7 +41,7 @@ class SessionLog(
     }
     @Volatile var file: File = part
         private set
-    init { active = part }
+    init { ACTIVE.add(part) }
     @Volatile var failed: String? = null
         private set
     private val queue = LinkedBlockingQueue<Any>(capacity)
@@ -62,6 +62,8 @@ class SessionLog(
             fail(t.message ?: t.toString())
         } finally {
             runCatching { w?.close() }.onFailure { fail(it.toString()) }
+            // nothing writes this file any more; a complete close() renames it first (under NAMES)
+            if (closing && failed != null) ACTIVE.remove(part)
         }
     }, "jpsub-log").apply { isDaemon = true; start() }
 
@@ -81,7 +83,12 @@ class SessionLog(
      * Writes everything queued, then closes the file. Call once, after the pipeline workers have exited.
      * @return true only if every event was written and the file is complete; otherwise [failed] says why.
      */
-    fun close(timeoutMs: Long = 3_000): Boolean = try { finish(timeoutMs) } finally { if (active == part) active = null }
+    fun close(timeoutMs: Long = 3_000): Boolean {
+        val ok = finish(timeoutMs)
+        // a writer still stuck on the disk keeps the file protected; it releases it itself when it exits
+        if (!thread.isAlive) ACTIVE.remove(part)
+        return ok
+    }
 
     private fun finish(timeoutMs: Long): Boolean {
         closing = true
@@ -93,7 +100,7 @@ class SessionLog(
             var t = done
             var i = 1
             while (t.exists()) t = File(done.parentFile, done.name.removeSuffix(".jsonl") + "-x${i++}.jsonl")
-            t.takeIf { part.renameTo(it) }
+            t.takeIf { part.renameTo(it) }?.also { ACTIVE.remove(part) }
         } ?: run { fail("无法完成日志文件"); return false }
         file = target
         return true
@@ -104,11 +111,13 @@ class SessionLog(
         private val NAMES = Any()
         fun dir(root: File) = File(root, "logs")
         /**
-         * The `.part` file a session is writing right now, null when none: it is still growing and is renamed on close,
-         * so it must not be shared (a shared URI would point at a file that is about to move).
+         * `.part` files whose session may still write them (running, closing, or a writer stuck on the disk): they grow
+         * and are renamed on close, so they must not be shared (a shared URI would point at a file that is about to move).
          */
-        @Volatile var active: File? = null
-            private set
+        private val ACTIVE: MutableSet<File> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        fun isActive(f: File) = f in ACTIVE
+        /** for change detection on the home screen */
+        fun activeFiles(): Set<File> = ACTIVE.toSet()
         /** Newest first; includes unfinished `.part` files (see [complete]). */
         fun list(root: File): List<File> =
             dir(root).listFiles { f -> f.name.endsWith(".jsonl") || f.name.endsWith(".jsonl$PART") }

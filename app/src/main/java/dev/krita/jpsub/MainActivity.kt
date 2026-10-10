@@ -101,7 +101,7 @@ class MainActivity : Activity() {
             // the translation switches are disabled while a session runs
             if (CaptionService.running != translateRunning) renderTranslate()
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
-            val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.active
+            val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.activeFiles()
             if (now != listedLogs) renderLogs()
             main.postDelayed(this, 800)
         }
@@ -345,7 +345,7 @@ class MainActivity : Activity() {
         val box = findViewById<LinearLayout>(R.id.logList)
         box.removeAllViews()
         val files = SessionLog.list(getExternalFilesDir(null)!!)
-        val active = SessionLog.active
+        val active = SessionLog.activeFiles()
         listedLogs = files.map { it.name } to active
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
@@ -367,14 +367,14 @@ class MainActivity : Activity() {
                 // .part: still running, or the session failed / was killed before the log was finished
                 text = "%.1f KB".format(f.length() / 1024.0) + when {
                     complete -> ""
-                    f == active -> " · 正在记录，结束后可分享"
+                    f in active -> " · 正在记录，结束后可分享"
                     else -> " · 未完成（中断）"
                 }
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "分享"; isEnabled = f != active; setOnClickListener { share(f) }
+                text = "分享"; isEnabled = f !in active; setOnClickListener { share(f) }
             })
             box.addView(row)
         }
@@ -384,12 +384,12 @@ class MainActivity : Activity() {
         })
     }
     private var showAllLogs = false
-    private var listedLogs: Pair<List<String>, java.io.File?>? = null
+    private var listedLogs: Pair<List<String>, Set<java.io.File>>? = null
     private var translateRunning = false
 
     private fun share(f: java.io.File) {
         // the list may be up to one tick old: never hand out a URI for a file that is being written or no longer exists
-        if (f == SessionLog.active || !f.isFile) {
+        if (SessionLog.isActive(f) || !f.isFile) {
             Toast.makeText(this, "这个记录刚刚结束或已变动，请重新选择", Toast.LENGTH_SHORT).show(); renderLogs(); return
         }
         val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.logs", f)

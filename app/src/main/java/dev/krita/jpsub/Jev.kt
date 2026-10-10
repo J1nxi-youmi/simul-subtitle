@@ -1,12 +1,17 @@
 package dev.krita.jpsub
 
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -58,17 +63,29 @@ class Jev(
         // an illegal header value would make the HTTP library put the key into its exception message
         if (!validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
         val r = calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"), beforeSend)
-        // a server may echo the key back in an error; the session log is shareable
-        val resp = r.body?.replace(apiKey, "***")
-        val answer = if (r.status == 200 && resp != null)
-            runCatching { ((Json.parse(resp) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
+        val answer = if (r.status == 200 && r.body != null)
+            runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null
-        return JevCall(body, r.status, resp, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer)
+        // a server may echo the key back (also JSON-escaped); the session log is shareable
+        return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer)
     }
 
     companion object {
         /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
+
+        /** [body] for the log without [secret]: decoded JSON is cleaned value by value (escapes cannot hide it). */
+        fun redact(body: String, secret: String): String {
+            fun clean(v: Any?): Any? = when (v) {
+                is String -> v.replace(secret, "***")
+                is Map<*, *> -> v.entries.associate { (k, x) -> k.toString().replace(secret, "***") to clean(x) }
+                is List<*> -> v.map(::clean)
+                else -> v
+            }
+            // only a JSON object/array is re-encoded (org.json also "parses" a bare word as a string)
+            val parsed = runCatching { Json.parse(body) }.getOrNull()
+            return if (parsed is Map<*, *> || parsed is List<*>) Json.encode(clean(parsed)) else body.replace(secret, "***")
+        }
         /** Wording tuned on 140 labelled segment pairs without the following text (AUC 0.96, /tmp/jps/case/decision-bench.md). */
         val UNFINISHED = mapOf(
             "type" to "noul",
@@ -102,50 +119,68 @@ class HttpResult(val status: Int, val body: String?, val ms: Long, val error: St
 /**
  * POSTs of one session (Jev and online MT). Each request is an OkHttp [Call], registered before it runs:
  * [cancel] marks the session stopped and cancels every registered call, and a call cancelled before it is
- * executed never sends anything (OkHttp's cancellation is terminal). Data already sent cannot be taken back.
+ * enqueued never sends anything (OkHttp's cancellation is terminal). Data already sent cannot be taken back.
+ * The caller waits at most [deadlineMs] (and returns at once on [cancel]) even where OkHttp cannot interrupt the
+ * work, e.g. a blocking DNS lookup: that keeps only an OkHttp dispatcher thread busy until the lookup returns.
  */
-class Calls(private val deadlineMs: Long) {
+class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypass a system proxy */ proxy: java.net.Proxy? = null) {
     private val client = OkHttpClient.Builder()
         .callTimeout(deadlineMs, TimeUnit.MILLISECONDS) // the whole call, including a slowly trickling body
         .followRedirects(false).followSslRedirects(false) // never resend a key to another host
         .retryOnConnectionFailure(false)
+        .dns(dns).apply { proxy?.let { proxy(it) } }
         .build()
-    private val inFlight: MutableSet<Call> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** registered calls and the latch their caller waits on */
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<Call, CountDownLatch>()
     @Volatile private var cancelled = false
 
-    fun cancel() { cancelled = true; inFlight.forEach { it.cancel() } }
+    fun cancel() { cancelled = true; inFlight.forEach { (c, l) -> c.cancel(); l.countDown() } }
 
     fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {}): HttpResult {
         val t0 = monoMs()
         val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
             .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
         val call = client.newCall(req)
-        inFlight.add(call)
-        // cancel() either saw the call in the set or set the flag before this check
+        val done = CountDownLatch(1)
+        val result = AtomicReference<HttpResult?>()
+        inFlight[call] = done
+        // cancel() either saw the call in the map or set the flag before this check
         if (cancelled) call.cancel()
-        var status = 0
-        return try {
+        try {
             beforeSend()
-            call.execute().use { resp ->
-                status = resp.code
-                val src = resp.body?.source()
-                // a real answer is a few KB; anything far larger is not one
-                if (src != null && src.request(MAX_RESPONSE + 1L)) throw IOException("too large")
-                HttpResult(status, src?.buffer?.readUtf8(), monoMs() - t0, null)
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    result.set(HttpResult(0, null, monoMs() - t0, why(e, t0))); done.countDown()
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    val r = try {
+                        response.use { resp ->
+                            val src = resp.body?.source()
+                            // a real answer is a few KB; anything far larger is not one
+                            if (src != null && src.request(MAX_RESPONSE + 1L)) HttpResult(resp.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes")
+                            else HttpResult(resp.code, src?.buffer?.readUtf8(), monoMs() - t0, null)
+                        }
+                    } catch (e: IOException) { HttpResult(response.code, null, monoMs() - t0, why(e, t0)) }
+                    result.set(r); done.countDown()
+                }
+            })
+            // a little past the call timeout so OkHttp's own answer normally wins; cancel() wakes this at once
+            done.await(deadlineMs + 200, TimeUnit.MILLISECONDS)
+            return when {
+                cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled")
+                else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms") }
             }
-        } catch (e: IOException) {
-            val why = when {
-                cancelled -> "cancelled"
-                // callTimeout cancels the call itself, so it is told apart by elapsed time, not isCanceled()
-                monoMs() - t0 >= deadlineMs - 50 -> "deadline ${deadlineMs}ms"
-                call.isCanceled() -> "cancelled"
-                e.message == "too large" -> "response over $MAX_RESPONSE bytes"
-                else -> e.javaClass.name
-            }
-            HttpResult(status, null, monoMs() - t0, why)
         } finally {
             inFlight.remove(call)
         }
+    }
+
+    private fun why(e: IOException, t0: Long) = when {
+        cancelled -> "cancelled"
+        // callTimeout cancels the call itself, so it is told apart by elapsed time, not isCanceled()
+        monoMs() - t0 >= deadlineMs - 50 -> "deadline ${deadlineMs}ms"
+        e.message == "Canceled" -> "cancelled"
+        else -> e.javaClass.name
     }
 
     companion object {

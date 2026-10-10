@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <vector>
 #include "llama.h"
@@ -63,6 +64,7 @@ Java_dev_krita_jpsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong 
     char reason = 'e';
     std::string out;
     int nPrompt = 0, nOut = 0;
+    long prefillMs = 0, decodeMs = 0;
     std::vector<llama_token> toks(prompt.size() + 16);
     int n = llama_tokenize(t->vocab, prompt.c_str(), (int) prompt.size(), toks.data(), (int) toks.size(),
                            /*add_special*/ false, /*parse_special*/ true);
@@ -75,10 +77,12 @@ Java_dev_krita_jpsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong 
         llama_memory_clear(llama_get_memory(t->ctx), true);
         llama_sampler_reset(t->smpl);
         // Prefill in n_batch chunks; abort_callback makes decode return non-zero mid-prefill when cancelled.
+        auto p0 = std::chrono::steady_clock::now();
         for (int i = 0; i < n && reason == 'e'; i += N_BATCH) {
             int m = std::min(N_BATCH, n - i);
             if (llama_decode(t->ctx, llama_batch_get_one(toks.data() + i, m)) != 0) reason = 'f';
         }
+        prefillMs = (long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - p0).count();
         char buf[256];
         for (int i = 0; reason == 'e'; i++) {
             if (i == maxTokens) { reason = 'l'; break; }
@@ -90,12 +94,13 @@ Java_dev_krita_jpsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong 
             nOut++;
             if (llama_decode(t->ctx, llama_batch_get_one(&id, 1)) != 0) reason = 'f';
         }
+        decodeMs = (long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - p0).count() - prefillMs;
     }
     if (t->cancel.load()) return nullptr;
     std::string res(1, reason);
     res += out;
     res += '\0';
-    res += std::to_string(nPrompt) + "," + std::to_string(nOut);
+    res += std::to_string(nPrompt) + "," + std::to_string(nOut) + "," + std::to_string(prefillMs) + "," + std::to_string(decodeMs);
     jbyteArray arr = env->NewByteArray((jsize) res.size());
     env->SetByteArrayRegion(arr, 0, (jsize) res.size(), reinterpret_cast<const jbyte *>(res.data()));
     return arr;

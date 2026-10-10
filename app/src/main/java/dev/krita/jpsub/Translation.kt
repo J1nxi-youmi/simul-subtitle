@@ -42,7 +42,8 @@ fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "
  * One translation call as the native code reported it. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
  * [raw] is the model output exactly as generated (kept for the session log); [text] is what a caption shows.
  */
-class MtResult(val raw: String, val stop: Char, val promptTokens: Int, val outputTokens: Int) {
+class MtResult(val raw: String, val stop: Char, val promptTokens: Int, val outputTokens: Int,
+               val prefillMs: Long = 0, val decodeMs: Long = 0) {
     val text: String get() = stripThink(raw)
 
     /** Text usable as a caption: generation ended normally or ran into the token cap (kept, it is mostly complete). */
@@ -51,8 +52,9 @@ class MtResult(val raw: String, val stop: Char, val promptTokens: Int, val outpu
     companion object {
         fun parse(b: ByteArray): MtResult {
             val nul = b.indexOf(0)
-            val counts = String(b, nul + 1, b.size - nul - 1, Charsets.US_ASCII).split(',')
-            return MtResult(String(b, 1, nul - 1, Charsets.UTF_8), b[0].toInt().toChar(), counts[0].toInt(), counts[1].toInt())
+            val c = String(b, nul + 1, b.size - nul - 1, Charsets.US_ASCII).split(',')
+            return MtResult(String(b, 1, nul - 1, Charsets.UTF_8), b[0].toInt().toChar(), c[0].toInt(), c[1].toInt(),
+                c.getOrNull(2)?.toLong() ?: 0, c.getOrNull(3)?.toLong() ?: 0)
         }
     }
 }

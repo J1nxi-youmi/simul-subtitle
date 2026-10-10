@@ -143,6 +143,7 @@ class CaptionService : Service() {
                 scene = scene,
                 judge = judge,
                 log = sl::write,
+                drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
             )
             jevActive = judge != null
             synchronized(cancelLock) { pipeline = pl }

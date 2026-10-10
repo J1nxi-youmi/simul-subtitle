@@ -36,6 +36,23 @@ class PipelineTest {
         override fun cancel() = cancelled.set(true)
     }
 
+    /** Blocks every call until [release]; records the order of the source texts. */
+    private class GateMt : Mt {
+        val gate = CountDownLatch(1)
+        val entered = CountDownLatch(1)
+        val order = Collections.synchronizedList(ArrayList<String>())
+        override fun translate(prompt: String): MtResult? {
+            order.add(source(prompt)); entered.countDown(); gate.await()
+            return MtResult("zh(${source(prompt)})", 'e', 1, 1)
+        }
+        override fun cancel() = gate.countDown()
+    }
+
+    private class CountingAsr : Asr {
+        val seen = Collections.synchronizedList(ArrayList<Int>())
+        override fun recognize(samples: FloatArray): String { seen.add(samples.size); return "ja${samples.size}" }
+    }
+
     companion object {
         /** The Japanese text inside a GENERAL-scene Index prompt. */
         fun source(prompt: String) = prompt.substringAfter("\n\n").substringBefore("<|im_end|>")
@@ -429,6 +446,58 @@ class PipelineTest {
         val used = events.filter { it["ev"] == "hint_used" }
         assertEquals(listOf(1L to true), used.map { it["seg"] to it["hold"] })
         assertEquals("late", events.single { it["ev"] == "jev" && it["kind"] == "unfinished" && it["seg"] == 2L }["action"])
+    }
+
+    @Test
+    fun whileAFinalIsWaitingNoDisplayDraftIsRecognizedOrTranslated() {
+        val asr = CountingAsr(); val mt = GateMt()
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(2)
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 3, true, 10))
+        assertTrue(mt.entered.await(2, TimeUnit.SECONDS)) // seg 1's final is being translated (slow phone)
+        // drafts of the next sentence arrive while it waits, spaced so the ASR thread would pick each one up
+        p.submit(job(2, 1, false, 21)); Thread.sleep(60)
+        p.submit(job(2, 2, false, 22)); Thread.sleep(60)
+        p.submit(job(2, 3, true, 23)); Thread.sleep(60)
+        mt.gate.countDown()
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(listOf(10, 23), asr.seen)
+        assertEquals(listOf("ja10", "ja23"), mt.order)
+        assertEquals(listOf(1L to true, 2L to true), out.map { it.segmentId to it.isFinal })
+    }
+
+    @Test
+    fun whenNothingIsWaitingDraftsAreStillShown() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val shown = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), FakeMt(1), { out.add(it); if (!it.isFinal) shown.countDown() })
+        p.start(); p.submit(job(1, 1, false, 10))
+        assertTrue(shown.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+    }
+
+    @Test
+    fun finalOnlySkipsDisplayDraftsButStillJudgesSentenceEnds() {
+        val asr = CountingAsr(); val mt = FakeMt(1)
+        val judge = FakeJudge(unfinishedP = 0.9)
+        var live = false
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(asr, mt, { out.add(it) }, judge = judge, drafts = { live })
+        p.start()
+        p.submit(job(1, 1, false, 11)) // display draft: skipped
+        p.submit(AsrJob(1, 2, false, FloatArray(12), monoMs(), endOfSpeech = true)) // sentence-end candidate
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        assertEquals(true, p.holdHint(1, 2)) // Jev still got the candidate
+        assertEquals(listOf(12), asr.seen)
+        assertTrue(mt.calls.isEmpty()) // nothing translated just for display
+        live = true // switched back to live while running: drafts resume
+        val shown = CountDownLatch(1)
+        p.submit(job(1, 3, false, 13))
+        while (out.none { !it.isFinal } && monoMs() < deadline + 2000) Thread.sleep(5)
+        p.stop(); p.awaitStopped()
+        assertTrue(out.any { !it.isFinal && it.ja == "ja13" })
     }
 }
 

@@ -89,6 +89,8 @@ class Pipeline(
     private val judge: Judge? = null,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
     private val log: (Map<String, Any?>) -> Unit = {},
+    /** Read live: false = "only finished sentences", display drafts are not recognized or translated at all. */
+    private val drafts: () -> Boolean = { true },
 ) {
     private class Queued(val job: AsrJob, val submittedAt: Long)
     private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long)
@@ -209,6 +211,7 @@ class Pipeline(
     private fun asrLoop() {
         while (running && !failed) {
             val q = take(asrQueue) { it.job.isFinal } ?: continue
+            if (!q.job.isFinal && !q.job.endOfSpeech && skipDisplayDraft()) continue
             val start = clock()
             val ja = asr.recognize(q.job.samples).trim()
             val end = clock()
@@ -225,6 +228,8 @@ class Pipeline(
                 // draft would otherwise be superseded before it reaches MT and nothing would be shown.
                 if (!q.job.isFinal && ja.isEmpty()) return@synchronized
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
+                // a sentence-end candidate was recognized for Jev; it is only translated if drafts are wanted now
+                if (!q.job.isFinal && !drafts()) return@synchronized
                 mtQueue.addLast(MtJob(q, ja, start, end))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
             }
@@ -265,7 +270,7 @@ class Pipeline(
         val r = mt.translate(prompt)
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "raw" to r?.raw, "stop" to r?.stop?.toString(), "prompt_tokens" to r?.promptTokens,
-            "output_tokens" to r?.outputTokens, "ms" to clock() - t0))
+            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs, "ms" to clock() - t0))
         return r
     }
 
@@ -295,6 +300,7 @@ class Pipeline(
     private fun mtLoop() {
         while (running && !failed) {
             val j = take(mtQueue) { it.q.job.isFinal } ?: continue
+            if (!j.q.job.isFinal && skipDisplayDraft()) continue
             val job = j.q.job
             val start = clock()
             var checkMs = 0L
@@ -341,6 +347,12 @@ class Pipeline(
     }
 
     private fun audioMs(job: AsrJob) = job.samples.size * 1000L / sampleRate
+
+    /**
+     * A draft only updates the live line. Skip it when drafts are off, or when a final is waiting for ASR or MT:
+     * on a slow phone drafts otherwise take the time finals need and the backlog keeps growing.
+     */
+    private fun skipDisplayDraft() = !drafts() || synchronized(lock) { pendingFinals() + inFlightFinals > 0 }
 
     companion object {
         /** Jev "unfinished" probability from which a pause is held (140-pair test: catches 30/31, waits wrongly 16/109). */

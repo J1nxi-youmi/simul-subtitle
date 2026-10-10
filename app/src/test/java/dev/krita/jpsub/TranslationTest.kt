@@ -17,6 +17,8 @@ class TranslationTest {
         assertFalse(MtResult.parse(native('p', "", 2100, 0)).usable)
         assertFalse(MtResult.parse(native('f', "", 0, 0)).usable)
         assertTrue(MtResult.parse(native('l', "很长", 50, 160)).usable)
+        val timed = MtResult.parse((('e'.toString() + "好").toByteArray() + byteArrayOf(0) + "110,9,812,640".toByteArray()))
+        assertEquals(812L, timed.prefillMs); assertEquals(640L, timed.decodeMs); assertEquals(9, timed.outputTokens)
     }
 
     @Test

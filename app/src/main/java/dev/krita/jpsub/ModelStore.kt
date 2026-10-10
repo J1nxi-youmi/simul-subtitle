@@ -25,14 +25,15 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
     fun unverified() = specs.filter { !okMarker(it).isFile && file(it).isFile }
 
     /**
-     * Hash-checks a file already at the final path. Good → marker written; bad → moved to "<path>.bad" so it
+     * Hash-checks a file already at the final path. Good → marker written; bad → deleted so it
      * is downloaded again. Slow: call off the main thread.
      */
     fun verifyInstalled(s: ModelSpec): Result {
         val f = file(s)
         if (!f.isFile) return Result.Missing
         val r = check(s, f)
-        if (r == Result.Ok) okMarker(s).writeText(s.sha256) else reject(s, f, r)
+        if (r != Result.Ok) return reject(s, f, r)
+        okMarker(s).writeText(s.sha256)
         return r
     }
 
@@ -48,7 +49,7 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
 
     /**
      * Verifies a finished download in [partFile] and, only if size and SHA-256 match, renames it to the final
-     * path. A bad file is renamed to "<path>.bad" (kept for inspection, overwritten by the next attempt).
+     * path. A bad file is deleted so the retry has room (the MT model alone is 1.1 GB).
      * Slow for the 1.1 GB model: call off the main thread.
      */
     fun publish(s: ModelSpec): Result {
@@ -61,13 +62,13 @@ class ModelStore(val root: File, val specs: List<ModelSpec> = MODELS) {
         okMarker(s).delete()
         if (!part.renameTo(dst)) return Result.Io("无法写入 ${dst.path}")
         okMarker(s).writeText(s.sha256)
+        File(root, s.path + ".bad").delete() // left behind by versions that kept rejected copies
         return Result.Ok
     }
 
     private fun reject(s: ModelSpec, f: File, r: Result): Result {
-        val bad = File(root, s.path + ".bad")
-        bad.delete() // previous rejected attempt for the same file only
-        f.renameTo(bad)
+        File(root, s.path + ".bad").delete() // left behind by versions that kept rejected copies
+        if (!f.delete() && f.exists()) return Result.Io("无法删除损坏的 ${f.name}")
         return r
     }
 

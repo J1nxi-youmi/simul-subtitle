@@ -16,6 +16,9 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("bgAlpha", 0.55f)
         set(v) = sp.edit().putFloat("bgAlpha", v).apply()
 
+    /** Size and opacity in one edit, so a change listener never sees one new and one old value. */
+    fun setStyle(sizeSp: Float, alpha: Float) = sp.edit().putFloat("textSp", sizeSp).putFloat("bgAlpha", alpha).apply()
+
     /** Overlay width as a fraction of the screen width */
     var widthFrac: Float
         get() = sp.getFloat("widthFrac", DEFAULT_WIDTH)

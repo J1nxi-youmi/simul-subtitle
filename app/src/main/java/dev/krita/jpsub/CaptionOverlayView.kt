@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -55,6 +56,19 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     fun setCardWidth(px: Int) {
         val lp = card.layoutParams
         if (lp.width != px) { lp.width = px; card.layoutParams = lp }
+    }
+
+    /**
+     * Caps the caption text height so the toolbar keeps room on screen; when captions are taller (narrow
+     * card, big font) the text shows its newest lines.
+     */
+    fun setMaxTextHeight(px: Int) {
+        if (text.maxHeight != px) { text.maxHeight = px; scrollTextToEnd() }
+    }
+
+    private fun scrollTextToEnd() = text.post {
+        val l = text.layout ?: return@post
+        text.scrollTo(0, (l.height - (text.height - text.totalPaddingTop - text.totalPaddingBottom)).coerceAtLeast(0))
     }
 
     /** Natural width of the toolbar, independent of the current window width. */
@@ -139,6 +153,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             if (!l.isFinal) sb.setSpan(ForegroundColorSpan(0xFFB9B5C9.toInt()), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         text.text = sb
+        scrollTextToEnd()
         stats.text = statsLine ?: ""
         stats.visibility = if (statsLine.isNullOrEmpty()) GONE else VISIBLE
     }
@@ -170,13 +185,24 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             setPadding(dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt())
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
-        toolbar.addView(tbtn("A−", "字号减小") { setSize(textSp - 2) })
-        toolbar.addView(tag("字号"))
-        toolbar.addView(tbtn("A+", "字号增大") { setSize(textSp + 2) })
-        toolbar.addView(sep())
-        toolbar.addView(tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) })
-        toolbar.addView(tag("背景"))
-        toolbar.addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
+        // Size / opacity scroll sideways when the screen is too narrow (small display, big system font);
+        // lock and stop sit outside the scroller, so they always stay visible and tappable.
+        val controls = LinearLayout(context).apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            addView(tbtn("A−", "字号减小") { setSize(textSp - 2) })
+            addView(tag("字号"))
+            addView(tbtn("A+", "字号增大") { setSize(textSp + 2) })
+            addView(sep())
+            addView(tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) })
+            addView(tag("背景"))
+            addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
+        }
+        toolbar.addView(HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+            addView(controls)
+            setOnScrollChangeListener { _, _, _, _, _ -> bumpToolbarTimer() }
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 1f))
         toolbar.addView(sep())
         toolbar.addView(btn(R.drawable.ic_lock, "锁定位置") { toggleLock() })
         toolbar.addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF87171.toInt()) })

@@ -40,6 +40,10 @@ class MainActivity : Activity() {
 
     /** Re-reads the style prefs into the sliders and preview; set up in [setupStyle]. */
     private var loadStyle: () -> Unit = {}
+    /** While visible: the overlay toolbar is not focusable, so using it does not pause/resume this screen. */
+    private val styleListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key in STYLE_KEYS) loadStyle()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +72,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         loadStyle() // the overlay toolbar may have changed size / opacity meanwhile
+        prefs.listen(styleListener)
         renderPermissions()
         render()
         main.post(ticker)
@@ -75,6 +80,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        prefs.unlisten(styleListener)
         main.removeCallbacks(ticker)
     }
 
@@ -207,12 +213,15 @@ class MainActivity : Activity() {
         val lAlpha = findViewById<TextView>(R.id.labelAlpha)
         val lWidth = findViewById<TextView>(R.id.labelWidth)
 
+        var loading = false // programmatic updates must not be written back
         fun load() {
+            loading = true
             size.value = prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP).let { Math.round(it).toFloat() }
             alpha.value = (Math.round(prefs.bgAlpha * 20) * 5f).coerceIn(0f, 100f)
             width.value = (Math.round(prefs.widthFrac * 20) * 5f).coerceIn(40f, 100f)
             ja.isChecked = prefs.showJa
             stats.isChecked = prefs.showStats
+            loading = false
         }
         fun apply() {
             lSize.text = "字号  ${size.value.toInt()}"
@@ -232,10 +241,10 @@ class MainActivity : Activity() {
         size.addOnChangeListener { _, v, user -> if (user) { prefs.textSp = v; apply() } }
         alpha.addOnChangeListener { _, v, user -> if (user) { prefs.bgAlpha = v / 100f; apply() } }
         width.addOnChangeListener { _, v, user -> if (user) { prefs.widthFrac = v / 100f; apply() } }
-        ja.setOnCheckedChangeListener { _, v -> prefs.showJa = v; apply() }
-        stats.setOnCheckedChangeListener { _, v -> prefs.showStats = v; apply() }
+        ja.setOnCheckedChangeListener { _, v -> if (!loading) { prefs.showJa = v; apply() } }
+        stats.setOnCheckedChangeListener { _, v -> if (!loading) { prefs.showStats = v; apply() } }
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
-            prefs.textSp = 20f; prefs.bgAlpha = 0.55f; prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
+            prefs.setStyle(20f, 0.55f); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
             prefs.overlayX = -1; prefs.overlayY = -1
             load(); apply()
         }
@@ -277,6 +286,7 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_START = 1      // runtime permission asked on the way to starting subtitles
         const val REQ_PROJECTION = 2
+        val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "showJa", "showStats")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
     }
 }

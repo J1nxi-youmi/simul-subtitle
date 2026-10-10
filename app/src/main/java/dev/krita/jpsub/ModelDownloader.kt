@@ -18,6 +18,8 @@ class ModelDownloader private constructor(ctx: Context) {
     private val dm = app.getSystemService(DownloadManager::class.java)
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "jpsub-verify").apply { isDaemon = true } }
     private val queued = HashSet<String>() // paths submitted to [worker], guarded by this
+    /** Verification failed: not resubmitted by [state] polling, only by an explicit [start] (重试). */
+    private val failed = HashSet<String>() // guarded by this
 
     /** UI snapshot. [verifying] = file name currently being hash-checked. */
     class State(val doneBytes: Long, val totalBytes: Long, val running: Boolean, val verifying: String?, val errors: List<String>)
@@ -33,9 +35,12 @@ class ModelDownloader private constructor(ctx: Context) {
     /** Enqueues every missing file that is not already downloading or waiting for verification. Idempotent. */
     @Synchronized
     fun start() {
-        errors.clear()
+        errors.clear(); failed.clear()
         for (s in store.missing()) {
             if (s.path in queued) continue
+            // already at the final path but unmarked (e.g. marker write failed after the rename): verify, don't refetch
+            if (store.file(s).isFile) { submit(s) { store.verifyInstalled(s) }; continue }
+            adoptOrphan(s)
             when (statusOf(s)) {
                 DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED -> continue
                 DownloadManager.STATUS_SUCCESSFUL -> { submitPublish(s); continue } // finished, just not verified yet
@@ -71,7 +76,7 @@ class ModelDownloader private constructor(ctx: Context) {
             dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
                 if (!c.moveToFirst()) return@use
                 when (c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                    DownloadManager.STATUS_SUCCESSFUL -> { done += s.size; submitPublish(s) }
+                    DownloadManager.STATUS_SUCCESSFUL -> { done += s.size; if (s.path !in failed) submitPublish(s) }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                         errors[s.path] = "${s.path.substringAfterLast('/')}：${reasonText(reason)}"
@@ -88,8 +93,33 @@ class ModelDownloader private constructor(ctx: Context) {
 
     private fun submitPublish(s: ModelSpec) = submit(s) {
         val r = store.publish(s)
-        synchronized(this) { prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }; prefs.setDownloadId(s.path, -1) }
+        // the transfer is used up once published or rejected (file gone); on an I/O error keep it for 重试
+        if (r == ModelStore.Result.Ok || r is ModelStore.Result.WrongSize || r is ModelStore.Result.WrongHash) synchronized(this) {
+            prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }; prefs.setDownloadId(s.path, -1)
+        }
         r
+    }
+
+    /**
+     * The process can die between [DownloadManager.enqueue] and saving its id. Before deleting the .part file
+     * or enqueueing again, take over this app's own job for the same pinned URL, if the system still has one
+     * (the query only returns this app's downloads; every model file has its own URL).
+     */
+    private fun adoptOrphan(s: ModelSpec) {
+        val known = prefs.downloadId(s.path)
+        var adopt = -1L
+        dm.query(DownloadManager.Query())?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
+            val stCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+            while (c.moveToNext()) {
+                val id = c.getLong(idCol)
+                if (id == known || c.getString(uriCol) != s.url) continue
+                if (c.getInt(stCol) == DownloadManager.STATUS_FAILED || adopt >= 0) dm.remove(id) else adopt = id
+            }
+        }
+        if (adopt >= 0 && known >= 0 && statusOf(s).let { it != null && it != DownloadManager.STATUS_FAILED }) dm.remove(adopt)
+        else if (adopt >= 0) { if (known >= 0) dm.remove(known); prefs.setDownloadId(s.path, adopt) }
     }
 
     /** Runs [job] for [s] once on the verifier thread; any failure becomes a retryable error, never a crash. */
@@ -103,6 +133,7 @@ class ModelDownloader private constructor(ctx: Context) {
             synchronized(this) {
                 queued.remove(s.path)
                 if (r != ModelStore.Result.Ok && r != ModelStore.Result.Missing) {
+                    failed += s.path
                     errors[s.path] = "${s.path.substringAfterLast('/')} 校验失败（${describe(r)}），请重试"
                 }
             }

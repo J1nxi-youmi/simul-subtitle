@@ -104,6 +104,28 @@ class ModelStoreTest {
     }
 
     @Test
+    fun rejectedDownloadDoesNotKeepItsBytes() {
+        // a 1.1 GB rejected copy kept as .bad would leave no room for the retry
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.partFile(s), "hello MODEL".toByteArray())
+        assertTrue(store.publish(s) is ModelStore.Result.WrongHash)
+        assertFalse(store.partFile(s).exists())
+        assertFalse(java.io.File(tmp.root, s.path + ".bad").exists())
+    }
+
+    @Test
+    fun publishedFileWithoutMarkerIsRecoveredWithoutRedownload() {
+        // rename succeeded but writing the marker failed: the final file is there, unverified, no .part
+        val s = spec()
+        val store = ModelStore(tmp.root, listOf(s))
+        write(store.file(s), good)
+        assertEquals(listOf(s), store.unverified())
+        assertEquals(ModelStore.Result.Ok, store.verifyInstalled(s))
+        assertTrue(store.ready())
+    }
+
+    @Test
     fun pinnedManifestMatchesWhatWasMeasured() {
         // The Mac e2e and the phone must use the same bytes; guard against accidental edits.
         assertEquals(1_210_825_907L, ModelStore(tmp.root).totalBytes())

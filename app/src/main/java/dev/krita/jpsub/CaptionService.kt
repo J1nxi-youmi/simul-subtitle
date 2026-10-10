@@ -277,7 +277,15 @@ class CaptionService : Service() {
         val dm = resources.displayMetrics
         val v = CaptionOverlayView(this, interactive = true)
         v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
-        var cardW = (dm.widthPixels * prefs.widthFrac).toInt()
+        // usable area: current window bounds (follows rotation) minus status / navigation bars. Only its size is
+        // used: the overlay's x/y are already relative to that area (its parent frame excludes the bars).
+        fun area(): android.graphics.Rect {
+            if (android.os.Build.VERSION.SDK_INT < 30) return android.graphics.Rect(0, 0, dm.widthPixels, dm.heightPixels)
+            val m = wm.currentWindowMetrics
+            val i = m.windowInsets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+            return android.graphics.Rect(m.bounds.left + i.left, m.bounds.top + i.top, m.bounds.right - i.right, m.bounds.bottom - i.bottom)
+        }
+        var cardW = (area().width() * prefs.widthFrac).toInt()
         var toolbarShown = false
         val lp = WindowManager.LayoutParams(
             cardW,
@@ -287,27 +295,30 @@ class CaptionService : Service() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.overlayX.takeIf { it >= 0 } ?: ((dm.widthPixels - cardW) / 2)
-            y = prefs.overlayY.takeIf { it >= 0 } ?: (dm.heightPixels * 2 / 3)
+            x = prefs.overlayX.takeIf { it >= 0 } ?: ((area().width() - cardW) / 2)
+            y = prefs.overlayY.takeIf { it >= 0 } ?: (area().height() * 2 / 3)
         }
         // Keeps the card at the user's width and fully on screen. While the toolbar is open the window is
         // widened around the card's centre so the toolbar fits; closed, the window is exactly the card, so no
         // invisible area blocks touches to the app underneath.
         fun layout() {
-            val sw = dm.widthPixels; val sh = dm.heightPixels
+            val a = area(); val sw = a.width()
             cardW = cardW.coerceIn((sw * Prefs.MIN_WIDTH).toInt(), sw)
             val win = maxOf(cardW, if (toolbarShown) v.toolbarWidthPx() else 0).coerceAtMost(sw)
             lp.x -= (win - lp.width) / 2
             lp.width = win
             v.setCardWidth(cardW)
+            v.setMaxTextHeight((a.height() * 0.4f).toInt()) // card + toolbar always fit on screen
             lp.x = lp.x.coerceIn(0, (sw - lp.width).coerceAtLeast(0))
-            lp.y = lp.y.coerceIn(0, (sh - v.height.coerceAtLeast(1)).coerceAtLeast(0))
+            lp.y = lp.y.coerceIn(0, (a.height() - v.height.coerceAtLeast(1)).coerceAtLeast(0))
             if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)
         }
+        // rotation / resize: the caption height may not change, so re-fit explicitly from the saved width fraction
+        onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); layout() }
         v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; layout() }
         v.onResize = { dw -> cardW += dw; layout() }
-        v.onMoveEnd = { prefs.overlayX = lp.x + (lp.width - cardW) / 2; prefs.overlayY = lp.y; prefs.widthFrac = cardW.toFloat() / dm.widthPixels }
-        v.onStyleChanged = { prefs.textSp = v.textSp; prefs.bgAlpha = v.bgAlpha }
+        v.onMoveEnd = { prefs.overlayX = lp.x + (lp.width - cardW) / 2; prefs.overlayY = lp.y; prefs.widthFrac = cardW.toFloat() / area().width() }
+        v.onStyleChanged = { prefs.setStyle(v.textSp, v.bgAlpha) }
         v.onToolbarShown = { toolbarShown = it; layout() }
         v.onStop = { stopSelf() }
         // taller text / toolbar / rotation: pull the window back on screen once the new height is known
@@ -319,7 +330,7 @@ class CaptionService : Service() {
             when (key) {
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
-                "widthFrac" -> (dm.widthPixels * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
+                "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
                 "showJa", "showStats" -> refresh()
             }
         }.also { prefs.listen(it) }
@@ -328,6 +339,13 @@ class CaptionService : Service() {
         overlay = v
         layout()
         refresh()
+    }
+
+    private var onDisplayChanged: (() -> Unit)? = null
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        main.post { onDisplayChanged?.invoke() } // after the new window bounds are in effect
     }
 
     /** Strong reference: SharedPreferences only keeps listeners weakly. */
@@ -344,6 +362,7 @@ class CaptionService : Service() {
         projection?.stop()
         projection = null
         prefListener?.let { prefs.unlisten(it) }; prefListener = null
+        onDisplayChanged = null
         overlay?.let { getSystemService(WindowManager::class.java).removeView(it) }
         overlay = null
         super.onDestroy()

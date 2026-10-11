@@ -10,7 +10,9 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
         "这是日本虚拟主播（VTuber）在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。",
         listOf(
             "ビリビリ" to "B站", "スパチャ" to "SC", "スーパーチャット" to "SC", "館長" to "舰长", "艦長" to "舰长",
-            "コメント" to "弹幕", "流れ" to "（弹幕）刷屏", "配信" to "直播", "ギフト" to "礼物",
+            // no entry for 流れ(る): as a hard rule it turned "流れるの速く" into "（弹幕）刷屏的速度"; the background (念弹幕)
+            // gives the sense, and the Jev literal_metaphor note covers a literal "水流"
+            "コメント" to "弹幕", "配信" to "直播", "ギフト" to "礼物",
         ),
     ),
 }

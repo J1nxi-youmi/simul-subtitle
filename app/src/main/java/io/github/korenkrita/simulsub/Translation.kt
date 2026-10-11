@@ -313,16 +313,19 @@ class ByokTranslator(
             calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
                 firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = OnlineTranslator::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
-        // the key is in a header, not the body; a service may still echo it, in an error or in the answer itself (also
-        // split over chunks, which no text replacement on the body can catch: then the body is not kept)
-        val res = OnlineTranslator.streamResult(r, body, r.body?.let { Jev.redact(it, apiKey) })
+        // The key is in a header, not the body, but a service may echo it anywhere, also split over chunks or inside
+        // reasoning, where no text replacement on the body can find it. So a streamed answer's body is never kept:
+        // the log gets the text (key removed), status, timings and usage. Only a non-stream error reply (one short
+        // JSON) is kept, with the key removed.
+        val keep = r.body?.takeIf { r.status != 200 }?.let { Jev.redact(it, apiKey) }
+        val res = OnlineTranslator.streamResult(r, body, keep)
         val leaked = res.raw.contains(apiKey)
         // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
         if (!open && !leaked) return res
         return MtResult(if (open) "" else res.raw.replace(apiKey, "***"), if (open) 'f' else res.stop, res.promptTokens,
             res.outputTokens, firstContentMs = res.firstContentMs, request = res.request,
-            response = if (leaked) "(removed: the answer contained the API key)" else res.response, http = res.http,
+            response = res.response, http = res.http,
             error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open, cachedTokens = res.cachedTokens)
     }
 

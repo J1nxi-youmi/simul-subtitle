@@ -511,7 +511,7 @@ class JevTest {
         // the key echoed in the answer itself
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"key sk-test"},"finish_reason":"stop"}]}""") }
         val r = byok().translate("x")!!
-        assertFalse(r.raw.contains("sk-test")); assertFalse(r.response!!.contains("sk-test"))
+        assertFalse(r.raw.contains("sk-test")); assertNull("a streamed body is never kept", r.response)
         // ran out of tokens while thinking: nothing to show
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"<think>let me"},"finish_reason":"length"}]}""") }
         val t = byok().translate("x")!!
@@ -534,7 +534,16 @@ class JevTest {
         pieces = null
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"sk-"}}]}""", """{"choices":[{"delta":{"content":"test"},"finish_reason":"stop"}]}""") }
         val k = byok().translate("x")!!
-        assertFalse(k.raw.contains("sk-test")); assertFalse(k.response!!.contains("test"))
+        assertFalse(k.raw.contains("sk-test")); assertNull(k.response)
+        // the key split inside reasoning: nothing of it is kept
+        reply = { 200 to sse("""{"choices":[{"delta":{"reasoning_content":"sk-"}}]}""", """{"choices":[{"delta":{"reasoning_content":"test"}}]}""",
+            """{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""") }
+        val rc = byok().translate("x")!!
+        assertNull(rc.response); assertEquals("你好", rc.text); assertTrue(rc.thinking)
+        // a stream cut before [DONE]: failed, and its body is not kept either
+        reply = { 200 to "data: " + """{"choices":[{"delta":{"content":"sk-test"}}]}""" + "\n\n" }
+        val cut = byok().translate("x")!!
+        assertFalse(cut.usable); assertNull(cut.response); assertFalse(cut.raw.contains("sk-test"))
     }
 
     @Test

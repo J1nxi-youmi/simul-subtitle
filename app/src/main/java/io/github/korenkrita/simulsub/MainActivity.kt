@@ -589,10 +589,10 @@ class MainActivity : Activity() {
         val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
         val known = chat?.let { prefs.byokVariant(it, prefs.byokModel) }
         result.text = byokResult?.also { byokResult = null } ?: when {
-            testing -> "正在依次尝试关闭思考的参数，最多要几十秒…"
-            chat == null || prefs.byokModel.isEmpty() || prefs.byokKey == null -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试几种关闭思考的参数，找到能用的就记住。"
+            testing -> "正在依次尝试关闭思考的参数（最多 6 次，每次最多 8 秒，每次都会计费）…"
+            chat == null || prefs.byokModel.isEmpty() || prefs.byokKey == null -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 6 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
             known == ByokTranslator.NONE_WORKED -> "⚠ 上次测试：已知的参数都关不掉这个模型的思考，翻译可能很慢。仍然可以使用。"
-            known != null -> "上次测试可用（关闭思考：${ByokTranslator.variant(known)?.label}）。实际请求地址：$chat"
+            known != null -> "上次测试可用（用的参数：${ByokTranslator.variant(known)?.label}，那次没检测到思考）。实际请求地址：$chat"
             else -> "还没测试，第一次开始字幕时会自动测。实际请求地址：$chat"
         }
         test.setOnClickListener {
@@ -616,7 +616,7 @@ class MainActivity : Activity() {
                     }
                     // shown once by the next render
                     byokResult = when {
-                        ok != null -> "✓ 可以用。关闭思考：${v!!.label}；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
+                        ok != null -> "✓ 可以用。参数：${v!!.label}（这次没检测到思考，已记住）；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
                             (if ((ok.firstContentMs ?: 0) > 1000) "（超过 1 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
                         none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
                         else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"

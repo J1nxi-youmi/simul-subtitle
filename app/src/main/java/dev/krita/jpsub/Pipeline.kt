@@ -349,6 +349,8 @@ class Pipeline(
         val req = Retry(j, note)
         synchronized(lock) { retryQueue.addLast(req) }
         while (running && !failed && !req.done.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)) Unit
+        // an internal failure of the MT thread fails the pipeline (guarded); never publish on top of it
+        if (req.crashed) throw IllegalStateException("retranslation failed on the MT thread")
         retryMs(req.ms)
         return req.result?.takeIf { it.usable }?.text ?: zh
     }
@@ -358,6 +360,8 @@ class Pipeline(
         val done = java.util.concurrent.CountDownLatch(1)
         @Volatile var result: MtResult? = null
         @Volatile var ms = 0L
+        /** the MT thread threw while translating it (not a failed or unusable translation, which keeps the first one) */
+        @Volatile var crashed = false
     }
     private val retryQueue = LinkedBlockingDeque<Retry>()
 
@@ -398,6 +402,9 @@ class Pipeline(
                     val t0 = clock()
                     req.result = translate(req.j.q.job, 2, req.j.ja, listOf(req.note))
                     req.ms = clock() - t0
+                } catch (t: Throwable) {
+                    // visible to the waiting check thread before it wakes: it must not publish this final as checked
+                    req.crashed = true; throw t
                 } finally { req.done.countDown() }
                 continue
             }

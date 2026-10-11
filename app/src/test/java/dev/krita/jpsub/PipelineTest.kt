@@ -469,6 +469,26 @@ class PipelineTest {
     }
 
     @Test
+    fun aRetranslationThatThrowsFailsThePipelineInsteadOfPublishingTheFinal() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val failure = CountDownLatch(1)
+        val mt = object : Mt {
+            override fun translate(prompt: String): MtResult? {
+                if (prompt.contains(FIX_NOTES["negation"]!!)) throw IllegalStateException("native crash")
+                return MtResult("zh(x)", 'e', 1, 1)
+            }
+            override fun cancel() {}
+        }
+        val p = Pipeline(FakeAsr(), mt, { out.add(it) }, onFailure = { failure.countDown() },
+            judge = FakeJudge(choice = "negation"), checkTranslations = true)
+        p.start()
+        p.submit(job(1, 3, true, 10))
+        assertTrue(failure.await(2, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertTrue(out.none { it.isFinal })
+    }
+
+    @Test
     fun joinWithoutRepeatDropsOnlyARepeatTheWholeRecognitionDoesNotHave() {
         // from the live log: the join recognized the end of the kept draft again
         assertEquals("今日も一日お疲れさまでしたいただきます",

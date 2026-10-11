@@ -132,6 +132,7 @@ class Pipeline(
             Thread(guarded(::asrLoop), "jpsub-asr"),
             Thread(guarded(::mtLoop), "jpsub-mt"),
             judge?.let { Thread(guarded(::judgeLoop), "jpsub-jev") },
+            if (checking) Thread(guarded(::checkLoop), "jpsub-check") else null,
         ).onEach { it.start() }
     }
 
@@ -325,10 +326,9 @@ class Pipeline(
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the
      * matching note. Returns the text to show (the retry if it produced one, else [zh]).
      */
-    private fun checked(j: MtJob, zh: String, judgeMs: (Long) -> Unit, interim: (String) -> Unit): String {
+    private fun checked(j: MtJob, zh: String, judgeMs: (Long) -> Unit, retryMs: (Long) -> Unit): String {
         val judge = judge?.takeIf { checkTranslations } ?: return zh
         if (zh.isEmpty()) return zh
-        interim(zh) // live mode shows the first translation while Jev checks it
         val job = j.q.job
         val c0 = clock()
         val call = judge.mistranslation(j.ja, zh)
@@ -340,40 +340,92 @@ class Pipeline(
             return zh
         }
         logJev("mistranslation", job.segmentId, job.revision, call, "retranslate:${call.choice}")
-        val r = translate(job, 2, j.ja, listOf(note))
-        return r?.takeIf { it.usable }?.text ?: zh
+        // only the MT thread translates (one translator, one cache): hand the retry over and wait for it
+        val req = Retry(j, note)
+        synchronized(lock) { retryQueue.addLast(req) }
+        while (running && !failed && !req.done.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)) Unit
+        retryMs(req.ms)
+        return req.result?.takeIf { it.usable }?.text ?: zh
+    }
+
+    /** A retranslation the check thread asks the MT thread for; [done] is counted down whatever happened. */
+    private class Retry(val j: MtJob, val note: String) {
+        val done = java.util.concurrent.CountDownLatch(1)
+        @Volatile var result: MtResult? = null
+        @Volatile var ms = 0L
+    }
+    private val retryQueue = LinkedBlockingDeque<Retry>()
+
+    /** A final on its way through the check thread: [zh] is the first translation (or the failure text). */
+    private class ToCheck(val j: MtJob, val zh: String, val needsCheck: Boolean, val start: Long, val mtMs: Long)
+    private val checkQueue = LinkedBlockingDeque<ToCheck>()
+    /** finals queued for or inside the check (guarded by [lock]); they are also in [inFlightFinals] */
+    private var inCheck = 0
+
+    /**
+     * With [checkTranslations], every final goes through here in order (also one that is not checked, so a later
+     * segment never overtakes an earlier one on the board). The MT thread meanwhile goes on with the next segments.
+     */
+    private fun checkLoop() {
+        while (running && !failed) {
+            val c = synchronized(lock) { checkQueue.pollFirst() } ?: run { Thread.sleep(10); null } ?: continue
+            val job = c.j.q.job
+            var checkMs = 0L; var retryMs = 0L
+            val zh = if (c.needsCheck) checked(c.j, c.zh, { checkMs = it }, { retryMs = it }) else c.zh
+            if (!running || failed) return
+            val end = clock()
+            // the interim line took the final's revision; the final goes out as revision + 1
+            onCaption(caption(c.j, true, job.revision + 1, zh, c.start, end, c.mtMs + retryMs, checkMs))
+            val backlog = synchronized(lock) {
+                pendingFinalAudioMs -= audioMs(job); inCheck--; inFlightFinals--
+                pendingFinals() + inFlightFinals
+            }
+            onBacklog(backlog)
+        }
     }
 
     private fun mtLoop() {
         while (running && !failed) {
+            // a retranslation the check thread waits on goes first; it is part of a final already counted
+            val req = synchronized(lock) { retryQueue.pollFirst() }
+            if (req != null) {
+                try {
+                    val t0 = clock()
+                    req.result = translate(req.j.q.job, 2, req.j.ja, listOf(req.note))
+                    req.ms = clock() - t0
+                } finally { req.done.countDown() }
+                continue
+            }
             val j = take(mtQueue) { it.q.job.isFinal } ?: continue
             if (!j.q.job.isFinal && skipDisplayDraft()) continue
             val job = j.q.job
             val start = clock()
-            var checkMs = 0L
             val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList())
             if (!running) return
             var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
             if (zh == null) {
                 if (!job.isFinal) continue
                 zh = "[翻译失败] ${j.ja}"
-            } else if (job.isFinal) {
-                // the interim line takes the final's revision; the final then goes out as revision + 1
-                zh = checked(j, zh, { checkMs = it }) { onCaption(caption(j, false, job.revision, it, start, clock())) }
-                if (!running) return
             }
             val end = clock()
+            if (job.isFinal && checking) {
+                val real = r?.takeIf { it.usable } != null && zh.isNotEmpty()
+                // live mode shows the first translation while Jev checks it; "only finished sentences" hides it
+                if (real) onCaption(caption(j, false, job.revision, zh, start, end, end - start))
+                synchronized(lock) { inCheck++; checkQueue.addLast(ToCheck(j, zh, real, start, end - start)) }
+                continue
+            }
             val backlog = synchronized(lock) {
                 if (job.isFinal) pendingFinalAudioMs -= audioMs(job)
                 pendingFinals() + inFlightFinals
             }
-            onCaption(caption(j, job.isFinal, job.revision + if (checking && job.isFinal) 1 else 0, zh, start, end, checkMs))
+            onCaption(caption(j, job.isFinal, job.revision, zh, start, end, end - start))
             if (job.isFinal) synchronized(lock) { inFlightFinals-- }
             onBacklog(backlog - if (job.isFinal) 1 else 0)
         }
     }
 
-    private fun caption(j: MtJob, final: Boolean, revision: Int, zh: String, start: Long, end: Long, checkMs: Long = 0): Caption {
+    private fun caption(j: MtJob, final: Boolean, revision: Int, zh: String, start: Long, end: Long, mtMs: Long, checkMs: Long = 0): Caption {
         val job = j.q.job
         return Caption(
             job.segmentId, revision, final, j.ja, zh.trim(),
@@ -383,7 +435,7 @@ class Pipeline(
                 asrQueueMs = j.asrStartAt - j.q.submittedAt,
                 asrMs = j.asrEndAt - j.asrStartAt,
                 mtQueueMs = start - j.asrEndAt,
-                mtMs = end - start - checkMs,
+                mtMs = mtMs,
                 mtDoneMs = end - job.audioEndAt,
                 checkMs = checkMs,
             ),
@@ -399,7 +451,8 @@ class Pipeline(
      * A draft only updates the live line. Skip it when drafts are off, or when a final is waiting for ASR or MT:
      * on a slow phone drafts otherwise take the time finals need and the backlog keeps growing.
      */
-    private fun skipDisplayDraft() = !drafts() || synchronized(lock) { pendingFinals() + inFlightFinals > 0 }
+    // finals that only wait for their Jev check do not hold drafts back (the MT thread is free for them)
+    private fun skipDisplayDraft() = !drafts() || synchronized(lock) { pendingFinals() + inFlightFinals - inCheck > 0 }
 
     companion object {
         /** Jev "unfinished" probability from which a pause is held (140-pair test: catches 30/31, waits wrongly 16/109). */

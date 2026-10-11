@@ -269,7 +269,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:stepSize="1"
-                    android:valueFrom="12"
+                    android:valueFrom="5"
                     android:valueTo="36" />
 
                 <TextView

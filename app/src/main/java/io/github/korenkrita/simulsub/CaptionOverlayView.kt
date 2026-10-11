@@ -318,7 +318,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
     companion object {
         /** Caption size range, shared with the settings slider. */
-        const val MIN_SP = 12f
+        const val MIN_SP = 5f
         const val MAX_SP = 36f
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */

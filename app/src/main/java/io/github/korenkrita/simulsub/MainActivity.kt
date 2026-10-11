@@ -401,23 +401,25 @@ class MainActivity : Activity() {
             options.forEach { (v, t) ->
                 val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                     id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
-                    // narrow phones: the label keeps its own line breaks and shrinks (down to 10 sp) until the laid-out
-                    // text shows every line uncut, instead of being cut to "在…"; judged on the real layout, not an
-                    // estimate of the space, so the button's own paddings and stroke are accounted for
-                    val lines = t.split('\n').size
-                    isAllCaps = false; isSingleLine = false; maxLines = lines; ellipsize = android.text.TextUtils.TruncateAt.END
+                    // narrow phones: the label shrinks (down to 10 sp) until the laid-out text is uncut, instead of
+                    // being cut to "在…"; judged on the real layout, so the button's paddings and stroke count. Still
+                    // cut at 10 sp (very large system font): it may wrap to a second line.
+                    isAllCaps = false
                     setPadding((4 * dpx).toInt(), paddingTop, (4 * dpx).toInt(), paddingBottom)
                     val min = 10 * resources.displayMetrics.scaledDensity
                     addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
                         val b = v as MaterialButton
                         val lay = b.layout ?: return@addOnLayoutChangeListener
-                        val cut = lay.lineCount > lines || (0 until lay.lineCount).any { lay.getEllipsisCount(it) > 0 }
-                        if (cut && b.textSize > min) b.post {
+                        val cut = lay.lineCount > b.maxLines || (0 until lay.lineCount).any { lay.getEllipsisCount(it) > 0 }
+                        if (!cut) return@addOnLayoutChangeListener
+                        if (b.textSize > min) b.post {
                             b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, maxOf(min, b.textSize - resources.displayMetrics.scaledDensity / 2))
-                        }
+                        } else if (b.maxLines < 2) b.post { b.maxLines = 2 }
                     }
                 }
                 addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                // the group's addView sets one line and an ellipsis on every button: anything set before is lost
+                b.maxLines = 1; b.ellipsize = android.text.TextUtils.TruncateAt.END
                 if (v == current) check(b.id)
             }
             addOnButtonCheckedListener { g, id, checked ->

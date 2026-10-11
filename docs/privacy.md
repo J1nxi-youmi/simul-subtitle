@@ -10,7 +10,7 @@
 
 | 什么时候 | 发给谁 | 发什么 |
 |---|---|---|
-| 下载模型 | huggingface.co、github.com | 普通的文件下载请求 |
+| 下载模型 | huggingface.co、github.com；连不上时还会用 gh-proxy.com、gh.llkk.cc（GitHub 下载代理）、modelscope.cn | 普通的文件下载请求 |
 | 在线翻译（默认） | index-translate.bilibili.com | 识别出的文字、场景说明、前文（如果开启）、修正提示 |
 | 打开 Jev 辅助 | 你选择的 Jev 服务 | 识别出的文字、译文 |
 

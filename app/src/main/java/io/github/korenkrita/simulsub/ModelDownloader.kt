@@ -3,6 +3,7 @@ package io.github.korenkrita.simulsub
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import java.util.concurrent.Executors
 
 /**
@@ -26,6 +27,10 @@ class ModelDownloader private constructor(ctx: Context) {
 
     @Volatile private var verifying: String? = null
     private val errors = LinkedHashMap<String, String>() // path → message, guarded by this
+    /** path → (bytes, when they last changed) of the running transfer, for [stalled]; guarded by this */
+    private val progress = HashMap<String, Pair<Long, Long>>()
+    /** set by [cancel], cleared by [start]: no automatic switch to another source in between; guarded by this */
+    private var cancelled = false
 
     /** Non-blocking warning shown even when models are ready (e.g. an old rejected copy could not be deleted). */
     @Volatile var maintenanceWarning: String? = null; private set
@@ -39,7 +44,7 @@ class ModelDownloader private constructor(ctx: Context) {
     /** Enqueues every missing file that is not already downloading or waiting for verification. Idempotent. */
     @Synchronized
     fun start() {
-        errors.clear(); failed.clear()
+        errors.clear(); failed.clear(); cancelled = false
         // copies kept by older versions after a failed check: free the space before downloading again
         maintenanceWarning = store.removeRejected()
         maintenanceWarning?.let { errors["bad"] = it; return }
@@ -52,20 +57,73 @@ class ModelDownloader private constructor(ctx: Context) {
                 DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED -> continue
                 DownloadManager.STATUS_SUCCESSFUL -> { submitPublish(s); continue } // finished, just not verified yet
             }
-            prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) } // failed earlier: start over
-            store.partFile(s).parentFile?.mkdirs()
-            store.partFile(s).delete()
-            val req = DownloadManager.Request(Uri.parse(s.url))
-                .setTitle("同传字幕 · 模型 ${s.path.substringAfterLast('/')}")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-                .setDestinationUri(Uri.fromFile(store.partFile(s)))
-                .setAllowedOverMetered(true)
-            prefs.setDownloadId(s.path, dm.enqueue(req))
+            enqueue(s, 0) // failed earlier (or never started): start over from the official source
         }
+    }
+
+    /**
+     * Starts [s] from source [source] of [ModelSpec.urls], written to that source's own .part file: a removed
+     * job may still clean up its file afterwards, so the replacement never writes to the same path.
+     */
+    private fun enqueue(s: ModelSpec, source: Int) {
+        prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }
+        progress.remove(s.path); errors.remove(s.path)
+        val part = store.partFile(s, source)
+        part.parentFile?.mkdirs()
+        part.delete()
+        val req = DownloadManager.Request(Uri.parse(s.urls[source]))
+            .setTitle("同传字幕 · 模型 ${s.path.substringAfterLast('/')}")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+            .setDestinationUri(Uri.fromFile(part))
+            .setAllowedOverMetered(true)
+        prefs.setDownloadId(s.path, dm.enqueue(req))
+    }
+
+    /**
+     * A transfer that is connecting or waiting to retry while its byte count does not move for [STALL_MS]
+     * ([STALL_STARTED_MS] once bytes arrived) counts as unreachable; DownloadManager itself would keep retrying
+     * the same host for minutes. The count only moves in steps of 64 KiB, so a source slower than about
+     * 2 KiB/s (0.5 KiB/s once started) also counts as stalled, which is the right call for a 70 MB file.
+     * Queued jobs and jobs waiting for the network are never cut off.
+     */
+    private fun stalled(s: ModelSpec, status: Int, reason: Int, bytes: Long): Boolean {
+        val trying = status == DownloadManager.STATUS_RUNNING ||
+            (status == DownloadManager.STATUS_PAUSED && reason == DownloadManager.PAUSED_WAITING_TO_RETRY)
+        val now = SystemClock.elapsedRealtime()
+        val last = progress[s.path]
+        if (!trying || last == null || last.first != bytes) { progress[s.path] = bytes to now; return false }
+        // nothing received yet: the host is probably unreachable; already started: allow a longer gap
+        return now - last.second > if (bytes == 0L) STALL_MS else STALL_STARTED_MS
+    }
+
+    /** Failures that another copy of the same file can fix; full storage or a file error cannot. */
+    private fun sourceProblem(reason: Int) = reason !in setOf(DownloadManager.ERROR_INSUFFICIENT_SPACE,
+        DownloadManager.ERROR_DEVICE_NOT_FOUND, DownloadManager.ERROR_FILE_ERROR, DownloadManager.ERROR_FILE_ALREADY_EXISTS)
+
+    /** Index in [ModelSpec.urls] of the recorded job's source, -1 if there is no such job. */
+    private fun sourceOf(s: ModelSpec): Int {
+        val id = prefs.downloadId(s.path).takeIf { it >= 0 } ?: return -1
+        return dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
+            if (c.moveToFirst()) s.urls.indexOf(c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI))) else -1
+        } ?: -1
+    }
+
+    /**
+     * Moves [s] to the next of its sources when [sourceFault] (the failure is about this source, not about the
+     * phone), unless the user cancelled or the file is no longer needed (switched to online translation).
+     * Each source is tried once per [start]; false when there is none left, so the error is shown.
+     */
+    private fun nextSource(s: ModelSpec, sourceFault: Boolean): Boolean {
+        if (!sourceFault || cancelled || store.required().none { it.path == s.path }) return false
+        val i = sourceOf(s)
+        if (i < 0 || i + 1 >= s.urls.size) return false
+        enqueue(s, i + 1)
+        return true
     }
 
     @Synchronized
     fun cancel() {
+        cancelled = true // also stops a verification still running from starting the next source
         for (s in store.specs) {
             if (s.path in queued) continue // already downloaded; let verification finish
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
@@ -98,11 +156,21 @@ class ModelDownloader private constructor(ctx: Context) {
                     }
                     DownloadManager.STATUS_FAILED -> {
                         val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                        errors[s.path] = "${s.path.substringAfterLast('/')}：${reasonText(reason)}"
+                        if (!nextSource(s, sourceProblem(reason)))
+                            errors[s.path] = "${s.path.substringAfterLast('/')}：${reasonText(reason)}"
+                        else running = true
                     }
                     else -> {
-                        done += c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)).coerceAtLeast(0)
-                        running = true
+                        val st = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                        val bytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)).coerceAtLeast(0)
+                        if (!stalled(s, st, reason, bytes)) { done += bytes; running = true }
+                        else if (nextSource(s, true)) running = true
+                        else if (!cancelled) {
+                            // the last source is unreachable too: stop it, so 重试 starts over from the official one
+                            dm.remove(id); prefs.setDownloadId(s.path, -1); progress.remove(s.path)
+                            errors[s.path] = "${s.path.substringAfterLast('/')}：所有下载地址都连不上，请检查网络后重试"
+                        }
                     }
                 }
             }
@@ -110,25 +178,33 @@ class ModelDownloader private constructor(ctx: Context) {
         return State(done, store.totalBytes(), running || queued.isNotEmpty(), verifying, errors.values.toList())
     }
 
-    private fun submitPublish(s: ModelSpec) = submit(s) {
-        var r = store.publish(s)
+    private fun submitPublish(s: ModelSpec) {
+        val source = sourceOf(s).coerceAtLeast(0) // which .part the finished job wrote
+        submit(s) { publishFrom(s, source) }
+    }
+
+    private fun publishFrom(s: ModelSpec, source: Int): ModelStore.Result {
+        var r = store.publish(s, source)
         if (r == ModelStore.Result.Missing) {
             // the record says finished but there is no .part: either it was published already (marker missing)
             // or the bytes are gone; never loop on it from polling
             r = if (store.file(s).isFile) store.verifyInstalled(s) else ModelStore.Result.Io("下载的文件不见了")
         }
         // the transfer is used up once published, rejected or gone; on a read error keep it for 重试
-        val keep = r is ModelStore.Result.Io && store.partFile(s).isFile
+        val keep = r is ModelStore.Result.Io && store.partFile(s, source).isFile
         if (!keep) synchronized(this) {
+            // wrong bytes (e.g. a proxy answering with an HTML page): try the next source instead of failing
+            val bad = r is ModelStore.Result.WrongSize || r is ModelStore.Result.WrongHash
+            if (bad && nextSource(s, true)) return ModelStore.Result.Missing // not an error: retried
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }; prefs.setDownloadId(s.path, -1)
         }
-        r
+        return r
     }
 
     /**
      * The process can die between [DownloadManager.enqueue] and saving its id. Before deleting the .part file
      * or enqueueing again, take over this app's own job for the same pinned URL if the system still has one
-     * (the query only returns this app's downloads; every model file has its own URL). Never removes the other
+     * (the query only returns this app's downloads; every model file has its own URLs). Never removes the other
      * records: they all point at the same .part path, and removing a record deletes that file.
      */
     private fun adoptOrphan(s: ModelSpec) {
@@ -141,7 +217,7 @@ class ModelDownloader private constructor(ctx: Context) {
             val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
             val stCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
             while (c.moveToNext()) {
-                if (c.getString(uriCol) != s.url) continue
+                if (c.getString(uriCol) !in s.urls) continue
                 val st = c.getInt(stCol)
                 if (st !in usable || adoptActive) continue
                 // a still-running job owns the .part bytes: an older finished record for the same path must not
@@ -152,14 +228,14 @@ class ModelDownloader private constructor(ctx: Context) {
         if (adopt >= 0) prefs.setDownloadId(s.path, adopt)
     }
 
-    /** Another of this app's jobs for [s]'s URL is still writing the shared .part file. */
+    /** Another of this app's jobs for any of [s]'s URLs is still writing the shared .part file. */
     private fun activeAliasBesides(s: ModelSpec, id: Long): Boolean {
         var found = false
         dm.query(DownloadManager.Query().setFilterByStatus(
             DownloadManager.STATUS_RUNNING or DownloadManager.STATUS_PENDING or DownloadManager.STATUS_PAUSED))?.use { c ->
             val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
             val uriCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
-            while (c.moveToNext()) if (c.getLong(idCol) != id && c.getString(uriCol) == s.url) found = true
+            while (c.moveToNext()) if (c.getLong(idCol) != id && c.getString(uriCol) in s.urls) found = true
         }
         return found
     }
@@ -199,12 +275,14 @@ class ModelDownloader private constructor(ctx: Context) {
     private fun reasonText(r: Int) = when (r) {
         DownloadManager.ERROR_INSUFFICIENT_SPACE -> "存储空间不足（需要约 1.3 GB）"
         DownloadManager.ERROR_CANNOT_RESUME -> "无法续传，请重试"
-        DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "网络错误（能访问 huggingface.co / github.com 吗？）"
+        DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "网络错误，所有下载地址都连不上，请检查网络后重试"
         in 400..599 -> "服务器返回 $r"
         else -> "下载失败（$r）"
     }
 
     companion object {
+        private const val STALL_MS = 30_000L
+        private const val STALL_STARTED_MS = 120_000L
         @Volatile private var instance: ModelDownloader? = null
         fun get(ctx: Context): ModelDownloader =
             instance ?: synchronized(this) { instance ?: ModelDownloader(ctx).also { instance = it } }

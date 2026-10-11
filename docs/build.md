@@ -20,7 +20,16 @@ APK 在 `app/build/outputs/apk/release/app-release.apk`（约 13 MB，原生库�
 
 ## 模型
 
-App 里点「下载模型」时，由系统 DownloadManager 从固定版本的 Hugging Face 仓库和 sherpa-onnx 的 GitHub Release 下载，可以在后台继续。每个文件使用前都校验大小和 SHA-256，下载不完整或损坏的文件不会被加载。
+App 里点「下载模型」时，由系统 DownloadManager 在后台下载，每个文件按顺序尝试多个地址：
+
+| 文件 | 下载地址（依次尝试） |
+|---|---|
+| 语音识别（4 个文件）、静音检测 | 官方来源（固定版本的 Hugging Face 仓库 / sherpa-onnx 的 GitHub Release）→ 本项目 Release [`models-v1`](https://github.com/KorenKrita/simul-subtitle/releases/tag/models-v1) 的备份 → 通过 GitHub 下载代理（gh-proxy.com、gh.llkk.cc）访问同一份备份 |
+| 手机上翻译的模型 | Hugging Face 官方仓库 → 魔搭 ModelScope 上的官方仓库 `IndexTeam/Index-Translate-2B-GGUF` |
+
+- 一个地址下载失败、30 秒没收到任何数据（已开始下载后为 2 分钟），或者下回来的文件校验不通过，就换下一个地址；所有地址都失败才提示错误，点「重试」从官方来源重新开始。换地址只在 App 打开着时进行：切到后台后，系统会继续下载当前地址，回到 App 时再判断要不要换。
+- 存储空间不足等手机本身的问题不会换地址。
+- 每个文件使用前都校验大小和 SHA-256，不论从哪个地址下载，内容都必须与官方文件完全一致；下载不完整或损坏的文件不会被加载。
 
 | 文件 | 大小 | 用途 |
 |---|---|---|

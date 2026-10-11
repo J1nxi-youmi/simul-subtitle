@@ -14,7 +14,7 @@ class ModelStoreTest {
 
     private val good = "hello model".toByteArray()
     private fun spec(bytes: ByteArray = good, path: String = "asr/a.onnx") =
-        ModelSpec(path, "https://example.invalid/a", bytes.size.toLong(), sha(bytes))
+        ModelSpec(path, listOf("https://example.invalid/a"), bytes.size.toLong(), sha(bytes))
     private fun sha(b: ByteArray) = java.security.MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
     private fun write(f: File, b: ByteArray) { f.parentFile.mkdirs(); f.writeBytes(b) }
 
@@ -158,7 +158,18 @@ class ModelStoreTest {
     fun pinnedManifestMatchesWhatWasMeasured() {
         // The Mac e2e and the phone must use the same bytes; guard against accidental edits.
         assertEquals(1_389_909_747L, ModelStore(tmp.root).totalBytes())
-        assertTrue(ModelStore.MODELS.all { it.url.startsWith("https://") && it.sha256.length == 64 })
+        assertTrue(ModelStore.MODELS.all { s -> s.urls.isNotEmpty() && s.urls.all { it.startsWith("https://") } && s.sha256.length == 64 })
+        // official source first, then this project's release, then a China-reachable proxy of that release
+        for (s in ModelStore.MODELS.filter { !it.path.startsWith("mt/") }) {
+            val name = s.path.substringAfterLast('/')
+            val backup = "https://github.com/KorenKrita/simul-subtitle/releases/download/models-v1/$name"
+            assertTrue(s.urls[0], s.urls[0].startsWith("https://huggingface.co/") || s.urls[0].startsWith("https://github.com/k2-fsa/"))
+            assertEquals(backup, s.urls[1])
+            assertTrue(s.urls.drop(2).isNotEmpty() && s.urls.drop(2).all { it.endsWith("/$backup") })
+        }
+        val mt = ModelStore.MODELS.single { it.path.startsWith("mt/") }.urls
+        assertEquals(2, mt.size)
+        assertTrue(mt[0].startsWith("https://huggingface.co/IndexTeam/") && mt[1].startsWith("https://www.modelscope.cn/models/IndexTeam/"))
         assertEquals(6, ModelStore.MODELS.map { it.path }.toSet().size)
     }
 

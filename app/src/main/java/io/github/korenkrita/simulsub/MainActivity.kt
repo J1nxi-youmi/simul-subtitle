@@ -399,25 +399,20 @@ class MainActivity : Activity() {
             options.forEach { (v, t) ->
                 val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                     id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
-                    // narrow phones: the label keeps its own line breaks and shrinks (down to 11 sp) until every line
-                    // fits the button's width, instead of being cut to "在…"
-                    val lines = t.split('\n')
-                    maxLines = lines.size; isSingleLine = false; ellipsize = null; isAllCaps = false
+                    // narrow phones: the label keeps its own line breaks and shrinks (down to 10 sp) until the laid-out
+                    // text shows every line uncut, instead of being cut to "在…"; judged on the real layout, not an
+                    // estimate of the space, so the button's own paddings and stroke are accounted for
+                    val lines = t.split('\n').size
+                    isAllCaps = false; isSingleLine = false; maxLines = lines; ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding((4 * dpx).toInt(), paddingTop, (4 * dpx).toInt(), paddingBottom)
-                    addOnLayoutChangeListener { v, l, _, r, _, ol, _, or, _ ->
-                        if (r - l == or - ol) return@addOnLayoutChangeListener
+                    val min = 10 * resources.displayMetrics.scaledDensity
+                    addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
                         val b = v as MaterialButton
-                        val avail = (r - l) - b.paddingLeft - b.paddingRight - b.iconSize - b.iconPadding
-                        val p = android.text.TextPaint(b.paint)
-                        var sp = 16f
-                        while (sp > 11f) {
-                            p.textSize = sp * resources.displayMetrics.scaledDensity
-                            if (lines.all { p.measureText(it) <= avail }) break
-                            sp -= 0.5f
+                        val lay = b.layout ?: return@addOnLayoutChangeListener
+                        val cut = lay.lineCount > lines || (0 until lay.lineCount).any { lay.getEllipsisCount(it) > 0 }
+                        if (cut && b.textSize > min) b.post {
+                            b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, maxOf(min, b.textSize - resources.displayMetrics.scaledDensity / 2))
                         }
-                        // still too wide at the smallest size (very large system font): wrap rather than cut
-                        val fits = lines.all { p.measureText(it) <= avail }
-                        if (b.textSize != p.textSize || !fits) b.post { b.textSize = sp; b.maxLines = if (fits) lines.size else lines.size * 2 }
                     }
                 }
                 addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))

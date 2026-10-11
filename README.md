@@ -1,91 +1,84 @@
-# 同传字幕 (simul-subtitle)
+<p align="center">
+  <img src="docs/images/icon.svg" width="112" alt="同传字幕">
+</p>
 
-Minimal Android app: captures another app's Japanese audio (screen-share / MediaProjection),
-recognises and translates it **fully on the phone**, and shows Chinese subtitles in a floating window.
-Target device: realme GT5 Pro (Snapdragon 8 Gen 3, arm64).
+<h1 align="center">同传字幕</h1>
 
-```
-AudioPlaybackCapture 16 kHz mono
-  → Silero VAD (per 32 ms frame)
-  → Segmenter: draft every 0.7 s while talking, final after 0.4 s pause (forced cut ≤ 7 s, inside the longest pause)
-  → ASR thread: ReazonSpeech zipformer (sherpa-onnx, int8)
-  → MT thread:  Index-Translate-2B Q4_K_M (llama.cpp, CPU; scene background + term list in the prompt)
-  → overlay: grey = draft (may change), white = final
-```
+<p align="center">
+  看日语、英语视频和直播时，手机实时给你配上中文（或其他语言）字幕。<br>
+  不用等别人做字幕，不用换播放器，打开就能看懂。
+</p>
 
-Drafts are disposable (stale queued drafts are merged), finals are never dropped silently. If finals pile
-up beyond 30 s of speech the app stops capturing, keeps translating the sentences it already accepted
-(up to 60 s, cut short by stopping), then cancels the rest, waits for any in-progress native call to
-return (not interruptible, so this wait has no hard limit), releases the models and reports either "all
-translated" or how many were abandoned — nothing arrives after that report. The captions stay until you
-tap the subtitle and press ✕.
+<p align="center">
+  <a href="README.en.md">English</a> ·
+  <a href="docs/README.md">技术文档</a>
+</p>
 
-## Build
+---
 
-Requirements: JDK 17, Android SDK (platform 35, build-tools 35, NDK 27.2.12479018, CMake 3.22.1).
+## 它能做什么
 
-```bash
-git clone --recursive <this repo>            # llama.cpp is a submodule
-./setup.sh                                   # sherpa-onnx AAR + models (~1.4 GB) into app/libs, models/
-export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
-./gradlew :app:testDebugUnitTest :app:assembleRelease
-```
+- **任何 App 都能用**：B 站、YouTube、直播软件、浏览器……只要声音是从手机里放出来的，就能出字幕。
+- **字幕浮在画面上**：像电影字幕一样浮在视频上方，可以拖到任何位置，大小、颜色、透明度都能调。
+- **边听边出**：说话人一开口，字幕就开始出现；一句说完，再变成正式字幕。
+- **听写在手机上完成**：声音只在你的手机里识别成文字，**不会上传**。
+- **可以翻成 22 种语言**：中文、英语、日语、韩语、法语、德语、西班牙语、俄语、阿拉伯语、泰语、越南语……
+- **免费**：默认用 B 站开放的免费翻译服务；不想联网，也可以把翻译模型下载到手机上。
 
-Behind a proxy: `HTTPS_PROXY=... ./setup.sh` and `./gradlew -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890 ...`.
+## 三步开始
 
-## Install on the phone
+1. **下载**：第一次打开，点「下载模型」，约 80 MB，只需要下载一次。
+2. **允许**：按提示允许「听 App 的声音」和「在屏幕上显示字幕」。
+3. **开始**：点「开始字幕」，在弹出的窗口里选你要看的 App，回到视频就能看到字幕。
 
-No adb needed: copy `app/build/outputs/apk/release/app-release.apk` to the phone (cable, cloud drive,
-chat app) and open it; allow "install unknown apps" for the app you opened it from. Updates install over
-the old version (same signing key).
+想调字幕大小、颜色或翻译方式，点首页的「字幕大小、颜色和更多设置」。
 
-Models (~1.21 GB) are downloaded **by the app**: open "同传字幕" → 下载模型. The system DownloadManager
-fetches them from pinned Hugging Face revisions / the sherpa-onnx GitHub release (keeps going in the
-background); each file is checked for exact size and SHA-256 before it is used, so a partial or corrupt
-download is never loaded. Needs access to huggingface.co and github.com. Files copied by an older version
-(`./setup.sh push` over adb still works) are hash-checked once in the background.
+### 字幕上的小技巧
 
-Then 开始字幕 → allow audio / overlay → choose the app to share (or the whole screen).
+- **按住拖动**：换字幕的位置。
+- **拖右下角的小圆点**：改字幕框的宽度和高度。
+- **点一下字幕**：出现工具栏，可以调字号、调背景、切换「边听边出 / 说完再出」、锁定位置，或者停止。
 
-Overlay: drag to move · drag the corner dot to change width · tap for the toolbar (A−/A+ size,
-background −/+ opacity, lock position, ✕ stop). Size, opacity, width, Japanese line and timing line can
-also be set on the home screen, with a live preview; changes apply to a running overlay immediately.
-The notification's 停止 also stops.
+## 安装
 
-## Measuring
+- 系统要求：Android 10 及以上，arm64 手机。
+- 到 [Releases](https://github.com/KorenKrita/simul-subtitle/releases) 下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
+- 想自己编译，看 [构建说明](docs/build.md)。
 
-Every caption is logged with a per-stage breakdown:
+## 常见问题
 
-```bash
-adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=319 asrQ=9 asr=35 mtQ=13 mt=225 mtDone=601 | …
-                                             # shown seg=3.4F update=640ms hal=true
-adb pull /sdcard/Android/data/io.github.korenkrita.simulsub/files/timing.csv
-```
+**为什么有的 App 没有字幕？**
+有些 App（比如开启了版权保护的视频）不允许其他 App 听它的声音，这是 Android 系统的限制，这时不会出字幕。
 
-`wait` = end-of-speech detection, `mtDone` = last captured sample → translation done.
-`update` (and 延迟 in the overlay) = last captured sample → overlay text updated for that caption revision;
-it is a text-update time, not a measured display frame. Capture time comes from the AudioRecord HAL
-timestamp; for frames where the device does not provide one, read time is used and that caption's value
-is prefixed with `~` (`hal=false` in the log) (it then underestimates by the time audio sat in the AudioRecord buffer).
-The overlay also shows asr / mt times and a backlog warning.
+**能听哪些语言？**
+现在能听日语和英语。在首页选好视频里说的语言，翻译会更准。
 
-## Mac end-to-end check
+**会上传我的声音吗？**
+不会。声音在手机上变成文字；用在线翻译时，只把识别出的文字发给翻译服务。详见 [隐私说明](docs/privacy.md)。
 
-`tools/mac-e2e/run.sh [file.wav]` (exit 0 only if every accepted final is delivered, in order) runs the same Pipeline/Segmenter/JNI code with the real models on
-macOS (CPU), streaming the WAV in real time. Without an argument it synthesises a 6-sentence regression
-clip with `say -v Kyoko`. `JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh` is the negative check (must fail). A watchdog halts the JVM
-with exit 2 after `-DdeadlineS` (default 180 s), so a hung native call fails the gate instead of hanging it. `tools/mac-e2e/sample-run.log` is a reference run (M-series Mac, 4 MT threads):
-finals arrive 0.6-0.8 s after a sentence ends (2.5 s once: that sentence hit the length limit, was cut
-back at its longest pause; the finalised part's last sample was ~2.1 s old when the cut was triggered); ASR 35-60 ms, MT 220-390 ms.
-These are Mac numbers; the phone has not been measured yet.
+**翻译不准怎么办？**
+可以在设置里打开「结合上文来翻译」，或换更大的翻译模型；也可以在「使用记录」里把这次的文字记录分享出来，帮助改进。
 
-## Decisions (measured, see git log)
+## 致谢
 
-- **ASR: ReazonSpeech, not SenseVoice.** SenseVoice int8 with `language=ja` dropped most kana on the test clip.
-- **ASR input padded with 0.3 s silence.** ReazonSpeech drops the first word when speech starts at sample 0.
-- **MT: Index-Translate-2B, not HY-MT.** On 37 hard sentences from a VTuber stream it distorted meaning in ~5 vs
-  ~7 (Hy-MT2-1.8B) and handled stream slang better; it is ~45 % slower on the Mac. Prompt = the model's own
-  instTrans format (terms found in the sentence as a hard constraint, the scene as a soft one), greedy, no penalty.
-- **No cross-sentence MT context.** HY-MT's context template made finals worse (re-translated the previous
-  sentence, changed meaning), so each sentence is translated alone.
-- Models are pushed with adb instead of bundled, to keep the APK at ~40 MB.
+同传字幕站在这些优秀的开源项目上：
+
+- **[Index-Translate](https://github.com/bilibili/Index-Translate)**：B 站开源的翻译模型，也是本 App 的翻译核心。在线翻译使用 B 站开放的 Index-Translate 免费接口，手机上翻译使用 Index-Translate-2B。衷心感谢 Index 团队的开源和免费开放的服务。
+- **[ReazonSpeech](https://research.reazon.jp/projects/ReazonSpeech/)**：日语 / 英语语音识别模型。
+- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机上运行语音识别和静音检测（Silero VAD）。
+- **[llama.cpp](https://github.com/ggml-org/llama.cpp)**：在手机上运行翻译模型。
+- **[TypeSafe Jev](https://typesafe.ai)**：可选的 AI 辅助（智能断句、检查译文）。
+
+## 技术文档
+
+- [整体架构](docs/architecture.md)：声音从哪来、怎么变成字幕
+- [语音识别](docs/asr.md)：模型选择与对比测试
+- [翻译](docs/translation.md)：Index-Translate、提示词、上下文、支持的语言
+- [AI 辅助（Jev）](docs/jev.md)：智能断句与译文检查
+- [隐私说明](docs/privacy.md)：哪些数据会离开手机
+- [使用记录与调试](docs/logs.md)：记录格式、性能数据
+- [构建与开发](docs/build.md)：编译、Mac 端到端测试
+
+---
+
+项目主页：<https://github.com/KorenKrita/simul-subtitle>

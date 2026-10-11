@@ -37,7 +37,7 @@ class ModelStore(
         val f = file(s)
         if (!f.isFile) return Result.Missing
         val r = check(s, f)
-        if (r != Result.Ok) return reject(s, f, r)
+        if (r != Result.Ok) return reject(f, r)
         okMarker(s).writeText(s.sha256)
         return r
     }
@@ -63,7 +63,7 @@ class ModelStore(
         val part = partFile(s)
         if (!part.isFile) return Result.Missing
         val r = check(s, part)
-        if (r != Result.Ok) return reject(s, part, r)
+        if (r != Result.Ok) return reject(part, r)
         val dst = file(s)
         dst.parentFile?.mkdirs()
         okMarker(s).delete()
@@ -111,7 +111,7 @@ class ModelStore(
         return okGone && (file.delete() || !file.exists())
     }
 
-    private fun reject(s: ModelSpec, f: File, r: Result): Result {
+    private fun reject(f: File, r: Result): Result {
         if (!f.delete() && f.exists()) return Result.Io("无法删除损坏的 ${f.name}")
         return r
     }

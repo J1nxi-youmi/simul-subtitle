@@ -4,6 +4,8 @@
 
 JDK 17，Android SDK（platform 35、build-tools 35、NDK 27.2.12479018、CMake 3.22.1）。minSdk 29，arm64-v8a。
 
+llama.cpp 按 `armv8.6-a+dotprod+i8mm+fp16` 编译（`app/build.gradle.kts`，`GGML_NATIVE=OFF`，没有运行时分派），所以「手机上翻译」只能在支持这些指令的处理器上运行；不支持的手机选这个方式会因非法指令崩溃。识别和在线翻译不受影响。
+
 ```bash
 git clone --recursive https://github.com/KorenKrita/simul-subtitle   # llama.cpp 是子模块
 cd simul-subtitle

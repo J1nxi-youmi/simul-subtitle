@@ -293,20 +293,26 @@ class MainActivity : Activity() {
         // the home page shows this card only while something required is missing; after that it is just noise
         findViewById<View>(R.id.permCard).visibility =
             if (hasAudio() && Settings.canDrawOverlays(this)) View.GONE else View.VISIBLE
-        permRow("① 听 App 的声音", "只听你选的那个 App 播放的声音，不用麦克风", hasAudio()) {
+        permRow("① 听手机里播放的声音", "只听 App 播放出来的声音，不用麦克风", hasAudio(), permList) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_PERM_ONLY)
         }
-        permRow("② 在屏幕上显示字幕", "让字幕浮在其他 App 上面", Settings.canDrawOverlays(this)) {
+        permRow("② 在屏幕上显示字幕", "让字幕浮在其他 App 上面", Settings.canDrawOverlays(this), permList) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
+        // optional: on the home card while it shows, and always in Settings (the home card hides once the two are granted)
+        val notifBox = findViewById<LinearLayout>(R.id.notifList)
+        notifBox.removeAllViews()
+        findViewById<View>(R.id.notifSection).visibility = if (Build.VERSION.SDK_INT >= 33) View.VISIBLE else View.GONE
         if (Build.VERSION.SDK_INT >= 33) {
-            permRow("通知（可以不开）", "显示运行状态和下载进度", checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM_ONLY)
-            }
+            val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            val ask = { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM_ONLY) }
+            permRow("通知（可以不开）", "在通知栏显示运行状态、下载进度和「停止」按钮", granted, permList, ask)
+            permRow("通知", "在通知栏显示运行状态、下载进度和「停止」按钮", granted, notifBox, ask)
         }
     }
 
-    private fun permRow(title: String, sub: String, granted: Boolean, grant: () -> Unit) {
+
+    private fun permRow(title: String, sub: String, granted: Boolean, parent: LinearLayout, grant: () -> Unit) {
         val dp = resources.displayMetrics.density
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -324,7 +330,7 @@ class MainActivity : Activity() {
                 text = "去允许"; textSize = 16f; minHeight = (52 * dp).toInt(); setOnClickListener { grant() }
             })
         }
-        permList.addView(row)
+        parent.addView(row)
     }
 
     // ---- translation / Jev ---------------------------------------------------------------------------------
@@ -771,9 +777,9 @@ class MainActivity : Activity() {
             preview.setCaptionHeight((resources.displayMetrics.heightPixels * prefs.heightFrac).toInt())
             preview.layoutParams = FrameLayout.LayoutParams((findViewById<View>(R.id.previewStage).width.takeIf { it > 0 } ?: (resources.displayMetrics.widthPixels * 0.8f).toInt()).let { (it * width.value / 100f).toInt() }, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL)
             preview.setLines(
-                listOf(CaptionOverlayView.Line("明天的会议改到下午三点了。", if (ja.isChecked) "明日の会議は午後三時に変更になりました" else null, true),
-                    CaptionOverlayView.Line("资料我今天之内发给你…", if (ja.isChecked) "資料は今日中に送ります" else null, false)),
-                if (stats.isChecked) "识别 52ms · 翻译 310ms · 延迟 0.7s" else null,
+                listOf(CaptionOverlayView.Line("这一句已经说完，是正式字幕", if (ja.isChecked) "（这里显示原文）" else null, true),
+                    CaptionOverlayView.Line("正在说的这一句…", if (ja.isChecked) "（原文）" else null, false)),
+                if (stats.isChecked) "这里显示识别和翻译用了多久" else null,
             )
         }
         loadStyle = { load(); renderPalettes(); apply() }
@@ -819,7 +825,7 @@ class MainActivity : Activity() {
         renderPermissions()
         render()
         if (requestCode == REQ_START && hasAudio()) start()
-        else if (requestCode == REQ_START) status(R.color.err, "需要允许「听 App 的声音」", "只用来听你选的那个 App 播放的声音，不会用麦克风。请再点一次开始，并选择「允许」。")
+        else if (requestCode == REQ_START) status(R.color.err, "需要允许「听手机里播放的声音」", "只用来听 App 播放出来的声音，不会用麦克风。请再点一次开始，并选择「允许」。")
     }
 
     @Deprecated("Deprecated in Java")

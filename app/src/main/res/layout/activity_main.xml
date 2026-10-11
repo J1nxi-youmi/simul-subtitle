@@ -161,7 +161,7 @@
                     android:layout_height="wrap_content"
                     android:paddingHorizontal="20dp"
                     android:paddingTop="12dp"
-                    android:text="开始前，需要你允许这两件事"
+                    android:text="开始前，需要你允许下面两件事"
                     android:textColor="@color/text"
                     android:textSize="18sp"
                     android:textStyle="bold" />
@@ -423,6 +423,33 @@
         </com.google.android.material.card.MaterialCardView>
 
 
+        <!-- optional notification permission (Android 13+); the home permission card hides once the required two are granted -->
+        <LinearLayout
+            android:id="@+id/notifSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:text="通知" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.Material3.CardView.Filled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardBackgroundColor="@color/card"
+                app:cardCornerRadius="24dp">
+
+                <LinearLayout
+                    android:id="@+id/notifList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingVertical="6dp" />
+            </com.google.android.material.card.MaterialCardView>
+        </LinearLayout>
+
         <!-- translation, display mode, Jev -->
         <TextView
             style="@style/SectionTitle"
@@ -496,7 +523,7 @@
             android:background="@drawable/tips_bg"
             android:lineSpacingExtra="5dp"
             android:padding="18dp"
-            android:text="1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置，拖右下角的小圆点可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、锁定位置，或者停止。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。\n5. 每次使用都会留下一份文字记录（不含声音和 key），可以在「使用记录」里分享出去，帮助反馈问题。"
+            android:text="1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置，拖右下角的小圆点可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、锁定位置，或者停止。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。同时有别的 App 在放声音时，它的声音也可能出现在字幕里。\n5. 每次使用都会留下一份文字记录（不含声音和 key），可以在「使用记录」里分享出去，帮助反馈问题。"
             android:textColor="@color/text2"
             android:textSize="15sp" />
 

@@ -18,7 +18,7 @@
 
 ## What it does
 
-- **Works with any app**: Bilibili, YouTube, streaming apps, the browser… whatever plays sound on the phone.
+- **Works with most apps**: Bilibili, YouTube, streaming apps, the browser… any app that allows its playback to be captured; a few apps and DRM-protected video do not.
 - **Floating subtitles**: shown over the video like movie subtitles; move them anywhere, change size, colour and background.
 - **As people speak**: text appears while someone is talking and becomes a final subtitle when the sentence ends.
 - **Speech stays on the phone**: audio is recognised on the device and **never uploaded**.
@@ -39,7 +39,7 @@ The app's interface is in Chinese.
 
 ## Install
 
-- Android 10 or newer, arm64.
+- Android 10 or newer, arm64. On-device translation additionally needs an ARMv8.6 CPU (dotprod, i8mm, fp16), e.g. Snapdragon 8 Gen 3 (the chip it is used on); if unsure, use online translation.
 - Download the APK from [Releases](https://github.com/KorenKrita/simul-subtitle/releases) and open it on the phone (allow "install unknown apps").
 - To build it yourself, see [docs/build.md](docs/build.md).
 

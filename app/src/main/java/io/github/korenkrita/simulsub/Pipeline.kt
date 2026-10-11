@@ -97,6 +97,8 @@ class Pipeline(
      * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
      */
     private val dedupeJoin: Boolean = false,
+    /** Finished sentences given to the translator as context (Index prompt 前文); 0 = none. */
+    private val previousSentences: Int = PREVIOUS_SENTENCES,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
     private val checkTranslations: Boolean = false,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
@@ -308,7 +310,7 @@ class Pipeline(
         "ev" to "jev", "kind" to kind, "seg" to seg, "rev" to rev, "request" to c.request, "status" to c.status,
         "response" to c.response, "ms" to c.ms, "error" to c.error, "action" to action))
 
-    /** Japanese of the last [PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */
+    /** Japanese of the last [previousSentences] non-empty finals translated, oldest first. MT thread only. */
     private val recentFinals = ArrayDeque<String>()
     /** newest segment whose final went through [rememberFinal] (MT thread only) */
     private var rememberedSeg = 0L
@@ -328,7 +330,7 @@ class Pipeline(
         if (seg > rememberedSeg) rememberedSeg = seg
         if (ja.isBlank()) return
         recentFinals.addLast(ja)
-        while (recentFinals.size > PREVIOUS_SENTENCES) recentFinals.removeFirst()
+        while (recentFinals.size > previousSentences) recentFinals.removeFirst()
     }
 
     /** One MT call, logged with everything needed to replay it. */
@@ -507,8 +509,9 @@ class Pipeline(
         /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
         const val LOST_MIN_SAMPLES = 24_000
         const val LOST_MIN_CHARS = 5
-        /** finished sentences given to the translator as context (Index prompt 前文) */
+        /** finished sentences given to the translator as context (Index prompt 前文): default, and the most offered */
         const val PREVIOUS_SENTENCES = 2
+        const val MAX_PREVIOUS_SENTENCES = 5
         /**
          * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
          * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself

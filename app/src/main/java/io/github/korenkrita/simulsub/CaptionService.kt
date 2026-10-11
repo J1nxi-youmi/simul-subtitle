@@ -124,6 +124,7 @@ class CaptionService : Service() {
             setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
 
             val scene = prefs.scene
+            val contextN = if (prefs.contextOn) prefs.contextSentences else 0
             val provider = prefs.jevProvider
             // one Jev client for both features; sentence ends (jevOn) and translation checks (jevCheck) are separate
             val wantJev = prefs.jevOn || prefs.jevCheck
@@ -136,7 +137,7 @@ class CaptionService : Service() {
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
-                "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "final_only" to prefs.finalOnly,
+                "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "context_sentences" to contextN, "final_only" to prefs.finalOnly,
                 "mt_engine" to (if (online != null) "online" else "local"),
                 "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
@@ -161,6 +162,7 @@ class CaptionService : Service() {
                 judgeEnds = judgeEnds,
                 checkTranslations = checkMt,
                 dedupeJoin = prefs.dedupeJoin,
+                previousSentences = contextN,
                 log = sl::write,
                 drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
             )

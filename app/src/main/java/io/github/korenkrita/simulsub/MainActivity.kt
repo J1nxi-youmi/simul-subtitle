@@ -353,6 +353,34 @@ class MainActivity : Activity() {
             textSize = 12.5f; setTextColor(getColor(R.color.text2))
         })
 
+        // translation context: on/off and how many finished sentences (applies to the next start)
+        val ctxCount = TextView(this).apply { textSize = 15f; setTextColor(getColor(R.color.text)) }
+        val ctxSlider = com.google.android.material.slider.Slider(this).apply {
+            valueFrom = 1f; valueTo = Pipeline.MAX_PREVIOUS_SENTENCES.toFloat(); stepSize = 1f; isTickVisible = false
+            value = prefs.contextSentences.toFloat()
+        }
+        fun showCtx() {
+            ctxCount.text = "参考前面 ${prefs.contextSentences} 句"
+            ctxCount.visibility = if (prefs.contextOn) View.VISIBLE else View.GONE
+            ctxSlider.visibility = ctxCount.visibility
+        }
+        box.addView(MaterialSwitch(this).apply {
+            text = "翻译时参考前面说过的话"; textSize = 15f; setTextColor(getColor(R.color.text))
+            isChecked = prefs.contextOn
+            setOnCheckedChangeListener { _, on -> prefs.contextOn = on; showCtx() }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (10 * resources.displayMetrics.density).toInt()
+        })
+        box.addView(ctxCount)
+        box.addView(ctxSlider)
+        ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
+        box.addView(TextView(this).apply {
+            text = "把刚说完的几句原文一起交给翻译，帮它理解「他、那个」指的是什么、省略了什么；这几句本身不会再翻译一遍。" +
+                "句数越多，每句翻译要读的字越多、会慢一点。默认开启、参考 2 句，下次开始时生效。"
+            textSize = 12.5f; setTextColor(getColor(R.color.text2))
+        })
+        showCtx()
+
         val jev = MaterialSwitch(this).apply {
             text = "用 Jev 判断断句（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
             isChecked = prefs.jevOn

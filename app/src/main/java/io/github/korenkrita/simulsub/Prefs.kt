@@ -106,6 +106,13 @@ class Prefs(ctx: Context) {
     var dedupeJoin: Boolean
         get() = sp.getBoolean("dedupeJoin", false)
         set(v) = sp.edit().putBoolean("dedupeJoin", v).apply()
+    /** Give the translator the last finished sentences as context (on by default, as before the switch). */
+    var contextOn: Boolean
+        get() = sp.getBoolean("contextOn", true)
+        set(v) = sp.edit().putBoolean("contextOn", v).apply()
+    var contextSentences: Int
+        get() = sp.getInt("contextSentences", Pipeline.PREVIOUS_SENTENCES).coerceIn(1, Pipeline.MAX_PREVIOUS_SENTENCES)
+        set(v) = sp.edit().putInt("contextSentences", v).apply()
     var jevProvider: JevProvider
         // a choice saved earlier stays; with none yet, the free Zen endpoint is the default
         get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)

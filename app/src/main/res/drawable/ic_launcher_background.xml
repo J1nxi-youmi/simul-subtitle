@@ -11,6 +11,4 @@
             </gradient>
         </aapt:attr>
     </path>
-    <!-- soft glow -->
-    <path android:fillColor="#22FFFFFF" android:pathData="M54,-10a50,50 0 1,1 -0.1,0z" />
 </vector>

@@ -318,8 +318,9 @@ class CaptionService : Service() {
 
     private fun onCaption(c: Caption, log: SessionLog?) {
         val t = c.timing
+        // timings only: the text of what was said stays out of logcat (it goes to the session log when that is on)
         Log.i(TAG, "seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} audio=${t.audioMs} wait=${t.segmentWaitMs} " +
-            "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} | ${c.ja} → ${c.zh}")
+            "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} ja=${c.ja.length} zh=${c.zh.length}")
         log?.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "source_rev" to c.sourceRevision,
             "final" to c.isFinal, "ja" to c.ja,
             "zh" to c.zh, "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,

@@ -14,7 +14,7 @@
 
 ```bash
 adb logcat -s jpsub
-# seg=3.4F audio=3072 wait=319 asrQ=9 asr=35 mtQ=13 mt=225 mtDone=601 | …
+# seg=3.4F audio=3072 wait=319 asrQ=9 asr=35 mtQ=13 mt=225 mtDone=601 ja=18 zh=12
 # shown seg=3.4F update=640ms hal=true
 ```
 
@@ -28,5 +28,6 @@ adb logcat -s jpsub
 | `mtDone` | 最后一个采样 → 翻译完成 |
 | `update` | 最后一个采样 → 悬浮窗文字更新（不是实际显示帧） |
 | `hal` | 是否用了硬件时间戳；false 时数值前加 `~`，会偏小 |
+| `ja` / `zh` | 原文 / 译文的字数；logcat 不输出原文和译文本身 |
 
 设置里打开「显示识别和翻译用时」后，悬浮字幕下方也会显示这些数字。

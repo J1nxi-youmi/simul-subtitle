@@ -123,16 +123,18 @@ class CaptionService : Service() {
             setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
 
             val scene = prefs.scene
+            val source = prefs.sourceLang; val target = prefs.targetLang
             val provider = prefs.jevProvider
             // one Jev client for both features; sentence ends (jevOn) and translation checks (jevCheck) are separate
             val wantJev = prefs.jevOn || prefs.jevCheck
             val key = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
-            val judge = key?.let { Jev(provider, it) }
+            val judge = key?.let { Jev(provider, it, source = source, target = target) }
             val judgeEnds = judge != null && prefs.jevOn
             val checkMt = judge != null && prefs.jevCheck
             val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
+                "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
                 "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "final_only" to prefs.finalOnly,
                 "mt_engine" to (if (online != null) "online" else "local"),
@@ -153,6 +155,8 @@ class CaptionService : Service() {
                     main.post { stopSelf() }
                 },
                 scene = scene,
+                source = source,
+                target = target,
                 judge = judge,
                 judgeEnds = judgeEnds,
                 checkTranslations = checkMt,

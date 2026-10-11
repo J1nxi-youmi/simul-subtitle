@@ -522,6 +522,17 @@ class PipelineTest {
     }
 
     @Test
+    fun englishIsJoinedWithASpaceAndOnlyWholeWordsAreARepeat() {
+        assertEquals("THANK YOU SO MUCH", Pipeline.join("THANK YOU", "SO MUCH"))
+        assertEquals("ありがとうhello", Pipeline.join("ありがとう", "hello")) // a Japanese side: no space
+        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "SO MUCH", "SO MUCH"))
+        // a repeated word at the join is dropped once
+        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "SO MUCH"))
+        // "NET" ends PLANET and starts NETWORK but is not a word on either side: no repeat
+        assertEquals("THE PLANET NETWORK", Pipeline.joinWithoutRepeat("THE PLANET", "NETWORK", "THE NETWORK"))
+    }
+
+    @Test
     fun theTranslatorGetsTheLastTwoFinishedSentencesAsContext() {
         val mt = FakeMt(1); val done = CountDownLatch(4)
         val asr = object : Asr { override fun recognize(samples: FloatArray) = if (samples.size == 30) "" else "ja${samples.size}" }

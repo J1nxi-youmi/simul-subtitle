@@ -283,6 +283,31 @@ class MainActivity : Activity() {
         val engine = choice(listOf(true to "在线 Index", false to "本地 2B"), prefs.mtOnline) {
             if (prefs.mtOnline != it) { prefs.mtOnline = it; renderTranslate(); render() } // local needs its model file
         }
+        box.addView(label("说话语言 → 字幕语言"))
+        val sources = choice(Lang.SOURCES.map { it to (it?.zh ?: "自动（日/英）") }, prefs.sourceLang) { prefs.sourceLang = it }
+        if (running) for (i in 0 until sources.childCount) sources.getChildAt(i).isEnabled = false
+        box.addView(sources)
+        val targets = Lang.entries
+        box.addView(android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                targets.map { "译成 ${it.zh}" })
+            setSelection(prefs.targetLang.ordinal, false)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    if (prefs.targetLang.ordinal != pos) prefs.targetLang = targets[pos]
+                }
+                override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            }
+            isEnabled = !running
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (6 * resources.displayMetrics.density).toInt()
+        })
+        box.addView(TextView(this).apply {
+            text = "语音识别模型只认日语和英语，选哪个都不改变识别本身，只告诉翻译（和 Jev）原文是什么语言；「自动」让翻译模型自己判断。场景里的术语对照只在译成中文时使用。"
+            textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            setPadding(0, (6 * resources.displayMetrics.density).toInt(), 0, 0)
+        })
+        box.addView(label("翻译引擎"))
         box.addView(engine)
         if (prefs.mtOnline) {
             val models = android.widget.Spinner(this).apply {
@@ -303,7 +328,7 @@ class MainActivity : Activity() {
         }
         box.addView(TextView(this).apply {
             text = (if (prefs.mtOnline)
-                "B站免费公网接口：识别出的日文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。推荐 35B；9B/2B 是备选。"
+                "B站免费公网接口：识别出的原文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。推荐 35B；9B/2B 是备选。"
             else "在手机上翻译，需要先下载约 1.3 GB 模型；比在线慢很多，长句可能积压。") +
                 if (running) "\n运行中不能切换，停止后再改。" else ""
             textSize = 12.5f; setTextColor(getColor(R.color.text2))
@@ -367,7 +392,7 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             if (!p.needsKey) {
                 jevBox.addView(TextView(this).apply {
-                    text = "不用填 key。只把识别出的日语和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以在上面换成另外两个需要 key 的接口。"
+                    text = "不用填 key。只把识别出的原文和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以在上面换成另外两个需要 key 的接口。"
                     textSize = 12.5f; setTextColor(getColor(R.color.text2))
                 })
                 return
@@ -400,7 +425,7 @@ class MainActivity : Activity() {
             })
             jevBox.addView(row)
             jevBox.addView(TextView(this).apply {
-                text = "只把识别出的日语和译文发给 ${p.label}，不发送声音。key 用 Android Keystore 加密保存在本机，不会写进使用记录。"
+                text = "只把识别出的原文和译文发给 ${p.label}，不发送声音。key 用 Android Keystore 加密保存在本机，不会写进使用记录。"
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             })
         }

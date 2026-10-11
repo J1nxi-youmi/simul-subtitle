@@ -53,11 +53,16 @@ class Jev(
     private val url: String = provider.url,
     /** tests: runs after the request is registered for cancel() and before it is executed */
     private val beforeSend: () -> Unit = {},
+    /** the session's languages; Japanese→Chinese uses the wording tuned on the test sets */
+    private val source: Lang? = Lang.JA,
+    private val target: Lang = Lang.ZH,
 ) : Judge {
     private val calls = Calls(deadlineMs)
+    private val unfinishedQ = unfinishedQuestion(source)
+    private val mistranslationQ = mistranslationQuestion(source, target)
 
-    override fun unfinished(text: String) = ask(mapOf("current" to text), UNFINISHED)
-    override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), MISTRANSLATION)
+    override fun unfinished(text: String) = ask(mapOf("current" to text), unfinishedQ)
+    override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), mistranslationQ)
 
     override fun cancel() = calls.cancel()
 
@@ -116,6 +121,36 @@ class Jev(
                 "ok" to "zh is an acceptable translation",
             ),
         )
+
+        /**
+         * The "unfinished?" question for [source]: Japanese keeps the tuned wording; English and auto (Japanese or
+         * English) get the same criteria without the Japanese word lists (not tuned or measured).
+         */
+        fun unfinishedQuestion(source: Lang?): Map<String, Any> = if (source == Lang.JA) UNFINISHED else mapOf(
+            "type" to "noul",
+            "instructions" to "`current` is raw automatic speech-recognition (ASR) output for a ${source?.en ?: "Japanese or English"} livestream, ending where the streamer just paused. The ASR often mishears words: a short fragment may be a misrecognized piece of a longer word or phrase, even if it looks like a valid word. Decide whether the speaker's sentence is still unfinished at the end of `current`, so we should wait and join it with what the speaker says next. Unfinished: `current` ends with a dangling preposition, conjunction, article or particle, a modifier waiting for its noun, a word cut in half, or is a short fragment that makes no sense in context and is probably misheard. Finished: `current` ends with a complete sentence or is a standalone filler/reaction.",
+            "criteria" to UNFINISHED["criteria"]!!,
+        )
+
+        /** The check for a language pair: Japanese→Chinese keeps the tested wording, others name their languages. */
+        fun mistranslationQuestion(source: Lang?, target: Lang): Map<String, Any> {
+            if (source == Lang.JA && target == Lang.ZH) return MISTRANSLATION
+            val src = source?.en ?: "Japanese or English"
+            return mapOf(
+                "type" to "choice",
+                "instructions" to "`ja` is $src VTuber livestream speech (raw speech recognition, may contain misheard words); `zh` is a ${target.en} machine translation of it that may be wrong. What is the main problem with `zh`?",
+                "criteria" to mapOf(
+                    "negation" to "zh adds a negation or refusal that ja does not contain",
+                    "reversal" to "zh reverses the meaning or the positive/negative polarity of ja",
+                    "literal_metaphor" to "zh translates an idiom or livestream expression literally",
+                    "platform_term" to "zh mistranslates a livestream/platform term such as a platform name, superchat, member, gift",
+                    "untranslated" to "zh leaves $src words untranslated",
+                    "misheard" to "ja itself contains misheard nonsense words and zh translates them literally",
+                    "hallucination" to "zh adds content that ja does not say",
+                    "ok" to "zh is an acceptable translation",
+                ),
+            )
+        }
     }
 }
 

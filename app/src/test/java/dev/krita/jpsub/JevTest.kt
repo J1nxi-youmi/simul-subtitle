@@ -4,6 +4,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
@@ -241,6 +242,21 @@ class JevTest {
         assertNull("no Authorization header for Zen", lastAuth.get())
         assertEquals("jev-1.13-free", (Json.parse(lastBody.get()!!) as Map<*, *>)["model"])
         assertEquals(JevProvider.ZEN, JevProvider.entries.first())
+    }
+
+    @Test
+    fun questionsFollowTheSessionLanguagesAndJapaneseToChineseKeepsTheTunedWording() {
+        assertSame(Jev.UNFINISHED, Jev.unfinishedQuestion(Lang.JA))
+        assertSame(Jev.MISTRANSLATION, Jev.mistranslationQuestion(Lang.JA, Lang.ZH))
+        val en = Jev.unfinishedQuestion(Lang.EN)["instructions"] as String
+        assertTrue(en, en.contains("English livestream") && !en.contains("けど"))
+        assertTrue((Jev.unfinishedQuestion(null)["instructions"] as String).contains("Japanese or English livestream"))
+        val m = Jev.mistranslationQuestion(Lang.EN, Lang.JA)["instructions"] as String
+        assertTrue(m, m.contains("English VTuber") && m.contains("Japanese machine translation"))
+        // the request sends the question of the configured pair
+        reply = { 200 to """{"answers":{"x":{"type":"choice","choice":"ok","confidence":0.9}}}""" }
+        Jev(JevProvider.ZEN, "", url = "http://127.0.0.1:$port/zen/v1/systemone", source = Lang.EN, target = Lang.KO).mistranslation("hi", "안녕")
+        assertTrue(lastBody.get()!!, lastBody.get()!!.contains("Korean machine translation"))
     }
 
     @Test

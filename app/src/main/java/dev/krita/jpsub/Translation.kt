@@ -21,18 +21,45 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
  * the terms found in [text] as a hard constraint and the scene / [notes] / [previous] sentences as soft ones. The same
  * text goes to the online API (as the user message) and to the local model (wrapped by [qwenChat]).
  */
-fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList(), previous: List<String> = emptyList()): String {
-    val terms = scene.terms.filter { text.contains(it.first) }.distinctBy { it.second }
+fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList(), previous: List<String> = emptyList(),
+                source: Lang? = Lang.JA, target: Lang = Lang.ZH): String {
+    // the term list maps Japanese words to Chinese renderings: only for a Chinese target
+    val terms = if (target != Lang.ZH) emptyList() else scene.terms.filter { text.contains(it.first) }.distinctBy { it.second }
     val constraints = buildList {
         if (terms.isNotEmpty()) add("【硬性要求】专名/术语对照: " + terms.joinToString("、") { "${it.first}→${it.second}" })
-        scene.background?.let { add("【注意】$it") }
+        // the VTuber background says the streamer is Japanese; with another or an unknown source language it does not
+        scene.background?.let { add("【注意】" + if (source == Lang.JA) it else it.replace("日本虚拟主播", "虚拟主播")) }
         notes.forEach { add("【注意】$it") }
         // the speaker's last sentences, for references and omissions (A/B on the live log: more fixes than regressions)
         if (previous.isNotEmpty()) add("【注意】前文（只用于理解当前句的指代和省略，不要翻译、不要输出）：" + previous.joinToString(" / "))
     }
-    return if (constraints.isEmpty()) "请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n$text"
-    else "请将以下日语直播字幕翻译成中文，并且严格遵循所有约束要求。\n\n【源文】\n$text\n\n【约束要求】\n" +
+    // as the official client: the source language is named unless it is auto (then the model works it out)
+    val src = source?.zh ?: ""
+    return if (constraints.isEmpty()) "请将以下${src}文本翻译为${target.zh}，直接输出翻译结果，不要进行任何解释。\n\n$text"
+    else "请将以下${src}直播字幕翻译成${target.zh}，并且严格遵循所有约束要求。\n\n【源文】\n$text\n\n【约束要求】\n" +
         constraints.mapIndexed { i, c -> "${i + 1}. $c" }.joinToString("\n") + "\n\n只输出译文，不要有任何额外说明。"
+}
+
+/**
+ * The 22 core languages of Index-Translate (technical report, table 31), with the names its prompt uses (official
+ * client LANG_NAMES) and English names for the Jev questions. Targets: all. Sources: [SOURCES].
+ */
+enum class Lang(val code: String, val zh: String, val en: String) {
+    ZH("zh", "中文", "Chinese"), EN("en", "英语", "English"), JA("ja", "日语", "Japanese"), KO("ko", "韩语", "Korean"),
+    DE("de", "德语", "German"), FR("fr", "法语", "French"), ES("es", "西班牙语", "Spanish"), PT("pt", "葡萄牙语", "Portuguese"),
+    RU("ru", "俄语", "Russian"), AR("ar", "阿拉伯语", "Arabic"), IT("it", "意大利语", "Italian"), NL("nl", "荷兰语", "Dutch"),
+    PL("pl", "波兰语", "Polish"), RO("ro", "罗马尼亚语", "Romanian"), SV("sv", "瑞典语", "Swedish"), TR("tr", "土耳其语", "Turkish"),
+    HI("hi", "印地语", "Hindi"), VI("vi", "越南语", "Vietnamese"), TH("th", "泰语", "Thai"), ID("id", "印尼语", "Indonesian"),
+    MS("ms", "马来语", "Malay"), FIL("fil", "菲律宾语", "Filipino");
+
+    companion object {
+        /**
+         * What ReazonSpeech (ja-en, one model, no language setting) is used for. The choice only tells the translator
+         * and Jev the language; null = auto: Japanese or English, the translator works it out.
+         */
+        val SOURCES: List<Lang?> = listOf(JA, EN, null)
+        fun of(code: String?): Lang? = entries.firstOrNull { it.code == code }
+    }
 }
 
 /** Qwen3.5 chat template with thinking disabled (empty think block), as rendered by the model's own template. */
@@ -119,7 +146,7 @@ class OnlineTranslator(
     companion object {
         const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
         /** same cap as the local model */
-        const val MAX_TOKENS = 160
+        const val MAX_TOKENS = LlamaTranslator.MAX_TOKENS
     }
 }
 
@@ -132,4 +159,13 @@ val FIX_NOTES = mapOf(
     "reversal" to "注意保持原文的肯定/否定和转折关系，不要把意思翻反（例如“寂しくない”是“不寂寞”）。",
     "literal_metaphor" to "原文里的比喻或直播用语不要按字面直译（例如“流れる”指弹幕/评论滚动得快，不是水流），按语境意译。",
 )
+
+/** [FIX_NOTES] without the Japanese→Chinese examples, for every other language pair. */
+val FIX_NOTES_GENERAL = mapOf(
+    "negation" to "原文没有否定或拒绝的意思，译文不要凭空加入否定。",
+    "reversal" to "注意保持原文的肯定/否定和转折关系，不要把意思翻反。",
+    "literal_metaphor" to "原文里的比喻或直播用语不要按字面直译，按语境意译。",
+)
+fun fixNote(choice: String, source: Lang?, target: Lang) =
+    (if (source == Lang.JA && target == Lang.ZH) FIX_NOTES else FIX_NOTES_GENERAL)[choice]
 

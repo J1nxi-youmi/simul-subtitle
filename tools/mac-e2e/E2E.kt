@@ -16,6 +16,9 @@ fun main() {
         .setTokens("$m/asr/tokens.txt").setNumThreads(2).setModelType("transducer").build()).setDecodingMethod("greedy_search").build())
     val asr = object : Asr { override fun recognize(samples: FloatArray): String { val s = rec.createStream(); val pd = FloatArray(samples.size + 9600); System.arraycopy(samples, 0, pd, 4800, samples.size); s.acceptWaveform(pd, 16000); rec.decode(s); val t = rec.getResult(s).text; s.release(); return t } }
     val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
+    // -Dsource=<ja|en|auto> -Dtarget=<code>: languages as in the app (default ja -> zh)
+    val source = (System.getProperty("source") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: error("source $it") }
+    val target = Lang.of(System.getProperty("target") ?: "zh") ?: error("target")
     // -Donline=<35|9|2> uses bilibili's public Index API instead of the local model
     val online = System.getProperty("online")?.let { m -> OnlineModel.entries.single { it.name == "B$m" } }
     val mt: Mt = if (online != null) OnlineTranslator(online) else object : Mt {
@@ -28,8 +31,8 @@ fun main() {
     // -Djev=zen: the free keyless Zen endpoint; any other value: TypeSafe official with TYPESAFE_API_KEY
     val judge = when (System.getProperty("jev")) {
         null -> null
-        "zen" -> Jev(JevProvider.ZEN, "")
-        else -> Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY"))
+        "zen" -> Jev(JevProvider.ZEN, "", source = source, target = target)
+        else -> Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY"), source = source, target = target)
     }
     // -DjevEnds=0: with -Djev, only check translations (as the app's check switch without sentence-end judging)
     val judgeEnds = judge != null && System.getProperty("jevEnds") != "0"
@@ -50,7 +53,7 @@ fun main() {
             "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
             "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs))); w.write("\n") } }
         board.accept(c)
-    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge,
+    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, source = source, target = target, judge = judge,
        judgeEnds = judgeEnds, checkTranslations = System.getProperty("jevCheck") == "1", // -DjevCheck=1: also check translations
        log = { e -> jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs()) + e)); w.write("\n") } } })
     p.start()

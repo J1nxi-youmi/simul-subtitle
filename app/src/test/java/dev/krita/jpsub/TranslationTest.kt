@@ -50,4 +50,31 @@ class TranslationTest {
         assertTrue(p, p.contains("【源文】\nそれな\n\n【约束要求】\n1. 【注意】前文（只用于理解当前句的指代和省略，不要翻译、不要输出）：昨日ね / ゲームした\n"))
         assertEquals(indexPrompt("それな", Scene.GENERAL), indexPrompt("それな", Scene.GENERAL, previous = emptyList()))
     }
+
+    @Test
+    fun otherLanguagePairsNameTheirLanguagesAndJapaneseToChineseIsUnchanged() {
+        assertEquals("请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\nこんにちは", indexPrompt("こんにちは", Scene.GENERAL))
+        assertEquals("请将以下英语文本翻译为日语，直接输出翻译结果，不要进行任何解释。\n\nhello",
+            indexPrompt("hello", Scene.GENERAL, source = Lang.EN, target = Lang.JA))
+        // auto: as the official client, no source language is named
+        assertEquals("请将以下文本翻译为英语，直接输出翻译结果，不要进行任何解释。\n\nhello",
+            indexPrompt("hello", Scene.GENERAL, source = null, target = Lang.EN))
+    }
+
+    @Test
+    fun theJapaneseToChineseTermListIsOnlyUsedForAChineseTarget() {
+        assertTrue(indexPrompt("館長ありがとう", Scene.VTUBER).contains("館長→舰长"))
+        val en = indexPrompt("館長ありがとう", Scene.VTUBER, target = Lang.EN)
+        assertTrue(en, !en.contains("舰长") && en.startsWith("请将以下日语直播字幕翻译成英语"))
+        val fromEn = indexPrompt("thanks", Scene.VTUBER, source = Lang.EN)
+        assertTrue(fromEn, fromEn.contains("这是虚拟主播（VTuber）") && !fromEn.contains("日本虚拟主播"))
+    }
+
+    @Test
+    fun fixNotesWithJapaneseExamplesOnlyForJapaneseToChinese() {
+        assertEquals(FIX_NOTES["negation"], fixNote("negation", Lang.JA, Lang.ZH))
+        assertEquals(FIX_NOTES_GENERAL["negation"], fixNote("negation", Lang.EN, Lang.ZH))
+        assertEquals(FIX_NOTES_GENERAL["reversal"], fixNote("reversal", Lang.JA, Lang.EN))
+        assertEquals(null, fixNote("ok", Lang.JA, Lang.ZH))
+    }
 }

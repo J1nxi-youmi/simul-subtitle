@@ -81,6 +81,14 @@ class Prefs(ctx: Context) {
         get() = runCatching { OnlineModel.valueOf(sp.getString("onlineModel", null) ?: "") }.getOrDefault(OnlineModel.B35)
         set(v) = sp.edit().putString("onlineModel", v.name).apply()
 
+    /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
+    var sourceLang: Lang?
+        get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
+        set(v) = sp.edit().putString("sourceLang", v?.code ?: "auto").apply()
+    var targetLang: Lang
+        get() = Lang.of(sp.getString("targetLang", null)) ?: Lang.ZH
+        set(v) = sp.edit().putString("targetLang", v.code).apply()
+
     /** What the subtitles are about (translator background + term list); read when a session starts. */
     var scene: Scene
         get() = runCatching { Scene.valueOf(sp.getString("scene", null) ?: "") }.getOrDefault(Scene.GENERAL)

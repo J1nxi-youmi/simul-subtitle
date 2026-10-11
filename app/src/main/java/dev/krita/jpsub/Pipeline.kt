@@ -81,6 +81,9 @@ class Pipeline(
     private val clock: () -> Long = ::monoMs,
     private val sampleRate: Int = 16_000,
     private val scene: Scene = Scene.GENERAL,
+    /** null = auto (Japanese or English); only the translator and the join of kept drafts use it */
+    private val source: Lang? = Lang.JA,
+    private val target: Lang = Lang.ZH,
     /**
      * Optional cloud judge (Jev). With it: endOfSpeech drafts are asked "unfinished?" on a separate thread and the
      * answer is offered to the segmenter through [holdHint]; every final translation is checked once and, for the
@@ -243,7 +246,7 @@ class Pipeline(
             val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
             log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
                 "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            if (dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else lost.second + tail
+            if (dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
         }
         // the history holds what was shown, so a second loss keeps the text an earlier repair saved
         if (!job.isFinal) hist += job.samples.size to text
@@ -331,7 +334,7 @@ class Pipeline(
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>,
                           previous: List<String> = previousFor(job.segmentId)): MtResult? {
-        val prompt = indexPrompt(ja, scene, notes, previous)
+        val prompt = indexPrompt(ja, scene, notes, previous, source, target)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
@@ -365,7 +368,7 @@ class Pipeline(
         val call = judge.mistranslation(j.ja, zh)
         judgeMs(clock() - c0) // the Jev call only; a retranslation below is translation time
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
-        val note = call.choice?.let { FIX_NOTES[it] }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
+        val note = call.choice?.let { fixNote(it, source, target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")
             return zh
@@ -510,16 +513,30 @@ class Pipeline(
          * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
          * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself
          * miss words, so a real repeat can be dropped; with the piece twice in [whole] both are kept.
+         * Text with Latin letters (English) is joined with a space and a repeat must be whole words.
          */
         fun joinWithoutRepeat(kept: String, tail: String, whole: String): String {
+            val words = spaced(kept, tail)
             for (n in minOf(kept.length, tail.length) downTo MIN_REPEAT) {
                 val piece = tail.substring(0, n)
                 if (!kept.endsWith(piece)) continue
-                return if (whole.windowed(n).count { it == piece } >= 2) kept + tail else kept + tail.substring(n)
+                // English: the piece must start and end at word boundaries on both sides ("PLANET" + "NETWORK" is not a repeat)
+                if (words && !(boundary(kept, kept.length - n) && boundary(tail, n))) continue
+                return if (whole.windowed(n).count { it == piece } >= 2) join(kept, tail) else join(kept, tail.substring(n).trimStart())
             }
-            return kept + tail
+            return join(kept, tail)
         }
         const val MIN_REPEAT = 3
+
+        /** Text with Latin letters on either side of the join is spaced (English); Japanese is joined directly. */
+        private fun spaced(a: String, b: String) = a.lastOrNull()?.let { it.isLetterOrDigit() && it.code < 0x2E80 } == true &&
+            b.firstOrNull()?.let { it.isLetterOrDigit() && it.code < 0x2E80 } == true
+        private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !s[i - 1].isLetterOrDigit() || !s[i].isLetterOrDigit()
+        fun join(a: String, b: String) = when {
+            a.isEmpty() -> b; b.isEmpty() -> a
+            spaced(a, b) -> "$a $b"
+            else -> a + b
+        }
 
         /** share of [a]'s characters found, in order, in [b] */
         fun keptRatio(a: String, b: String): Double {

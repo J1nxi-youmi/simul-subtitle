@@ -399,7 +399,26 @@ class MainActivity : Activity() {
             options.forEach { (v, t) ->
                 val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                     id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
-                    maxLines = 2
+                    // narrow phones: the label keeps its own line breaks and shrinks (down to 11 sp) until every line
+                    // fits the button's width, instead of being cut to "在…"
+                    val lines = t.split('\n')
+                    maxLines = lines.size; isSingleLine = false; ellipsize = null; isAllCaps = false
+                    setPadding((4 * dpx).toInt(), paddingTop, (4 * dpx).toInt(), paddingBottom)
+                    addOnLayoutChangeListener { v, l, _, r, _, ol, _, or, _ ->
+                        if (r - l == or - ol) return@addOnLayoutChangeListener
+                        val b = v as MaterialButton
+                        val avail = (r - l) - b.paddingLeft - b.paddingRight - b.iconSize - b.iconPadding
+                        val p = android.text.TextPaint(b.paint)
+                        var sp = 16f
+                        while (sp > 11f) {
+                            p.textSize = sp * resources.displayMetrics.scaledDensity
+                            if (lines.all { p.measureText(it) <= avail }) break
+                            sp -= 0.5f
+                        }
+                        // still too wide at the smallest size (very large system font): wrap rather than cut
+                        val fits = lines.all { p.measureText(it) <= avail }
+                        if (b.textSize != p.textSize || !fits) b.post { b.textSize = sp; b.maxLines = if (fits) lines.size else lines.size * 2 }
+                    }
                 }
                 addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 if (v == current) check(b.id)
@@ -617,7 +636,7 @@ class MainActivity : Activity() {
                     // shown once by the next render
                     byokResult = when {
                         ok != null -> "✓ 可以用。参数：${v!!.label}（这次没检测到思考，已记住）；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
-                            (if ((ok.firstContentMs ?: 0) > 1000) "（超过 1 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
+                            (if ((ok.firstContentMs ?: 0) > FIRST_CONTENT_MS) "（超过 ${FIRST_CONTENT_MS / 1000} 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
                         none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
                         else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
                     }

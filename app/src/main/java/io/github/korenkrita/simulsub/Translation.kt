@@ -75,6 +75,9 @@ fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "
  */
 fun mtMaxTokens(target: Lang) = if (target == Lang.ZH) 160 else 256
 
+/** Online translation (Index, BYOK): no translated text this long after sending fails the caption. */
+const val FIRST_CONTENT_MS = 5_000L
+
 /**
  * One translation call. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
  * [raw] is the model output exactly as generated; [text] is what a caption shows. For the session log: [request] is
@@ -128,7 +131,7 @@ class OnlineTranslator(
     private val maxTokens: Int = mtMaxTokens(Lang.ZH),
     /** tests point this at a local server */
     private val url: String = URL,
-    private val firstContentMs: Long = 1_000,
+    private val firstContentMs: Long = FIRST_CONTENT_MS,
 ) : Mt {
     private val calls = Calls(deadlineMs)
 
@@ -293,7 +296,7 @@ class ByokTranslator(
     private val variant: ThinkingOff?,
     private val deadlineMs: Long = 8_000,
     private val maxTokens: Int = mtMaxTokens(Lang.ZH),
-    private val firstContentMs: Long = 1_000,
+    private val firstContentMs: Long = FIRST_CONTENT_MS,
 ) : Mt {
     private val calls = Calls(deadlineMs)
 
@@ -323,7 +326,8 @@ class ByokTranslator(
         // that MtResult.text (which strips once more) can no longer join anything into the key
         var clean = if (open) "" else res.raw
         while (true) {
-            val next = stripThink(clean).replace(apiKey, "***")
+            // the mask has no key characters, so each pass strictly shrinks or ends (a key like "*" could grow it)
+            val next = stripThink(clean).replace(apiKey, "")
             if (next == clean) break
             clean = next
         }
@@ -387,7 +391,9 @@ class ByokTranslator(
         // proper end (no finish_reason, cut off) proves nothing
         steps.all { ended(it.result) || it.result.http == 400 || it.result.http == 422 } && steps.any { ended(it.result) }
     /** The reply ended properly (stop or token cap), also when it was cut inside reasoning and so shows nothing. */
-    private fun ended(r: MtResult) = r.stop == 'e' || r.stop == 'l' || r.error == "unfinished thinking"
+    // an empty answer that did not think (e.g. text in a field we do not read) is not a conclusive "it thinks"
+    private fun ended(r: MtResult) = ((r.stop == 'e' || r.stop == 'l') && (r.thinking || r.text.isNotEmpty())) ||
+        r.error == "unfinished thinking"
     // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
     // (a timeout is not among them: thinking can make an answer slow)
     private fun fatal(r: MtResult) = r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)
@@ -404,7 +410,7 @@ class ByokTranslator(
             r.http == 429 -> "请求太频繁或额度用完（HTTP 429）"
             r.http != null && r.http != 0 && r.http != 200 -> "服务返回错误（HTTP ${r.http}）"
             r.error?.startsWith("deadline") == true -> "8 秒内没有翻完"
-            r.error?.startsWith("no content") == true -> "1 秒内没有收到译文"
+            r.error?.startsWith("no content") == true -> "${FIRST_CONTENT_MS / 1000} 秒内没有收到译文"
             r.error == "bad response" || r.error == "finish_reason" -> "回复的格式不对，可能不是 OpenAI 兼容的流式接口"
             r.error == null -> "没有收到译文"
             r.error!!.contains("UnknownHost") -> "找不到这个域名"

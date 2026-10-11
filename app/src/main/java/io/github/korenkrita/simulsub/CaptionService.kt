@@ -84,12 +84,14 @@ class CaptionService : Service() {
         projection = p
         running = true
         showOverlay()
+        // fixed at the start: switching it while models load affects the next session, as the switch says
+        val keepLogs = prefs.keepLogs
         sessions.incrementAndGet() // until the session thread has freed every native model (see [modelsInUse])
-        Thread({ try { session(p) } finally { sessions.decrementAndGet() } }, "jpsub-session").start()
+        Thread({ try { session(p, keepLogs) } finally { sessions.decrementAndGet() } }, "jpsub-session").start()
         return START_NOT_STICKY
     }
 
-    private fun session(p: MediaProjection) {
+    private fun session(p: MediaProjection, keepLogs: Boolean) {
         val root = getExternalFilesDir(null)!!
         val files = ModelFiles(root)
         var vad: SileroProb? = null
@@ -141,7 +143,7 @@ class CaptionService : Service() {
             val judgeEnds = judge != null && prefs.jevOn
             val checkMt = judge != null && prefs.jevCheck
             // off by default: a log is written only after the user turned it on in settings
-            val sl = if (!prefs.keepLogs) null
+            val sl = if (!keepLogs) null
                 else SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
             sl?.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,

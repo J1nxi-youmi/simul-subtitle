@@ -99,11 +99,7 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
     }
 
     companion object {
-        /**
-         * Live speech segments are ≤ 7 s; 160 tokens covered the longest Chinese output measured. Other target languages
-         * (Thai, Hindi, Arabic…) take more tokens for the same sentence, so the cap leaves room (unmeasured).
-         */
-        const val MAX_TOKENS = 256
+        const val MAX_TOKENS = MT_MAX_TOKENS
         init { System.loadLibrary("jpsub") }
         @JvmStatic private external fun nativeLoad(path: String, threads: Int): Long
         @JvmStatic private external fun nativeTranslate(h: Long, prompt: String, maxTokens: Int): ByteArray?

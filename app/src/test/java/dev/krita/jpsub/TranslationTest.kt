@@ -77,4 +77,16 @@ class TranslationTest {
         assertEquals(FIX_NOTES_GENERAL["reversal"], fixNote("reversal", Lang.JA, Lang.EN))
         assertEquals(null, fixNote("ok", Lang.JA, Lang.ZH))
     }
+
+    @Test
+    fun theDefaultConstrainedPromptIsTheSameAsBeforeLanguagesCouldBeChosen() {
+        // pinned from d3dbdd0 (indexPrompt had no language parameters)
+        val before = "请将以下日语直播字幕翻译成中文，并且严格遵循所有约束要求。\n\n【源文】\n館長ありがとう\n\n【约束要求】\n" +
+            "1. 【硬性要求】专名/术语对照: 館長→舰长\n" +
+            "2. 【注意】这是日本虚拟主播（VTuber）在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。\n" +
+            "3. 【注意】" + FIX_NOTES["negation"] + "\n" +
+            "4. 【注意】前文（只用于理解当前句的指代和省略，不要翻译、不要输出）：昨日ね\n\n只输出译文，不要有任何额外说明。"
+        assertEquals(before, indexPrompt("館長ありがとう", Scene.VTUBER, listOf(FIX_NOTES["negation"]!!), listOf("昨日ね")))
+        assertEquals(before, indexPrompt("館長ありがとう", Scene.VTUBER, listOf(FIX_NOTES["negation"]!!), listOf("昨日ね"), Lang.JA, Lang.ZH))
+    }
 }

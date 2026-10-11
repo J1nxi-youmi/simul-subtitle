@@ -68,6 +68,11 @@ fun qwenChat(user: String) = "<|im_start|>user\n$user<|im_end|>\n<|im_start|>ass
 /** The model occasionally still emits a think block or a stray "</think>"; the official client strips it too. */
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
+/**
+ * Output cap of one translation, local and online. Live speech segments are ≤ 7 s; 160 tokens covered the longest
+ * Chinese output measured. Other targets (Thai, Hindi, Arabic…) take more tokens per sentence, hence room (unmeasured).
+ */
+const val MT_MAX_TOKENS = 256
 
 /**
  * One translation call. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
@@ -146,7 +151,7 @@ class OnlineTranslator(
     companion object {
         const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
         /** same cap as the local model */
-        const val MAX_TOKENS = LlamaTranslator.MAX_TOKENS
+        const val MAX_TOKENS = MT_MAX_TOKENS
     }
 }
 

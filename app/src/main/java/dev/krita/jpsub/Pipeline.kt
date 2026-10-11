@@ -513,30 +513,37 @@ class Pipeline(
          * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
          * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself
          * miss words, so a real repeat can be dropped; with the piece twice in [whole] both are kept.
-         * Text with Latin letters (English) is joined with a space and a repeat must be whole words.
+         * A piece with Latin letters (English) must be whole words, in [kept], [tail] and each counted occurrence in
+         * [whole] ("PLANET" + "NETWORK" shares "NET" but no word); Japanese pieces match as before.
          */
         fun joinWithoutRepeat(kept: String, tail: String, whole: String): String {
-            val words = spaced(kept, tail)
             for (n in minOf(kept.length, tail.length) downTo MIN_REPEAT) {
                 val piece = tail.substring(0, n)
                 if (!kept.endsWith(piece)) continue
-                // English: the piece must start and end at word boundaries on both sides ("PLANET" + "NETWORK" is not a repeat)
+                val words = latin(piece)
                 if (words && !(boundary(kept, kept.length - n) && boundary(tail, n))) continue
-                return if (whole.windowed(n).count { it == piece } >= 2) join(kept, tail) else join(kept, tail.substring(n).trimStart())
+                val inWhole = (0..whole.length - n).count { i -> whole.startsWith(piece, i) && (!words || boundary(whole, i) && boundary(whole, i + n)) }
+                return if (inWhole >= 2) join(kept, tail) else join(kept, tail.substring(n).trimStart())
             }
             return join(kept, tail)
         }
         const val MIN_REPEAT = 3
 
-        /** Text with Latin letters on either side of the join is spaced (English); Japanese is joined directly. */
-        private fun spaced(a: String, b: String) = a.lastOrNull()?.let { it.isLetterOrDigit() && it.code < 0x2E80 } == true &&
-            b.firstOrNull()?.let { it.isLetterOrDigit() && it.code < 0x2E80 } == true
+        /** contains a letter below the CJK ranges (Latin, also Cyrillic etc.); Japanese text has none or few */
+        private fun latin(s: String) = s.any { it.isLetter() && it.code < 0x2E80 }
+        /** no letter/digit on both sides of position [i] */
         private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !s[i - 1].isLetterOrDigit() || !s[i].isLetterOrDigit()
+        /**
+         * Latin-script text is joined with a space when neither side of the join is CJK (or already whitespace), so
+         * "THANK YOU." + "SO" gets one; Japanese, also with a Latin word in it ("SC" + "です"), is joined directly.
+         */
         fun join(a: String, b: String) = when {
             a.isEmpty() -> b; b.isEmpty() -> a
-            spaced(a, b) -> "$a $b"
+            (latin(a) || latin(b)) && !a.last().isWhitespace() && !b.first().isWhitespace() &&
+                !isCjk(a.last()) && !isCjk(b.first()) -> "$a $b"
             else -> a + b
         }
+        private fun isCjk(c: Char) = c.code >= 0x2E80
 
         /** share of [a]'s characters found, in order, in [b] */
         fun keptRatio(a: String, b: String): Double {

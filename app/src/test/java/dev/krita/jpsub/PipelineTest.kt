@@ -530,6 +530,35 @@ class PipelineTest {
         assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "SO MUCH"))
         // "NET" ends PLANET and starts NETWORK but is not a word on either side: no repeat
         assertEquals("THE PLANET NETWORK", Pipeline.joinWithoutRepeat("THE PLANET", "NETWORK", "THE NETWORK"))
+        // review round 4: punctuation at the join, occurrences inside other words in whole, separator kept
+        assertEquals("THE PLANET. NET. NEXT", Pipeline.joinWithoutRepeat("THE PLANET.", "NET. NEXT", "NEXT"))
+        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "YOUR YOUTH"))
+        assertEquals("THANK YOU. SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU.", "YOU. SO MUCH", "SO MUCH"))
+        assertEquals("THANK YOU. SO MUCH", Pipeline.join("THANK YOU.", "SO MUCH"))
+        // Japanese with a Latin word stays unspaced, as before
+        assertEquals("SCありがとう", Pipeline.join("SC", "ありがとう"))
+        assertEquals("今日も一日お疲れさまでしたいただきます",
+            Pipeline.joinWithoutRepeat("今日も一日お疲れさまでした", "お疲れさまでしたいただきます", "え皆さんもね一日お疲れさまでした"))
+    }
+
+    @Test
+    fun anEnglishKeptDraftIsJoinedWithASpace() {
+        // the longer recognition lost the kept draft: the kept text and the rest are joined with a space
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray) = when (samples.size) {
+                30_000 -> "THANK YOU FOR THE SUPER CHAT"; 50_000 -> "SEE YOU"; else -> "SEE YOU TOMORROW"
+            }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, source = Lang.EN, target = Lang.ZH)
+        p.start()
+        try {
+            p.submit(AsrJob(1, 1, false, FloatArray(30_000), monoMs()))
+            val t0 = monoMs(); while (out.none { it.segmentId == 1L } && monoMs() - t0 < 2000) Thread.sleep(5)
+            p.submit(AsrJob(1, 2, true, FloatArray(80_000), monoMs()))
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { p.stop(); p.awaitStopped() }
+        assertEquals("THANK YOU FOR THE SUPER CHAT SEE YOU", out.last { it.isFinal }.ja)
     }
 
     @Test

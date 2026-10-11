@@ -87,6 +87,8 @@ class Pipeline(
      * error classes in [FIX_NOTES], translated again with the matching note. Any failure keeps the local result.
      */
     private val judge: Judge? = null,
+    /** Ask [judge] at sentence-end candidates (the "unfinished?" question). Default on, as before the check switch. */
+    private val judgeEnds: Boolean = true,
     /**
      * Where a kept draft and the recognition of the audio after it are joined, drop a repeat of the kept end at the
      * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
@@ -136,7 +138,7 @@ class Pipeline(
         threads = listOfNotNull(
             Thread(guarded(::asrLoop), "jpsub-asr"),
             Thread(guarded(::mtLoop), "jpsub-mt"),
-            judge?.let { Thread(guarded(::judgeLoop), "jpsub-jev") },
+            if (judge != null && judgeEnds) Thread(guarded(::judgeLoop), "jpsub-jev") else null,
             if (checking) Thread(guarded(::checkLoop), "jpsub-check") else null,
         ).onEach { it.start() }
     }
@@ -259,7 +261,7 @@ class Pipeline(
             val job = q.job
             log(mapOf("ev" to "asr", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal,
                 "eos" to job.endOfSpeech, "audio_ms" to audioMs(job), "ms" to end - start, "text" to ja))
-            if (judge != null && job.endOfSpeech) {
+            if (judge != null && judgeEnds && job.endOfSpeech) {
                 // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent
                 if (ja.isEmpty()) hints[job.segmentId to job.revision] = false else pendingJudge.set(job to ja)
             }

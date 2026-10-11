@@ -124,18 +124,21 @@ class CaptionService : Service() {
 
             val scene = prefs.scene
             val provider = prefs.jevProvider
-            val key = if (!prefs.jevOn) null else if (provider.needsKey) prefs.jevKey(provider) else ""
+            // one Jev client for both features; sentence ends (jevOn) and translation checks (jevCheck) are separate
+            val wantJev = prefs.jevOn || prefs.jevCheck
+            val key = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
             val judge = key?.let { Jev(provider, it) }
+            val judgeEnds = judge != null && prefs.jevOn
             val checkMt = judge != null && prefs.jevCheck
             val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
-                "jev_requested" to prefs.jevOn, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "final_only" to prefs.finalOnly,
+                "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "final_only" to prefs.finalOnly,
                 "mt_engine" to (if (online != null) "online" else "local"),
                 "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
-            if (prefs.jevOn && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次不用 Jev")
+            if (wantJev && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次不用 Jev")
             val pl = Pipeline(
                 asr, mt,
                 onCaption = { onCaption(it, sl) },
@@ -151,12 +154,13 @@ class CaptionService : Service() {
                 },
                 scene = scene,
                 judge = judge,
+                judgeEnds = judgeEnds,
                 checkTranslations = checkMt,
                 dedupeJoin = prefs.dedupeJoin,
                 log = sl::write,
                 drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
             )
-            jevActive = judge != null
+            jevActive = judgeEnds // the segmenter's judged hold and its timings follow sentence-end judging only
             synchronized(cancelLock) { pipeline = pl }
             if (stopping) return // onDestroy ran before the pipeline was visible to it
             pl.start()

@@ -40,7 +40,7 @@ The app's interface is in Chinese.
 ## Install
 
 - Android 10 or newer, arm64. On-device translation additionally needs an ARMv8.6 CPU (dotprod, i8mm, fp16), e.g. Snapdragon 8 Gen 3 (the chip it is used on); if unsure, use online translation.
-- Once published, download the APK from this repository's [Releases](https://github.com/KorenKrita/simul-subtitle/releases) page and open it on the phone (allow "install unknown apps").
+- Download the APK from the [Releases](../../releases) page and open it on the phone (allow "install unknown apps").
 - To build it yourself, see [docs/build.md](docs/build.md).
 
 ## FAQ
@@ -56,14 +56,15 @@ No. Audio is turned into text on the phone; with online translation only the rec
 
 ## Acknowledgements
 
+Built on these open-source projects:
+
 - **[Index-Translate](https://github.com/bilibili/Index-Translate)** by bilibili: the translation model at the heart of this app. Online translation uses bilibili's free public Index-Translate API; on-device translation uses Index-Translate-2B. Many thanks to the Index team for open-sourcing the models and offering the free service.
 - **[ReazonSpeech](https://research.reazon.jp/projects/ReazonSpeech/)**: Japanese / English speech recognition.
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: on-device speech recognition and voice activity detection (Silero VAD).
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**: on-device translation model runtime.
-- **[TypeSafe Jev](https://typesafe.ai)**: optional AI assistance (sentence ends, translation checks).
+
+The optional AI assistance (sentence ends, translation checks) uses **[TypeSafe Jev](https://typesafe.ai)**, a closed-source commercial cloud service (not open source), off by default. With a paid endpoint it is billed by usage: about US$0.04 per hour of speech (see [docs/jev.md](docs/jev.md)).
 
 ---
-
-Project: <https://github.com/KorenKrita/simul-subtitle>
 
 License: [MIT](LICENSE). The models and third-party libraries keep their own licenses.

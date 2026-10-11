@@ -42,7 +42,7 @@
 ## 安装
 
 - 系统要求：Android 10 及以上，arm64 手机。「手机上翻译」还需要支持 ARMv8.6（dotprod、i8mm、fp16）的处理器，例如骁龙 8 Gen 3（已在这款芯片上使用）；不确定的话请用在线翻译。
-- 发布后，可以在本仓库的 [Releases](https://github.com/KorenKrita/simul-subtitle/releases) 页面下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
+- 在 [Releases](../../releases) 页面下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
 - 想自己编译，看 [构建说明](docs/build.md)。
 
 ## 常见问题
@@ -67,7 +67,8 @@
 - **[ReazonSpeech](https://research.reazon.jp/projects/ReazonSpeech/)**：日语 / 英语语音识别模型。
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机上运行语音识别和静音检测（Silero VAD）。
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**：在手机上运行翻译模型。
-- **[TypeSafe Jev](https://typesafe.ai)**：可选的 AI 辅助（智能断句、检查译文）。
+
+可选的 AI 辅助（智能断句、检查译文）使用 **[TypeSafe Jev](https://typesafe.ai)**。它是 TypeSafe 的闭源商业云服务，不是开源项目，默认关闭。开启后通过网络调用，用付费接口时会按用量产生费用（每小时约 0.04 美元，见 [Jev 说明](docs/jev.md)）。
 
 ## 技术文档
 
@@ -80,7 +81,5 @@
 - [构建与开发](docs/build.md)：编译、Mac 端到端测试
 
 ---
-
-项目主页：<https://github.com/KorenKrita/simul-subtitle>
 
 许可证：[MIT](LICENSE)。使用的模型和第三方库各自遵循其许可证。

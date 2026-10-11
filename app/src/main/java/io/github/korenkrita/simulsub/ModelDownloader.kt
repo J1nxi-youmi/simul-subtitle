@@ -53,7 +53,7 @@ class ModelDownloader private constructor(ctx: Context) {
     /** Enqueues every missing file that is not already downloading or waiting for verification. Idempotent. */
     @Synchronized
     fun start() {
-        errors.clear(); failed.clear(); rejected.clear(); prefs.downloadCancelled = false
+        errors.clear(); failed.clear(); rejected.clear(); store.specs.forEach { prefs.setPendingSource(it.path, -1) }; prefs.downloadCancelled = false
         // copies kept by older versions after a failed check: free the space before downloading again
         maintenanceWarning = store.removeRejected()
         maintenanceWarning?.let { errors["bad"] = it; return }
@@ -79,7 +79,7 @@ class ModelDownloader private constructor(ctx: Context) {
     private fun enqueue(s: ModelSpec, source: Int) {
         prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it) }
         prefs.setDownloadId(s.path, -1)
-        progress.remove(s.path); errors.remove(s.path)
+        progress.remove(s.path); errors.remove(s.path); prefs.setPendingSource(s.path, -1)
         // earlier attempts' files no job owns any more are garbage (the MT one is 1.3 GB); never one a job still has
         val owned = jobs(s).map { it.file.canonicalPath }.toSet()
         store.partFiles(s).filter { it.canonicalPath !in owned }.forEach { it.delete() }
@@ -177,7 +177,7 @@ class ModelDownloader private constructor(ctx: Context) {
 
     @Synchronized
     fun cancel() {
-        prefs.downloadCancelled = true // remembered across process death: no source switch until 下载 / 重试
+        prefs.downloadCancelled = true; store.specs.forEach { prefs.setPendingSource(it.path, -1) } // remembered across process death: no source switch until 下载 / 重试
         for (s in store.specs) {
             if (s.path in queued) continue // already downloaded; let verification finish
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
@@ -200,7 +200,15 @@ class ModelDownloader private constructor(ctx: Context) {
         for (s in store.required()) {
             if (store.isInstalled(s)) { done += s.size; continue }
             if (s.path in queued) { done += s.size; continue }
-            val j = recorded(s) ?: continue
+            val j = recorded(s) ?: run {
+                // a rejected download whose record DownloadManager already cleaned up: continue from the saved source
+                val next = prefs.pendingSource(s.path)
+                if (next >= 0) {
+                    prefs.setPendingSource(s.path, -1)
+                    if (!prefs.downloadCancelled && next < s.urls.size) { enqueue(s, next); running = true }
+                }
+                null
+            } ?: continue
             when (j.status) {
                 DownloadManager.STATUS_SUCCESSFUL -> when {
                     j.id in rejected -> // its file failed the check (and is deleted): next source, or give up
@@ -242,7 +250,7 @@ class ModelDownloader private constructor(ctx: Context) {
             // wrong bytes (e.g. a proxy answering with an HTML page): not an error yet. Keep the finished record;
             // [state] tries the next source from the main thread
             val bad = r is ModelStore.Result.WrongSize || r is ModelStore.Result.WrongHash
-            if (bad && j.source + 1 < s.urls.size) { rejected += j.id; return ModelStore.Result.Missing }
+            if (bad && j.source + 1 < s.urls.size) { prefs.setPendingSource(s.path, j.source + 1); rejected += j.id; return ModelStore.Result.Missing }
             dm.remove(j.id); prefs.setDownloadId(s.path, -1)
         }
         return r

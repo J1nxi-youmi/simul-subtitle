@@ -68,6 +68,9 @@ class Prefs(ctx: Context) {
     /** DownloadManager ids by model path, so a download survives the activity being recreated */
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
+    /** Source to continue [path] from after its download was rejected (-1 none): survives DownloadManager cleanup. */
+    fun pendingSource(path: String) = sp.getInt("dlNext:$path", -1)
+    fun setPendingSource(path: String, source: Int) = sp.edit().putInt("dlNext:$path", source).apply()
     /** The user cancelled the model download: no automatic switch to another source until 下载 / 重试. */
     var downloadCancelled: Boolean
         get() = sp.getBoolean("dlCancelled", false)

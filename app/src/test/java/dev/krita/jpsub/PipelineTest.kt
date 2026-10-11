@@ -385,10 +385,10 @@ class PipelineTest {
 
     /** A judge whose mistranslation answer waits for [gate]; unfinished() is not used here. */
     private class GateJudge(val choice: String = "ok") : Judge {
-        val gate = CountDownLatch(1); val entered = CountDownLatch(1)
+        val gate = CountDownLatch(1); val entered = CountDownLatch(1); val calls = AtomicInteger(0)
         override fun unfinished(text: String) = JevCall("{req}", 0, null, 0, "unused", null)
         override fun mistranslation(ja: String, zh: String): JevCall {
-            entered.countDown(); gate.await()
+            calls.incrementAndGet(); entered.countDown(); gate.await()
             val a = mapOf("choice" to choice, "confidence" to 0.95)
             return JevCall("{req}", 200, Json.encode(a), 0, null, a)
         }
@@ -419,34 +419,52 @@ class PipelineTest {
         val done = CountDownLatch(3)
         // seg 2 recognizes nothing (empty final), seg 3 fails to translate
         val asr = object : Asr { override fun recognize(samples: FloatArray) = if (samples.size == 20) "" else "ja${samples.size}" }
+        val translated = CountDownLatch(2) // segments 1 and 3 went through MT (2 is empty: no MT call)
         val mt = object : Mt {
-            override fun translate(prompt: String) = if (prompt.endsWith("ja30")) null else MtResult("zh(${source(prompt)})", 'e', 1, 1)
+            override fun translate(prompt: String): MtResult? {
+                translated.countDown()
+                return if (source(prompt) == "ja30") null else MtResult("zh(${source(prompt)})", 'e', 1, 1)
+            }
             override fun cancel() {}
         }
         val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true)
         p.start()
         p.submit(job(1, 3, true, 10)); p.submit(job(2, 1, true, 20)); p.submit(job(3, 1, true, 30))
         assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
-        Thread.sleep(200) // segments 2 and 3 are translated meanwhile, but must wait for segment 1
+        assertTrue("segment 3 is translated while segment 1 waits for its check", translated.await(2, TimeUnit.SECONDS))
+        Thread.sleep(50) // let the MT thread hand segment 3 over to the check queue
         assertTrue(out.none { it.isFinal })
         judge.gate.countDown()
         assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
         assertEquals(listOf(1L, 2L, 3L), out.filter { it.isFinal }.map { it.segmentId })
         val b = CaptionBoard(10); out.forEach { b.accept(it) }
         assertEquals(listOf(1L, 3L), b.snapshot().filter { it.isFinal }.map { it.segmentId }) // the empty one is not shown
+        assertTrue(out.single { it.isFinal && it.segmentId == 3L }.zh.startsWith("[翻译失败]"))
+        assertEquals(1, judge.calls.get()) // only segment 1 was checked: a failed or empty translation is not
     }
 
     @Test
     fun aRetranslationNeverRunsAlongsideAnotherTranslation() {
-        val mt = FakeMt(30); var maxInside = 0
-        val watch = Thread { while (!Thread.currentThread().isInterrupted) { maxInside = maxOf(maxInside, mt.inside.get()); Thread.onSpinWait() } }
+        val inside = AtomicInteger(0); val maxInside = AtomicInteger(0)
+        val threads = Collections.synchronizedSet(HashSet<String>()); val calls = Collections.synchronizedList(ArrayList<String>())
+        val mt = object : Mt {
+            override fun translate(prompt: String): MtResult? {
+                val n = inside.incrementAndGet(); maxInside.accumulateAndGet(n, ::maxOf)
+                try { threads.add(Thread.currentThread().name); calls.add(prompt); Thread.sleep(20); return MtResult("zh(x)", 'e', 1, 1) }
+                finally { inside.decrementAndGet() }
+            }
+            override fun cancel() {}
+        }
         val done = CountDownLatch(3)
         val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, judge = FakeJudge(choice = "negation"), checkTranslations = true)
-        watch.start(); p.start()
-        for (s in 1L..3L) { p.submit(job(s, 1, false, s.toInt() * 10 + 1)); p.submit(job(s, 2, true, s.toInt() * 10)) }
-        assertTrue(done.await(5, TimeUnit.SECONDS)); p.stop(); p.awaitStopped(); watch.interrupt(); watch.join()
-        assertEquals(1, maxInside)
-        assertEquals(3, mt.calls.count { it.contains(FIX_NOTES["negation"]!!) })
+        p.start()
+        try {
+            for (s in 1L..3L) { p.submit(job(s, 1, false, s.toInt() * 10 + 1)); p.submit(job(s, 2, true, s.toInt() * 10)) }
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+        } finally { p.stop(); p.awaitStopped() }
+        assertEquals(1, maxInside.get())
+        assertEquals(setOf("jpsub-mt"), threads.toSet())
+        assertEquals(3, calls.count { it.contains(FIX_NOTES["negation"]!!) })
     }
 
     @Test
@@ -515,6 +533,27 @@ class PipelineTest {
         // seg 3 is empty (not translated, not context); seg 4 sees the two before it that had text
         assertEquals(3, mt.calls.size)
         assertTrue(mt.calls[2], mt.calls[2].contains(ctx + "ja10 / ja20"))
+        assertTrue(mt.calls.none { it.contains(ctx + "ja10 / ja20 / ") }) // never more than two
+    }
+
+    @Test
+    fun onlyTheLastTwoSentencesAreContextAndALateRetryKeepsItsOwn() {
+        // segment 1's check is held while 2..4 are translated; its retry must still have no context (it had none)
+        val judge = GateJudge(choice = "negation")
+        val mt = FakeMt(1); val done = CountDownLatch(4)
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true)
+        p.start()
+        p.submit(job(1, 1, true, 10))
+        assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+        for ((s, n) in listOf(2L to 20, 3L to 30, 4L to 40)) p.submit(job(s, 1, true, n))
+        val t0 = System.nanoTime()
+        while (mt.calls.size < 4 && System.nanoTime() - t0 < 2_000_000_000L) Thread.sleep(5)
+        judge.gate.countDown()
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        assertTrue(mt.calls[3], mt.calls[3].contains(ctx + "ja20 / ja30")) // segment 4: the last two only
+        val retry1 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja10" }
+        assertTrue(retry1, !retry1.contains(ctx))
     }
 
     @Test

@@ -327,8 +327,9 @@ class Pipeline(
     }
 
     /** One MT call, logged with everything needed to replay it. */
-    private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>): MtResult? {
-        val prompt = indexPrompt(ja, scene, notes, previousFor(job.segmentId))
+    private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>,
+                          previous: List<String> = previousFor(job.segmentId)): MtResult? {
+        val prompt = indexPrompt(ja, scene, notes, previous)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
@@ -354,7 +355,7 @@ class Pipeline(
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the
      * matching note. Returns the text to show (the retry if it produced one, else [zh]).
      */
-    private fun checked(j: MtJob, zh: String, judgeMs: (Long) -> Unit, retryMs: (Long) -> Unit): String {
+    private fun checked(j: MtJob, zh: String, previous: List<String>, judgeMs: (Long) -> Unit, retryMs: (Long) -> Unit): String {
         val judge = judge?.takeIf { checkTranslations } ?: return zh
         if (zh.isEmpty()) return zh
         val job = j.q.job
@@ -369,7 +370,7 @@ class Pipeline(
         }
         logJev("mistranslation", job.segmentId, job.revision, call, "retranslate:${call.choice}")
         // only the MT thread translates (one translator, one cache): hand the retry over and wait for it
-        val req = Retry(j, note)
+        val req = Retry(j, note, previous)
         synchronized(lock) { retryQueue.addLast(req) }
         while (running && !failed && !req.done.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)) Unit
         // an internal failure of the MT thread fails the pipeline (guarded); never publish on top of it
@@ -379,7 +380,7 @@ class Pipeline(
     }
 
     /** A retranslation the check thread asks the MT thread for; [done] is counted down whatever happened. */
-    private class Retry(val j: MtJob, val note: String) {
+    private class Retry(val j: MtJob, val note: String, val previous: List<String>) {
         val done = java.util.concurrent.CountDownLatch(1)
         @Volatile var result: MtResult? = null
         @Volatile var ms = 0L
@@ -389,7 +390,9 @@ class Pipeline(
     private val retryQueue = LinkedBlockingDeque<Retry>()
 
     /** A final on its way through the check thread: [zh] is the first translation (or the failure text). */
-    private class ToCheck(val j: MtJob, val zh: String, val needsCheck: Boolean, val start: Long, val mtMs: Long)
+    private class ToCheck(val j: MtJob, val zh: String, val needsCheck: Boolean, val start: Long, val mtMs: Long,
+                          /** the context the first translation used: a retry uses the same, however late it runs */
+                          val previous: List<String>)
     private val checkQueue = LinkedBlockingDeque<ToCheck>()
     /** finals queued for or inside the check (guarded by [lock]); they are also in [inFlightFinals] */
     private var inCheck = 0
@@ -403,7 +406,7 @@ class Pipeline(
             val c = synchronized(lock) { checkQueue.pollFirst() } ?: run { Thread.sleep(10); null } ?: continue
             val job = c.j.q.job
             var checkMs = 0L; var retryMs = 0L
-            val zh = if (c.needsCheck) checked(c.j, c.zh, { checkMs = it }, { retryMs = it }) else c.zh
+            val zh = if (c.needsCheck) checked(c.j, c.zh, c.previous, { checkMs = it }, { retryMs = it }) else c.zh
             if (!running || failed) return
             val end = clock()
             // the interim line took the final's revision; the final goes out as revision + 1
@@ -423,7 +426,7 @@ class Pipeline(
             if (req != null) {
                 try {
                     val t0 = clock()
-                    req.result = translate(req.j.q.job, 2, req.j.ja, listOf(req.note))
+                    req.result = translate(req.j.q.job, 2, req.j.ja, listOf(req.note), req.previous)
                     req.ms = clock() - t0
                 } catch (t: Throwable) {
                     // visible to the waiting check thread before it wakes: it must not publish this final as checked
@@ -435,7 +438,8 @@ class Pipeline(
             if (!j.q.job.isFinal && skipDisplayDraft()) continue
             val job = j.q.job
             val start = clock()
-            val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList())
+            val ctx = previousFor(job.segmentId)
+            val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList(), ctx)
             if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
             var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
@@ -448,7 +452,7 @@ class Pipeline(
                 val real = r?.takeIf { it.usable } != null && zh.isNotEmpty()
                 // live mode shows the first translation while Jev checks it; "only finished sentences" hides it
                 if (real) onCaption(caption(j, false, job.revision, zh, start, end, end - start))
-                synchronized(lock) { inCheck++; checkQueue.addLast(ToCheck(j, zh, real, start, end - start)) }
+                synchronized(lock) { inCheck++; checkQueue.addLast(ToCheck(j, zh, real, start, end - start, ctx)) }
                 continue
             }
             val backlog = synchronized(lock) {

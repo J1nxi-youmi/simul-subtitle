@@ -43,4 +43,11 @@ class TranslationTest {
         val q = indexPrompt("館長も艦長もありがとう", Scene.VTUBER)
         assertTrue(q.contains("館長→舰长") && !q.contains("艦長→舰长")) // one rendering per Chinese term
     }
+
+    @Test
+    fun previousSentencesAreASoftConstraintAfterTheScene() {
+        val p = indexPrompt("それな", Scene.GENERAL, previous = listOf("昨日ね", "ゲームした"))
+        assertTrue(p, p.contains("【源文】\nそれな\n\n【约束要求】\n1. 【注意】前文（只用于理解当前句的指代和省略，不要翻译、不要输出）：昨日ね / ゲームした\n"))
+        assertEquals(indexPrompt("それな", Scene.GENERAL), indexPrompt("それな", Scene.GENERAL, previous = emptyList()))
+    }
 }

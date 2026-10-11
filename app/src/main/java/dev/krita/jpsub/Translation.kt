@@ -18,15 +18,17 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
 /**
  * Index-Translate user message in the format the models were trained and benchmarked with (bilibili/Index-Translate
  * inference/llm/translate.py): the plain instruction when there are no constraints, otherwise 【源文】/【约束要求】 with
- * the terms found in [text] as a hard constraint and the scene / [notes] as soft ones. The same text goes to the online
- * API (as the user message) and to the local model (wrapped by [qwenChat]).
+ * the terms found in [text] as a hard constraint and the scene / [notes] / [previous] sentences as soft ones. The same
+ * text goes to the online API (as the user message) and to the local model (wrapped by [qwenChat]).
  */
-fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList()): String {
+fun indexPrompt(text: String, scene: Scene, notes: List<String> = emptyList(), previous: List<String> = emptyList()): String {
     val terms = scene.terms.filter { text.contains(it.first) }.distinctBy { it.second }
     val constraints = buildList {
         if (terms.isNotEmpty()) add("【硬性要求】专名/术语对照: " + terms.joinToString("、") { "${it.first}→${it.second}" })
         scene.background?.let { add("【注意】$it") }
         notes.forEach { add("【注意】$it") }
+        // the speaker's last sentences, for references and omissions (A/B on the live log: more fixes than regressions)
+        if (previous.isNotEmpty()) add("【注意】前文（只用于理解当前句的指代和省略，不要翻译、不要输出）：" + previous.joinToString(" / "))
     }
     return if (constraints.isEmpty()) "请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n$text"
     else "请将以下日语直播字幕翻译成中文，并且严格遵循所有约束要求。\n\n【源文】\n$text\n\n【约束要求】\n" +

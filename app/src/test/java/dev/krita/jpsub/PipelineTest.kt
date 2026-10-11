@@ -65,7 +65,8 @@ class PipelineTest {
 
     companion object {
         /** The Japanese text inside a GENERAL-scene Index prompt. */
-        fun source(prompt: String) = prompt.substringAfter("\n\n")
+        fun source(prompt: String) =
+            if (prompt.contains("【源文】\n")) prompt.substringAfter("【源文】\n").substringBefore("\n\n") else prompt.substringAfter("\n\n")
     }
 
     private fun job(seg: Long, rev: Int, final: Boolean, n: Int) = AsrJob(seg, rev, final, FloatArray(n), monoMs())
@@ -498,6 +499,22 @@ class PipelineTest {
         // shorter than MIN_REPEAT, or no overlap: plain join
         assertEquals("えっえっ", Pipeline.joinWithoutRepeat("えっ", "えっ", "えっ"))
         assertEquals("あいうえお", Pipeline.joinWithoutRepeat("あい", "うえお", "あいうえお"))
+    }
+
+    @Test
+    fun theTranslatorGetsTheLastTwoFinishedSentencesAsContext() {
+        val mt = FakeMt(1); val done = CountDownLatch(4)
+        val asr = object : Asr { override fun recognize(samples: FloatArray) = if (samples.size == 30) "" else "ja${samples.size}" }
+        val p = Pipeline(asr, mt, { if (it.isFinal) done.countDown() })
+        p.start()
+        for ((s, n) in listOf(1L to 10, 2L to 20, 3L to 30, 4L to 40)) p.submit(job(s, 1, true, n))
+        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        assertTrue(mt.calls[0], !mt.calls[0].contains(ctx)) // the first sentence has none
+        assertTrue(mt.calls[1], mt.calls[1].contains(ctx + "ja10"))
+        // seg 3 is empty (not translated, not context); seg 4 sees the two before it that had text
+        assertEquals(3, mt.calls.size)
+        assertTrue(mt.calls[2], mt.calls[2].contains(ctx + "ja10 / ja20"))
     }
 
     @Test

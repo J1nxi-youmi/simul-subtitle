@@ -303,9 +303,32 @@ class Pipeline(
         "ev" to "jev", "kind" to kind, "seg" to seg, "rev" to rev, "request" to c.request, "status" to c.status,
         "response" to c.response, "ms" to c.ms, "error" to c.error, "action" to action))
 
+    /** Japanese of the last [PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */
+    private val recentFinals = ArrayDeque<String>()
+    /** newest segment whose final went through [rememberFinal] (MT thread only) */
+    private var rememberedSeg = 0L
+    /**
+     * The context of a segment, fixed once the final before it was translated, so its later drafts, its final and a
+     * retry share one prompt (and the reuse cache keeps working). Until then (a draft of the next segment translated
+     * before the previous final) it is computed fresh and not kept. MT thread only.
+     */
+    private val contexts = HashMap<Long, List<String>>()
+    private fun previousFor(seg: Long): List<String> {
+        contexts[seg]?.let { return it }
+        val now = recentFinals.toList()
+        if (rememberedSeg >= seg - 1) { contexts.keys.removeIf { it < seg - 8 }; contexts[seg] = now }
+        return now
+    }
+    private fun rememberFinal(seg: Long, ja: String) {
+        if (seg > rememberedSeg) rememberedSeg = seg
+        if (ja.isBlank()) return
+        recentFinals.addLast(ja)
+        while (recentFinals.size > PREVIOUS_SENTENCES) recentFinals.removeFirst()
+    }
+
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>): MtResult? {
-        val prompt = indexPrompt(ja, scene, notes)
+        val prompt = indexPrompt(ja, scene, notes, previousFor(job.segmentId))
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
@@ -413,6 +436,7 @@ class Pipeline(
             val job = j.q.job
             val start = clock()
             val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList())
+            if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
             var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
             if (zh == null) {
@@ -474,6 +498,8 @@ class Pipeline(
         /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
         const val LOST_MIN_SAMPLES = 24_000
         const val LOST_MIN_CHARS = 5
+        /** finished sentences given to the translator as context (Index prompt 前文) */
+        const val PREVIOUS_SENTENCES = 2
         /**
          * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
          * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself

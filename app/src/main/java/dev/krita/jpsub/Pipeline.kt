@@ -89,7 +89,7 @@ class Pipeline(
     private val judge: Judge? = null,
     /**
      * Where a kept draft and the recognition of the audio after it are joined, drop a repeat of the kept end at the
-     * start of the new part (see [joinWithoutRepeat]). Off by default: a speaker who really says it twice loses one.
+     * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
      */
     private val dedupeJoin: Boolean = false,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
@@ -476,8 +476,8 @@ class Pipeline(
         const val LOST_MIN_CHARS = 5
         /**
          * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
-         * and the recognition of the whole audio ([whole]) has that piece at most once: the join point then most
-         * likely recognized the same word on both sides. A repeat also in [whole] is kept (the speaker said it twice).
+         * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself
+         * miss words, so a real repeat can be dropped; with the piece twice in [whole] both are kept.
          */
         fun joinWithoutRepeat(kept: String, tail: String, whole: String): String {
             for (n in minOf(kept.length, tail.length) downTo MIN_REPEAT) {

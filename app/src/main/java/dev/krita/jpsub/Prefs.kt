@@ -86,10 +86,14 @@ class Prefs(ctx: Context) {
         get() = runCatching { Scene.valueOf(sp.getString("scene", null) ?: "") }.getOrDefault(Scene.GENERAL)
         set(v) = sp.edit().putString("scene", v.name).apply()
 
-    /** Use Jev (cloud) for sentence ends and translation checks; needs the key of [jevProvider]. */
+    /** Use Jev (cloud) for sentence ends; needs the key of [jevProvider]. */
     var jevOn: Boolean
         get() = sp.getBoolean("jevOn", false)
         set(v) = sp.edit().putBoolean("jevOn", v).apply()
+    /** With [jevOn]: also check every final translation. Off by default, its own key so an old jevOn does not turn it on. */
+    var jevCheck: Boolean
+        get() = sp.getBoolean("jevCheck", false)
+        set(v) = sp.edit().putBoolean("jevCheck", v).apply()
     var jevProvider: JevProvider
         // a choice saved earlier stays; with none yet, the free Zen endpoint is the default
         get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)

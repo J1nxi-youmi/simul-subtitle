@@ -126,11 +126,12 @@ class CaptionService : Service() {
             val provider = prefs.jevProvider
             val key = if (!prefs.jevOn) null else if (provider.needsKey) prefs.jevKey(provider) else ""
             val judge = key?.let { Jev(provider, it) }
+            val checkMt = judge != null && prefs.jevCheck
             val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
             sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
-                "jev_requested" to prefs.jevOn, "final_only" to prefs.finalOnly,
+                "jev_requested" to prefs.jevOn, "jev_check" to checkMt, "final_only" to prefs.finalOnly,
                 "mt_engine" to (if (online != null) "online" else "local"),
                 "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
@@ -150,6 +151,7 @@ class CaptionService : Service() {
                 },
                 scene = scene,
                 judge = judge,
+                checkTranslations = checkMt,
                 log = sl::write,
                 drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
             )

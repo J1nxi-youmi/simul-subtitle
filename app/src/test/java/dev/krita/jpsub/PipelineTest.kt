@@ -334,10 +334,10 @@ class PipelineTest {
     }
 
     private fun runFinal(judge: Judge, events: MutableList<Map<String, Any?>> = Collections.synchronizedList(ArrayList()),
-                         mt: FakeMt = FakeMt(1)): List<Caption> {
+                         mt: FakeMt = FakeMt(1), check: Boolean = true): List<Caption> {
         val out = Collections.synchronizedList(ArrayList<Caption>())
         val done = CountDownLatch(1)
-        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, log = { events.add(it) })
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = check, log = { events.add(it) })
         p.start()
         p.submit(job(1, 3, true, 10))
         assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
@@ -369,6 +369,17 @@ class PipelineTest {
             assertEquals(1, mt.calls.size)
             assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
         }
+    }
+
+    @Test
+    fun withoutTheCheckSwitchAFinalIsNotCheckedAndKeepsItsRevision() {
+        val mt = FakeMt(1); val judge = FakeJudge(choice = "negation")
+        val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val out = runFinal(judge, events, mt, check = false)
+        assertEquals(1, mt.calls.size)
+        assertTrue(judge.asked.toString(), judge.asked.none { it.startsWith("m:") })
+        assertEquals(listOf(true to 3), out.map { it.isFinal to it.revision })
+        assertTrue(events.none { it["ev"] == "jev" })
     }
 
     @Test
@@ -551,7 +562,7 @@ class PipelineTest {
         val mt = FakeMt(1); val judge = FakeJudge(choice = "ok")
         val logs = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
         val drafted = CountDownLatch(1); val done = CountDownLatch(1)
-        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() else drafted.countDown() }, judge = judge, log = { logs.add(it) })
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() else drafted.countDown() }, judge = judge, checkTranslations = true, log = { logs.add(it) })
         p.start()
         p.submit(job(1, 1, false, 10)); assertTrue(drafted.await(2, TimeUnit.SECONDS))
         p.submit(job(1, 2, true, 10))

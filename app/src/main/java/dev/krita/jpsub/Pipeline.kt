@@ -87,6 +87,8 @@ class Pipeline(
      * error classes in [FIX_NOTES], translated again with the matching note. Any failure keeps the local result.
      */
     private val judge: Judge? = null,
+    /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
+    private val checkTranslations: Boolean = false,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
     private val log: (Map<String, Any?>) -> Unit = {},
     /** Read live: false = "only finished sentences", display drafts are not recognized or translated at all. */
@@ -318,12 +320,13 @@ class Pipeline(
     /** MT thread only. */
     private var lastMt: LastMt? = null
 
+    private val checking get() = judge != null && checkTranslations
     /**
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the
      * matching note. Returns the text to show (the retry if it produced one, else [zh]).
      */
     private fun checked(j: MtJob, zh: String, judgeMs: (Long) -> Unit, interim: (String) -> Unit): String {
-        val judge = judge ?: return zh
+        val judge = judge?.takeIf { checkTranslations } ?: return zh
         if (zh.isEmpty()) return zh
         interim(zh) // live mode shows the first translation while Jev checks it
         val job = j.q.job
@@ -364,7 +367,7 @@ class Pipeline(
                 if (job.isFinal) pendingFinalAudioMs -= audioMs(job)
                 pendingFinals() + inFlightFinals
             }
-            onCaption(caption(j, job.isFinal, job.revision + if (judge != null && job.isFinal) 1 else 0, zh, start, end, checkMs))
+            onCaption(caption(j, job.isFinal, job.revision + if (checking && job.isFinal) 1 else 0, zh, start, end, checkMs))
             if (job.isFinal) synchronized(lock) { inFlightFinals-- }
             onBacklog(backlog - if (job.isFinal) 1 else 0)
         }

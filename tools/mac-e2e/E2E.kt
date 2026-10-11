@@ -48,7 +48,7 @@ fun main() {
             "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
             "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs))); w.write("\n") } }
         board.accept(c)
-    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge,
+    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge, checkTranslations = System.getProperty("jevCheck") == "1", // -DjevCheck=1: also check translations
        log = { e -> jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs()) + e)); w.write("\n") } } })
     p.start()
     try {

@@ -317,7 +317,7 @@ class MainActivity : Activity() {
         box.addView(modeGroup)
 
         val jev = MaterialSwitch(this).apply {
-            text = "用 Jev 判断断句和检查译文（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
+            text = "用 Jev 判断断句（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
             isChecked = prefs.jevOn
         }
         box.addView(jev, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
@@ -330,6 +330,15 @@ class MainActivity : Activity() {
             jevBox.visibility = if (prefs.jevOn) View.VISIBLE else View.GONE
             if (!prefs.jevOn) return
             val p = prefs.jevProvider
+            jevBox.addView(MaterialSwitch(this).apply {
+                text = "同时用 Jev 检查每句译文"; textSize = 14f; setTextColor(getColor(R.color.text))
+                isChecked = prefs.jevCheck
+                setOnCheckedChangeListener { _, on -> prefs.jevCheck = on }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            jevBox.addView(TextView(this).apply {
+                text = "默认关闭：在一小时直播记录里收益不明显（451 句只改了 5 句，且不确定改得更好），开启后每句定稿多等约 0.3 秒。下次开始时生效。"
+                textSize = 12.5f; setTextColor(getColor(R.color.text2))
+            })
             jevBox.addView(label("接口"))
             // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names
             jevBox.addView(android.widget.Spinner(this).apply {

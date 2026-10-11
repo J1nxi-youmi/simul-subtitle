@@ -63,7 +63,7 @@ class CaptionService : Service() {
 
     private var overlay: CaptionOverlayView? = null
     private val prefs by lazy { Prefs(this) }
-    @Volatile private var status = "加载模型…"
+    @Volatile private var status = "正在准备…"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -109,7 +109,7 @@ class CaptionService : Service() {
             val t1 = monoMs()
             if (stopping) return
             val mt: Mt = if (online != null) OnlineTranslator(online, maxTokens = mtMaxTokens(target)) else {
-                setStatus("加载翻译模型…")
+                setStatus("正在准备翻译…")
                 LlamaTranslator(files, MT_THREADS, mtMaxTokens(target)).also { local = it }
             }
             synchronized(cancelLock) { translator = mt }
@@ -121,7 +121,7 @@ class CaptionService : Service() {
             val t3 = monoMs()
             Log.i(TAG, "load asr=${t1 - t0}ms mt=${t2 - t1}ms warmup=${t3 - t2}ms")
             if (stopping) return
-            setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
+            setStatus("准备好了，开始播放就会出字幕")
 
             val scene = prefs.scene
             val contextN = if (prefs.contextOn) prefs.contextSentences else 0
@@ -141,14 +141,14 @@ class CaptionService : Service() {
                 "mt_engine" to (if (online != null) "online" else "local"),
                 "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
-            if (wantJev && judge == null) setStatus("⚠ 已开启 Jev 但没有填 ${provider.label} 的 key，本次不用 Jev")
+            if (wantJev && judge == null) setStatus("⚠ AI 辅助需要 ${provider.label} 的 key，这次先不用")
             val pl = Pipeline(
                 asr, mt,
                 onCaption = { onCaption(it, sl) },
                 onBacklog = { backlog = it; refresh() },
                 onOverload = {
                     overloaded = true // capture loop exits, then accepted finals are drained below
-                    setStatus("⚠ 手机处理跟不上，已停止采集，正在处理已收到的句子…")
+                    setStatus("⚠ 手机忙不过来，先停止听新的声音，正在处理已经听到的句子…")
                 },
                 onFailure = { e ->
                     Log.e(TAG, "pipeline worker failed", e)

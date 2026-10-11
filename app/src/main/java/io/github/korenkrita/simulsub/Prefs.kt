@@ -68,6 +68,10 @@ class Prefs(ctx: Context) {
     /** DownloadManager ids by model path, so a download survives the activity being recreated */
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
+    /** The user cancelled the model download: no automatic switch to another source until 下载 / 重试. */
+    var downloadCancelled: Boolean
+        get() = sp.getBoolean("dlCancelled", false)
+        set(v) = sp.edit().putBoolean("dlCancelled", v).apply()
     /** true = only show finished sentences; false = live drafts that are corrected in place. Overlay and home share it. */
     var finalOnly: Boolean
         get() = sp.getBoolean("finalOnly", false)

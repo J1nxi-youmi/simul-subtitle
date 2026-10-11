@@ -21,11 +21,22 @@ class ModelStore(
     private val needsMt: () -> Boolean = { true },
 ) {
     fun file(s: ModelSpec) = File(root, s.path)
+    /** Where a download is written before it is verified; tests and older versions use the plain name. */
+    fun partFile(s: ModelSpec) = File(root, s.path + ".part")
+
     /**
-     * Where the download from source [source] of [ModelSpec.urls] is written. Every source has its own file: a
-     * replaced DownloadManager job may still clean up its file after it was removed, so it must not be shared.
+     * A fresh file for one download attempt ("<path>.<attempt>.part"). A removed DownloadManager job may still
+     * clean up its file afterwards, so no later attempt ever writes to the same path.
      */
-    fun partFile(s: ModelSpec, source: Int = 0) = File(root, if (source == 0) s.path + ".part" else "${s.path}.$source.part")
+    fun newPartFile(s: ModelSpec, attempt: String) = File(root, "${s.path}.$attempt.part")
+
+    /** Every download file of [s]: the plain "<path>.part" and all "<path>.<attempt>.part". */
+    fun partFiles(s: ModelSpec): List<File> {
+        val f = file(s)
+        return f.parentFile?.listFiles()?.filter {
+            it.isFile && it.name.startsWith(f.name + ".") && it.name.endsWith(".part")
+        }.orEmpty()
+    }
 
     /** Written next to a file after its SHA-256 matched, so readiness never needs to re-hash 1.4 GB. */
     fun okMarker(s: ModelSpec) = File(root, s.path + ".ok")
@@ -66,8 +77,7 @@ class ModelStore(
      * path. A bad file is deleted so the retry has room (the MT model alone is 1.3 GB).
      * Slow for the 1.3 GB model: call off the main thread.
      */
-    fun publish(s: ModelSpec, source: Int = 0): Result {
-        val part = partFile(s, source)
+    fun publish(s: ModelSpec, part: File = partFile(s)): Result {
         if (!part.isFile) return Result.Missing
         val r = check(s, part)
         if (r != Result.Ok) return reject(part, r)
@@ -138,7 +148,7 @@ class ModelStore(
         private const val MT_MODELSCOPE = "https://www.modelscope.cn/models/IndexTeam/Index-Translate-2B-GGUF/resolve/master"
         /** this project's copies of the small models, for when the official source cannot be reached */
         private const val BACKUP = "https://github.com/KorenKrita/simul-subtitle/releases/download/models-v1"
-        /** GitHub download proxies that work from mainland China, for when github.com itself cannot be reached */
+        /** third-party GitHub download proxies, for when github.com itself cannot be reached */
         private val GH_PROXIES = listOf("https://gh-proxy.com/", "https://gh.llkk.cc/")
 
         private fun withBackup(official: String, name: String) =

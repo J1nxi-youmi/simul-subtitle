@@ -87,6 +87,11 @@ class Pipeline(
      * error classes in [FIX_NOTES], translated again with the matching note. Any failure keeps the local result.
      */
     private val judge: Judge? = null,
+    /**
+     * Where a kept draft and the recognition of the audio after it are joined, drop a repeat of the kept end at the
+     * start of the new part (see [joinWithoutRepeat]). Off by default: a speaker who really says it twice loses one.
+     */
+    private val dedupeJoin: Boolean = false,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
     private val checkTranslations: Boolean = false,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
@@ -236,7 +241,7 @@ class Pipeline(
             val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
             log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
                 "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            lost.second + tail
+            if (dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else lost.second + tail
         }
         // the history holds what was shown, so a second loss keeps the text an earlier repair saved
         if (!job.isFinal) hist += job.samples.size to text
@@ -462,6 +467,21 @@ class Pipeline(
         /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
         const val LOST_MIN_SAMPLES = 24_000
         const val LOST_MIN_CHARS = 5
+        /**
+         * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
+         * and the recognition of the whole audio ([whole]) has that piece at most once: the join point then most
+         * likely recognized the same word on both sides. A repeat also in [whole] is kept (the speaker said it twice).
+         */
+        fun joinWithoutRepeat(kept: String, tail: String, whole: String): String {
+            for (n in minOf(kept.length, tail.length) downTo MIN_REPEAT) {
+                val piece = tail.substring(0, n)
+                if (!kept.endsWith(piece)) continue
+                return if (whole.windowed(n).count { it == piece } >= 2) kept + tail else kept + tail.substring(n)
+            }
+            return kept + tail
+        }
+        const val MIN_REPEAT = 3
+
         /** share of [a]'s characters found, in order, in [b] */
         fun keptRatio(a: String, b: String): Double {
             // longest common subsequence; strings are a sentence long

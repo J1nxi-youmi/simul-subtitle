@@ -316,6 +316,18 @@ class MainActivity : Activity() {
         modeGroup = choice(listOf(false to "边出边改", true to "只看定稿"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
         box.addView(modeGroup)
 
+        box.addView(MaterialSwitch(this).apply {
+            text = "去掉识别拼接处的重复词（实验）"; textSize = 15f; setTextColor(getColor(R.color.text))
+            isChecked = prefs.dedupeJoin
+            setOnCheckedChangeListener { _, on -> prefs.dedupeJoin = on }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (10 * resources.displayMetrics.density).toInt()
+        })
+        box.addView(TextView(this).apply {
+            text = "长句被识别吞掉前半句时，App 会把前半句补回来再接上后半句，接口处偶尔会出现同一个词说了两遍（一小时直播里约 5 次，如「お疲れさまでしたお疲れさまでした」）。开启后去掉这种重复。风险：主播真的连说两遍时也可能被去掉一遍。默认关闭，下次开始时生效。"
+            textSize = 12.5f; setTextColor(getColor(R.color.text2))
+        })
+
         val jev = MaterialSwitch(this).apply {
             text = "用 Jev 判断断句（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
             isChecked = prefs.jevOn

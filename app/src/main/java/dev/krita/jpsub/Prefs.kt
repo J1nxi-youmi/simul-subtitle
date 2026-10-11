@@ -94,6 +94,10 @@ class Prefs(ctx: Context) {
     var jevCheck: Boolean
         get() = sp.getBoolean("jevCheck", false)
         set(v) = sp.edit().putBoolean("jevCheck", v).apply()
+    /** Drop a repeat at the join of a kept draft and the rest (Pipeline.dedupeJoin). Off by default. */
+    var dedupeJoin: Boolean
+        get() = sp.getBoolean("dedupeJoin", false)
+        set(v) = sp.edit().putBoolean("dedupeJoin", v).apply()
     var jevProvider: JevProvider
         // a choice saved earlier stays; with none yet, the free Zen endpoint is the default
         get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)

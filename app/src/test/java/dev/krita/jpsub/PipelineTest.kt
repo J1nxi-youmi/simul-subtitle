@@ -469,6 +469,18 @@ class PipelineTest {
     }
 
     @Test
+    fun joinWithoutRepeatDropsOnlyARepeatTheWholeRecognitionDoesNotHave() {
+        // from the live log: the join recognized the end of the kept draft again
+        assertEquals("今日も一日お疲れさまでしたいただきます",
+            Pipeline.joinWithoutRepeat("今日も一日お疲れさまでした", "お疲れさまでしたいただきます", "え皆さんもね一日お疲れさまでした"))
+        // the whole recognition also has it twice: the speaker said it twice, keep both
+        assertEquals("ありがとうありがとう", Pipeline.joinWithoutRepeat("ありがとう", "ありがとう", "ありがとうありがとう"))
+        // shorter than MIN_REPEAT, or no overlap: plain join
+        assertEquals("えっえっ", Pipeline.joinWithoutRepeat("えっ", "えっ", "えっ"))
+        assertEquals("あいうえお", Pipeline.joinWithoutRepeat("あい", "うえお", "あいうえお"))
+    }
+
+    @Test
     fun endOfSpeechDraftIsJudgedAndTheAnswerIsKeyedByRevision() {
         val judge = FakeJudge(unfinishedP = 0.9)
         val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge)

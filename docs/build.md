@@ -2,7 +2,7 @@
 
 ## 环境
 
-JDK 17，Android SDK（platform 35、build-tools 35、NDK 27.2.12479018、CMake 3.22.1）。minSdk 29，arm64-v8a。
+JDK 17，Android SDK（platform 35、build-tools 34.0.0、NDK 27.2.12479018、CMake 3.22.1）。minSdk 29，arm64-v8a。
 
 llama.cpp 按 `armv8.6-a+dotprod+i8mm+fp16` 编译（`app/build.gradle.kts`，`GGML_NATIVE=OFF`，没有运行时分派），所以「手机上翻译」只能在支持这些指令的处理器上运行；不支持的手机选这个方式会因非法指令崩溃。识别和在线翻译不受影响。
 
@@ -11,12 +11,13 @@ git clone --recursive https://github.com/KorenKrita/simul-subtitle   # llama.cpp
 cd simul-subtitle
 ./setup.sh                      # 下载 sherpa-onnx AAR 到 app/libs，模型到 models/（Mac 测试用）
 export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
-./gradlew :app:testDebugUnitTest :app:assembleRelease
+./gradlew -q :app:compileDebugUnitTestKotlin :app:assembleRelease
 ```
 
 需要代理时：`HTTPS_PROXY=... ./setup.sh`，以及 `./gradlew -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890 ...`。
 
 APK 在 `app/build/outputs/apk/release/app-release.apk`（约 13 MB，原生库压缩存放，安装时解压）。
+上面的命令只编译测试，不运行单元测试或模拟器。
 
 ## 模型
 
@@ -54,3 +55,106 @@ tools/mac-e2e/run.sh [file.wav]
 ## 签名与包名
 
 包名 `io.github.korenkrita.simulsub`。从旧包名 `dev.krita.jpsub` 的版本升级时会作为新 App 安装，需要重新下载模型。
+
+## App 内更新与发布
+
+### 检查协议（从 0.4 起）
+
+不另建更新服务器，不解析网页，也不通过代理请求 GitHub API。每个正式版本的 GitHub Release 必须同时附带 APK 和固定名称的 `update.json`，并设为 **Latest**（模型备份版本、预览版不要设为 Latest）。[GitHub 支持 latest/download 固定文件地址](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)。
+
+按以下顺序获取清单，第一个有效结果为准：
+
+1. `https://github.com/KorenKrita/simul-subtitle/releases/latest/download/update.json`
+2. `https://gh-proxy.com/https://github.com/KorenKrita/simul-subtitle/releases/latest/download/update.json`
+3. `https://gh.llkk.cc/https://github.com/KorenKrita/simul-subtitle/releases/latest/download/update.json`
+
+APK 使用清单里指向**具体版本**的 GitHub 地址；失败时按同样的两条代理顺序重试。连接超时 6 秒、读取停滞超时清单 8 秒 / APK 10 秒；单个清单请求最多 15 秒，单个 APK 最多 3 分钟。清单最大 128 KiB，APK 最大 200 MB。不带认证信息；拒绝 HTTPS 降级到 HTTP。
+
+清单字段：
+
+```json
+{
+  "versionCode": 4,
+  "versionName": "0.4",
+  "notes": "## 这次更新\n\n- 新版本可以在 App 里下载安装。",
+  "apkUrl": "https://github.com/KorenKrita/simul-subtitle/releases/download/v0.4/simul-subtitle-v0.4.apk",
+  "size": 12345678,
+  "sha256": "替换为实际 APK 的 64 位 SHA-256"
+}
+```
+
+`size` 是实际字节数，不是上面示例数。`versionCode` 必须递增，以它判断更新；`versionName` 用于展示，并与 APK、tag 和文件名一致（数字点分格式，例如 `0.4`、`0.10`）。`notes` 与 GitHub Release 的中文更新内容使用同一份文本。清单缺失、损坏或字段不合规会换源，不会误报“已是最新版本”。代理可能缓存旧清单；请求带 `Cache-Control: no-cache`，但新版本发布后仍应确认两条代理实际返回的内容。
+
+- MainActivity 启动时后台检查，每 12 小时最多自动检查一次（时间戳保存在本机）；后台结果等页面恢复前台再显示，自动检查失败不打扰使用。
+- 「永不检查」持久关闭自动检查；「设置 → 关于」可以重新开启，手动检查始终忽略关闭、跳过和稍后提醒的选择。
+- 「跳过本次更新」只跳过该 versionCode；「稍后提醒」延后该版本 24 小时，下次启动且到时间后再提示，不屏蔽后续更新版本。
+- 更新内容和四个按钮放在同一个可滚动区域，大字号 / 长更新内容也能滚到所有选项。
+- 已查到但等待前台显示、或已显示但尚未选择的更新提示会保留；旋转屏幕或进程重建后恢复，并重新判断提示偏好，不受 12 小时检查间隔影响。
+- 下载与校验在后台线程执行；取消、页面销毁时停止网络请求，不影响现有模型下载。旋转屏幕、切主题或进程结束中断下载后，回到页面可点「重试」从头下载，不做断点续传。
+- APK 只放在 App 专用缓存 `updates/update.apk`，重试覆盖这份缓存。仅通过独立 FileProvider 共享该缓存目录，不共享模型、记录或其他缓存。
+- 每个来源均核对实际大小、SHA-256、包名、versionCode、versionName 和与已安装 App 相同的签名证书。代理提供的哈希不是身份认证；同签名检查及系统安装器是另一道独立校验。
+- 安装请求会先解释「允许来自此来源的应用」，跳转系统设置后返回继续；待安装版本在本机持久化，进程重建后重新校验缓存。最终必须由用户在系统安装器确认。缓存丢失或校验失败可重新下载。
+
+手动验收步骤（需要另行在手机上执行，编译检查不代表已验收）：用更低 versionCode 的同签名构建检查已发布版本；提示出现后旋转屏幕，四个选项应恢复；下载或校验时取消，再退回首页重进，不应重新启动安装；安装权限页拒绝后应能重试，允许后应进入系统安装器；大字号下能滚到四个按钮；关闭自动检查、跳过及稍后提醒后，手动检查仍应显示新版本。
+
+### 发布步骤（必须在原签名 Mac 上执行）
+
+当前 release 构建使用本机 `~/.android/debug.keystore`。不能在另一台机器临时生成 debug key，否则旧用户不能覆盖升级。首次发布和后续发布都保持包名及证书相同。
+已发布 v0.3 的证书 SHA-256：`d75c33a978e0d78c3392ccefc7972abfbc75856fd9843a9d5e08762e2f94fdd8`。
+
+1. 更新 `app/build.gradle.kts` 的 `versionCode` / `versionName`，单独提交 `Version X.Y`。先完成功能提交，版本号另一个提交。编译测试但不运行：
+
+   ```bash
+   export JAVA_HOME=$(mise where java@zulu-17.68.203.0) ANDROID_HOME=~/Library/Android/sdk
+   ./gradlew -q :app:compileDebugUnitTestKotlin :app:assembleRelease
+   "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+   "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging app/build/outputs/apk/release/app-release.apk | head -1
+   ```
+
+   核对证书与上个已发布 APK 相同，核对 aapt 的版本与本次版本一致。不启动模拟器或单元测试。
+
+2. 准备附件和中文更新内容，`notes.md` 同时用于清单与 Release；以下用 0.4 举例，下次改 `VERSION` / `CODE`：
+
+   ```bash
+   export VERSION=0.4 CODE=4
+   mkdir -p build/release
+   cp app/build/outputs/apk/release/app-release.apk "build/release/simul-subtitle-v$VERSION.apk"
+   # 在 build/release/notes.md 写好这次中文更新内容，再生成清单：
+   uv run python - <<'PY'
+   import hashlib, json, os
+   from pathlib import Path
+   version, code = os.environ["VERSION"], int(os.environ["CODE"])
+   folder = Path("build/release")
+   apk = folder / f"simul-subtitle-v{version}.apk"
+   manifest = dict(versionCode=code, versionName=version,
+       notes=(folder / "notes.md").read_text(),
+       apkUrl=f"https://github.com/KorenKrita/simul-subtitle/releases/download/v{version}/{apk.name}",
+       size=apk.stat().st_size, sha256=hashlib.sha256(apk.read_bytes()).hexdigest())
+   (folder / "update.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+   PY
+   ```
+
+3. 推送 main，把两份附件一起发布（不要先发布一个缺清单或缺 APK 的版本）：
+
+   ```bash
+   git push origin main
+   gh release create "v$VERSION" --repo KorenKrita/simul-subtitle --target "$(git rev-parse HEAD)" --latest \
+     --title "同传字幕 v$VERSION" --notes-file build/release/notes.md \
+     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json
+   ```
+
+4. 回读验证，不只检查上传命令退出码：
+
+   ```bash
+   mkdir -p "build/release/readback-v$VERSION"
+   gh release download "v$VERSION" --repo KorenKrita/simul-subtitle \
+     --pattern "simul-subtitle-v$VERSION.apk" --dir "build/release/readback-v$VERSION"
+   shasum -a 256 "build/release/simul-subtitle-v$VERSION.apk" \
+     "build/release/readback-v$VERSION/simul-subtitle-v$VERSION.apk"
+   for prefix in '' 'https://gh-proxy.com/' 'https://gh.llkk.cc/'; do
+     curl -fL --connect-timeout 6 --max-time 30 -H 'Cache-Control: no-cache' \
+       "${prefix}https://github.com/KorenKrita/simul-subtitle/releases/latest/download/update.json"
+   done
+   ```
+
+   两份 APK 哈希必须相同；三个清单的 versionCode、versionName、大小、哈希和更新内容均应与本地相同。代理还应回读具体版本的 APK 并对比哈希。海外出口成功不代表中国大陆的网络一定可达。

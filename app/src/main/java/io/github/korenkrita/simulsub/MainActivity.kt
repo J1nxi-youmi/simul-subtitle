@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var store: ModelStore
     private lateinit var dl: ModelDownloader
     private lateinit var preview: CaptionOverlayView
+    private lateinit var updater: AppUpdater
 
     private lateinit var statusDot: View
     private lateinit var statusTitle: TextView
@@ -107,6 +108,8 @@ class MainActivity : Activity() {
         }
         // a theme switch recreates the activity from the settings page: stay there
         showSettings(savedInstanceState?.getBoolean("settings") == true)
+        updater = AppUpdater(this)
+        updater.start()
     }
 
     private var inSettings = false
@@ -184,12 +187,19 @@ class MainActivity : Activity() {
         renderModelFiles()
         render()
         main.post(ticker)
+        updater.resume()
     }
 
     override fun onPause() {
         super.onPause()
         prefs.unlisten(styleListener)
         main.removeCallbacks(ticker)
+        updater.pause()
+    }
+
+    override fun onDestroy() {
+        updater.destroy()
+        super.onDestroy()
     }
 
     private val ticker = object : Runnable {

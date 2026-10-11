@@ -41,6 +41,7 @@ The app's interface is in Chinese.
 
 - Android 10 or newer, arm64. On-device translation additionally needs an ARMv8.6 CPU (dotprod, i8mm, fp16), e.g. Snapdragon 8 Gen 3 (the chip it is used on); if unsure, use online translation.
 - Download the APK from the [Releases](../../releases) page and open it on the phone (allow "install unknown apps").
+- From 0.4, the app checks for updates when opened. Read what's new and install, skip a version, or turn checks off; manual checking is always available under Settings → About.
 - To build it yourself, see [docs/build.md](docs/build.md).
 
 ## FAQ

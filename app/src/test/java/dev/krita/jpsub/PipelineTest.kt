@@ -416,31 +416,33 @@ class PipelineTest {
     fun withChecksFinalsStayInOrderAlsoWhenALaterOneFailsOrIsEmpty() {
         val judge = GateJudge()
         val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(3)
-        // seg 2 recognizes nothing (empty final), seg 3 fails to translate
+        val done = CountDownLatch(4)
+        // seg 2 recognizes nothing (empty final), seg 3 fails to translate, seg 4 is a sentinel: the MT thread is
+        // serial, so once it translates seg 4 it has finished handling seg 3
         val asr = object : Asr { override fun recognize(samples: FloatArray) = if (samples.size == 20) "" else "ja${samples.size}" }
-        val translated = CountDownLatch(2) // segments 1 and 3 went through MT (2 is empty: no MT call)
+        val sentinel = CountDownLatch(1)
         val mt = object : Mt {
             override fun translate(prompt: String): MtResult? {
-                translated.countDown()
+                if (source(prompt) == "ja40") sentinel.countDown()
                 return if (source(prompt) == "ja30") null else MtResult("zh(${source(prompt)})", 'e', 1, 1)
             }
             override fun cancel() {}
         }
         val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true)
         p.start()
-        p.submit(job(1, 3, true, 10)); p.submit(job(2, 1, true, 20)); p.submit(job(3, 1, true, 30))
-        assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
-        assertTrue("segment 3 is translated while segment 1 waits for its check", translated.await(2, TimeUnit.SECONDS))
-        Thread.sleep(50) // let the MT thread hand segment 3 over to the check queue
-        assertTrue(out.none { it.isFinal })
-        judge.gate.countDown()
-        assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
-        assertEquals(listOf(1L, 2L, 3L), out.filter { it.isFinal }.map { it.segmentId })
+        try {
+            for ((s, n) in listOf(1L to 10, 2L to 20, 3L to 30, 4L to 40)) p.submit(job(s, if (s == 1L) 3 else 1, true, n))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            assertTrue("segments 2..4 are handled while segment 1 waits for its check", sentinel.await(2, TimeUnit.SECONDS))
+            assertTrue(out.none { it.isFinal })
+            judge.gate.countDown()
+            assertTrue(done.await(2, TimeUnit.SECONDS))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+        assertEquals(listOf(1L, 2L, 3L, 4L), out.filter { it.isFinal }.map { it.segmentId })
         val b = CaptionBoard(10); out.forEach { b.accept(it) }
-        assertEquals(listOf(1L, 3L), b.snapshot().filter { it.isFinal }.map { it.segmentId }) // the empty one is not shown
+        assertEquals(listOf(1L, 3L, 4L), b.snapshot().filter { it.isFinal }.map { it.segmentId }) // the empty one is not shown
         assertTrue(out.single { it.isFinal && it.segmentId == 3L }.zh.startsWith("[翻译失败]"))
-        assertEquals(1, judge.calls.get()) // only segment 1 was checked: a failed or empty translation is not
+        assertEquals(2, judge.calls.get()) // segments 1 and 4: a failed or empty translation is not checked
     }
 
     @Test
@@ -778,39 +780,61 @@ class PipelineTest {
     }
 
     @Test
-    fun finalOnlyWithChecksPublishesNoDraftAndOnlyTheCheckedFinal() {
-        val mt = FakeMt(1); val judge = FakeJudge(unfinishedP = 0.9, choice = "negation")
-        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
-        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge,
-            checkTranslations = true, drafts = { false })
+    fun finalOnlyWithChecksDisplaysNothingUntilTheCheckedFinal() {
+        // The pipeline does publish the unchecked translation as an interim; "only finished sentences" hides it by
+        // showing only finals, as CaptionService.refresh() does (board.snapshot().filter { it.isFinal }).
+        val judge = GateJudge(choice = "negation")
+        val mt = object : Mt {
+            override fun translate(prompt: String) =
+                MtResult(if (prompt.contains(FIX_NOTES["negation"]!!)) "checked" else "unchecked", 'e', 1, 1)
+            override fun cancel() {}
+        }
+        val board = CaptionBoard(10); val done = CountDownLatch(1)
+        fun shown() = synchronized(board) { board.snapshot().filter { it.isFinal }.map { it.zh } }
+        val p = Pipeline(FakeAsr(), mt, { synchronized(board) { board.accept(it) }; if (it.isFinal) done.countDown() },
+            judge = judge, checkTranslations = true, drafts = { false })
         p.start()
         try {
             p.submit(job(1, 1, false, 11))
             p.submit(job(1, 2, true, 10))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            assertEquals(emptyList<String>(), shown()) // the unchecked translation is not displayed
+            judge.gate.countDown()
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+        assertEquals(listOf("checked"), shown())
+    }
+
+    /** A sentence-end candidate fully through ASR, then its final; returns what the judge was asked. */
+    private fun candidateThenFinal(judgeEnds: Boolean): List<String> {
+        val judge = FakeJudge(unfinishedP = 0.9, choice = "ok")
+        val recognized = CountDownLatch(1); val done = CountDownLatch(1)
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray) = "ja${samples.size}".also { if (samples.size == 12) recognized.countDown() }
+        }
+        val p = Pipeline(asr, FakeMt(1), { if (it.isFinal) done.countDown() }, judge = judge,
+            judgeEnds = judgeEnds, checkTranslations = true)
+        p.start()
+        try {
+            p.submit(AsrJob(1, 1, false, FloatArray(12), monoMs(), endOfSpeech = true))
+            assertTrue(recognized.await(2, TimeUnit.SECONDS)) // the final cannot evict it any more
+            if (judgeEnds) {
+                val deadline = monoMs() + 2000
+                while (p.holdHint(1, 1) == null && monoMs() < deadline) Thread.sleep(5)
+            } else Thread.sleep(50) // time in which a wrongly started question would be asked
+            p.submit(job(1, 2, true, 10))
             assertTrue(done.await(3, TimeUnit.SECONDS))
         } finally { p.stop(); p.awaitStopped() }
-        assertTrue(out.toString(), out.none { !it.isFinal })
-        assertEquals(1, out.size)
-        assertTrue(judge.asked.toString(), judge.asked.any { it.startsWith("m:ja10|") }) // checked before it was published
-        assertEquals(2, mt.calls.size) // the first translation and its retry, nothing for the draft
+        return judge.asked.toList()
     }
 
     @Test
     fun checksWithoutSentenceEndJudgingNeverAskUnfinished() {
-        val judge = FakeJudge(unfinishedP = 0.9, choice = "ok")
-        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
-        val p = Pipeline(FakeAsr(), FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, judge = judge,
-            judgeEnds = false, checkTranslations = true)
-        p.start()
-        try {
-            p.submit(AsrJob(1, 1, false, FloatArray(12), monoMs(), endOfSpeech = true)) // a sentence-end candidate
-            p.submit(job(1, 2, true, 10))
-            assertTrue(done.await(3, TimeUnit.SECONDS))
-            Thread.sleep(50)
-            assertEquals(null, p.holdHint(1, 1))
-        } finally { p.stop(); p.awaitStopped() }
-        assertTrue(judge.asked.toString(), judge.asked.none { it.startsWith("u:") })
-        assertTrue(judge.asked.toString(), judge.asked.any { it.startsWith("m:ja10|") })
+        val on = candidateThenFinal(judgeEnds = true) // control: the same candidate is asked about when enabled
+        assertTrue(on.toString(), on.contains("u:ja12"))
+        val off = candidateThenFinal(judgeEnds = false)
+        assertTrue(off.toString(), off.none { it.startsWith("u:") })
+        assertTrue(off.toString(), off.any { it.startsWith("m:ja10|") })
     }
 
     /** Real-log repro (session-20261010-195346 seg 2): the longer recognition lost the thanks for a superchat. */

@@ -552,6 +552,14 @@ class JevTest {
         reply = { 200 to sse("""{"choices":[{"delta":{"reasoning_content":"x","content":"你好"}}]}""") }
         val steps = mutableListOf<ByokTranslator.Step>()
         assertNull(byok().probe(steps)); assertFalse(byok().exhausted(steps))
+        // a nested closing tag that a second strip would turn into the key
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"sk-</thi</think>nk>test"},"finish_reason":"stop"}]}""") }
+        val nested = byok().translate("x")!!
+        assertFalse(nested.text, nested.text.contains("sk-test")); assertFalse(nested.raw.contains("sk-test"))
+        // every switch runs out of tokens while thinking: conclusive, "none works" is kept
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"<think>let me"},"finish_reason":"length"}]}""") }
+        steps.clear()
+        assertNull(byok().probe(steps)); assertTrue(byok().exhausted(steps))
     }
 
     @Test

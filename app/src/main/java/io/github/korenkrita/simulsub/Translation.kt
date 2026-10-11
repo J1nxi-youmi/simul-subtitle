@@ -319,12 +319,19 @@ class ByokTranslator(
         val res = OnlineTranslator.streamResult(r, body, null)
         // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
-        // what a caption may show: reasoning removed first, then the key (removing a think block could join it)
-        val clean = if (open) "" else stripThink(res.raw).replace(apiKey, "***")
+        // what a caption may show: reasoning removed until nothing changes, then the key masked until it is gone, so
+        // that MtResult.text (which strips once more) can no longer join anything into the key
+        var clean = if (open) "" else res.raw
+        while (true) {
+            val next = stripThink(clean).replace(apiKey, "***")
+            if (next == clean) break
+            clean = next
+        }
+        // an answer cut at the token cap inside reasoning is a conclusive "it thinks" for the probe, but no caption
         return MtResult(clean, if (open) 'f' else res.stop, res.promptTokens,
             res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = null, http = res.http,
-            error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open || res.raw.contains("<think>"),
-            cachedTokens = res.cachedTokens)
+            error = if (open) (if (res.stop == 'l' || res.stop == 'e') "unfinished thinking" else res.error ?: "unfinished thinking") else res.error,
+            thinking = res.thinking || open || res.raw.contains("<think>"), cachedTokens = res.cachedTokens)
     }
 
     /**
@@ -378,8 +385,9 @@ class ByokTranslator(
     fun exhausted(steps: List<Step>) = steps.size == THINKING_OFF.size &&
         // conclusive: a normally ended (or token-capped) answer, or the parameter refused; a thinking answer without a
         // proper end (no finish_reason, cut off) proves nothing
-        steps.all { it.result.stop == 'e' || it.result.stop == 'l' || it.result.http == 400 || it.result.http == 422 } &&
-        steps.any { it.result.stop == 'e' || it.result.stop == 'l' }
+        steps.all { ended(it.result) || it.result.http == 400 || it.result.http == 422 } && steps.any { ended(it.result) }
+    /** The reply ended properly (stop or token cap), also when it was cut inside reasoning and so shows nothing. */
+    private fun ended(r: MtResult) = r.stop == 'e' || r.stop == 'l' || r.error == "unfinished thinking"
     // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
     // (a timeout is not among them: thinking can make an answer slow)
     private fun fatal(r: MtResult) = r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)

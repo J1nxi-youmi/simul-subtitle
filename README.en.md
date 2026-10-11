@@ -65,3 +65,5 @@ No. Audio is turned into text on the phone; with online translation only the rec
 ---
 
 Project: <https://github.com/KorenKrita/simul-subtitle>
+
+License: [MIT](LICENSE). The models and third-party libraries keep their own licenses.

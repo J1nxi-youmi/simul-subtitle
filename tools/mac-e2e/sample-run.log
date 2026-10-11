@@ -1,4 +1,4 @@
-/Users/korenkrita/Coding/jp-subtitle/tools/mac-e2e/build/sample.wav: 41.3s
+tools/mac-e2e/build/sample.wav: 41.3s
   1.60s seg1.1d audio=896 wait=3 asrQ=10 asr=35 mtQ=5 mt=237 mtDone=290 | すみません → 对不起，请再重复一遍吧。
   2.28s seg1.2d audio=1600 wait=0 asrQ=6 asr=43 mtQ=12 mt=207 mtDone=268 | すみません駅まで → 对不起，请带我到车站吧。
   3.04s seg1.3d audio=2304 wait=1 asrQ=4 asr=54 mtQ=10 mt=249 mtDone=318 | すみません駅までの道を落ち → 对不起，请告诉我到车站的路线吧。

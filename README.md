@@ -82,3 +82,5 @@
 ---
 
 项目主页：<https://github.com/KorenKrita/simul-subtitle>
+
+许可证：[MIT](LICENSE)。使用的模型和第三方库各自遵循其许可证。

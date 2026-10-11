@@ -462,7 +462,7 @@ class JevTest {
         // the key never reaches the log, even when the service echoes it
         reply = { 401 to """{"error":"bad key sk-test"}""" }
         val bad = byok().translate("x")!!
-        assertFalse(bad.usable); assertFalse(bad.response!!, bad.response!!.contains("sk-test"))
+        assertFalse(bad.usable); assertNull("no BYOK reply body is kept", bad.response); assertEquals(401, bad.http)
     }
 
     @Test
@@ -544,6 +544,14 @@ class JevTest {
         reply = { 200 to "data: " + """{"choices":[{"delta":{"content":"sk-test"}}]}""" + "\n\n" }
         val cut = byok().translate("x")!!
         assertFalse(cut.usable); assertNull(cut.response); assertFalse(cut.raw.contains("sk-test"))
+        // removing a think block must not join the key back together
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"sk-<think>x</think>test"},"finish_reason":"stop"}]}""") }
+        val joined = byok().translate("x")!!
+        assertFalse(joined.text, joined.text.contains("sk-test")); assertFalse(joined.raw.contains("sk-test"))
+        // thinking replies without finish_reason everywhere: inconclusive, not "none works"
+        reply = { 200 to sse("""{"choices":[{"delta":{"reasoning_content":"x","content":"你好"}}]}""") }
+        val steps = mutableListOf<ByokTranslator.Step>()
+        assertNull(byok().probe(steps)); assertFalse(byok().exhausted(steps))
     }
 
     @Test

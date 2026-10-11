@@ -313,20 +313,18 @@ class ByokTranslator(
             calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
                 firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = OnlineTranslator::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
-        // The key is in a header, not the body, but a service may echo it anywhere, also split over chunks or inside
-        // reasoning, where no text replacement on the body can find it. So a streamed answer's body is never kept:
-        // the log gets the text (key removed), status, timings and usage. Only a non-stream error reply (one short
-        // JSON) is kept, with the key removed.
-        val keep = r.body?.takeIf { r.status != 200 }?.let { Jev.redact(it, apiKey) }
-        val res = OnlineTranslator.streamResult(r, body, keep)
-        val leaked = res.raw.contains(apiKey)
+        // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
+        // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
+        // the log gets the cleaned text, status, timings and usage.
+        val res = OnlineTranslator.streamResult(r, body, null)
         // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
-        if (!open && !leaked) return res
-        return MtResult(if (open) "" else res.raw.replace(apiKey, "***"), if (open) 'f' else res.stop, res.promptTokens,
-            res.outputTokens, firstContentMs = res.firstContentMs, request = res.request,
-            response = res.response, http = res.http,
-            error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open, cachedTokens = res.cachedTokens)
+        // what a caption may show: reasoning removed first, then the key (removing a think block could join it)
+        val clean = if (open) "" else stripThink(res.raw).replace(apiKey, "***")
+        return MtResult(clean, if (open) 'f' else res.stop, res.promptTokens,
+            res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = null, http = res.http,
+            error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open || res.raw.contains("<think>"),
+            cachedTokens = res.cachedTokens)
     }
 
     /**
@@ -378,8 +376,10 @@ class ByokTranslator(
      * (cancelled, timeout, 5xx, broken reply, a service error): then nothing is stored and the next use probes again.
      */
     fun exhausted(steps: List<Step>) = steps.size == THINKING_OFF.size &&
-        steps.all { it.result.stop == 'e' || it.result.stop == 'l' || it.result.thinking || it.result.http == 400 || it.result.http == 422 } &&
-        steps.any { it.result.stop == 'e' || it.result.stop == 'l' || it.result.thinking }
+        // conclusive: a normally ended (or token-capped) answer, or the parameter refused; a thinking answer without a
+        // proper end (no finish_reason, cut off) proves nothing
+        steps.all { it.result.stop == 'e' || it.result.stop == 'l' || it.result.http == 400 || it.result.http == 422 } &&
+        steps.any { it.result.stop == 'e' || it.result.stop == 'l' }
     // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
     // (a timeout is not among them: thinking can make an answer slow)
     private fun fatal(r: MtResult) = r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)

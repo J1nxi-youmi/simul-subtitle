@@ -500,6 +500,10 @@ class JevTest {
         reply = { _ -> if (lastBody.get()!!.contains("\"thinking\":{")) 200 to sse("""{"choices":[{"delta":{"content":"你"},"finish_reason":"length"}]}""") else 200 to plain }
         steps.clear()
         assertEquals("template", byok().probe(steps)?.name)
+        // one thinking answer, then server errors: inconclusive, probe again next time
+        reply = { _ -> if (lastBody.get()!!.contains("\"thinking\":{")) 200 to thought else 503 to "{}" }
+        steps.clear()
+        assertNull(byok().probe(steps)); assertEquals(ByokTranslator.THINKING_OFF.size, steps.size); assertFalse(byok().exhausted(steps))
     }
 
     @Test
@@ -518,6 +522,19 @@ class JevTest {
         val late = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null,
             deadlineMs = 4_000, firstContentMs = 1_000).translate("x")!!
         assertEquals("no content in 1000ms", late.error)
+        // tags split over chunks: "<thi" + "nk>" is still thinking; a closed block then text in time is in time
+        pieces = listOf("data: " + """{"choices":[{"delta":{"content":"<thi"}}]}""" + "\n\n" to 0L,
+            "data: " + """{"choices":[{"delta":{"content":"nk>嗯</thi"}}]}""" + "\n\n" to 50L,
+            "data: " + """{"choices":[{"delta":{"content":"nk>你好"}}]}""" + "\n\n" to 50L,
+            "data: " + """{"choices":[{"delta":{},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 1_200L)
+        val split = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null,
+            deadlineMs = 4_000, firstContentMs = 1_000).translate("x")!!
+        assertTrue(split.error, split.usable); assertEquals("你好", split.text)
+        // the key split over two chunks: the body is not kept at all
+        pieces = null
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"sk-"}}]}""", """{"choices":[{"delta":{"content":"test"},"finish_reason":"stop"}]}""") }
+        val k = byok().translate("x")!!
+        assertFalse(k.raw.contains("sk-test")); assertFalse(k.response!!.contains("test"))
     }
 
     @Test

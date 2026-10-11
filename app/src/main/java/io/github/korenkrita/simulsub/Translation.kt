@@ -306,38 +306,40 @@ class ByokTranslator(
             "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
             "stream_options" to mapOf("include_usage" to true),
         ) + (v?.params ?: emptyMap()))
-        inThink = false // one call at a time (the MT thread, or the probe)
+        val seen = StringBuilder() // this request's content so far, for the first-text check (one per call: a late reader
+        // of an earlier, abandoned call must not touch the next one)
         // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
         val r = try {
             calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
-                firstContentMs = firstMs, isContent = ::hasAnswer, isEnd = OnlineTranslator::isDone)
+                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = OnlineTranslator::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
-        // the key is in a header, not the body; a service may still echo it, in an error or in the answer itself
+        // the key is in a header, not the body; a service may still echo it, in an error or in the answer itself (also
+        // split over chunks, which no text replacement on the body can catch: then the body is not kept)
         val res = OnlineTranslator.streamResult(r, body, r.body?.let { Jev.redact(it, apiKey) })
+        val leaked = res.raw.contains(apiKey)
         // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
-        if (!open && !res.raw.contains(apiKey)) return res
+        if (!open && !leaked) return res
         return MtResult(if (open) "" else res.raw.replace(apiKey, "***"), if (open) 'f' else res.stop, res.promptTokens,
-            res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = res.response, http = res.http,
+            res.outputTokens, firstContentMs = res.firstContentMs, request = res.request,
+            response = if (leaked) "(removed: the answer contained the API key)" else res.response, http = res.http,
             error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open, cachedTokens = res.cachedTokens)
     }
 
     /**
-     * Translated text has started (for the 1 s cutoff): content outside a <think>…</think> block that is not only
-     * whitespace. Lines arrive in order on one reader thread, so [inThink] follows a block across chunks; a tag split
-     * between two chunks is not recognised (then that chunk counts as text).
+     * Translated text has started (for the 1 s cutoff): [seen] collects this request's content; outside complete
+     * <think>…</think> blocks, an unclosed <think> and a trailing part of a tag (a tag split over chunks) there is
+     * something besides whitespace.
      */
-    @Volatile private var inThink = false
-    private fun hasAnswer(line: String): Boolean {
+    private fun hasAnswer(line: String, seen: StringBuilder): Boolean {
         if (!OnlineTranslator.hasText(line)) return false
         val j = runCatching { Json.parse(line.removePrefix("data:").trim()) as? Map<*, *> }.getOrNull() ?: return false
-        var c = (((j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>)?.get("delta") as? Map<*, *>)?.get("content") as? String ?: return false
-        val out = StringBuilder()
-        while (c.isNotEmpty()) {
-            if (inThink) { val e = c.indexOf("</think>"); if (e < 0) return false; inThink = false; c = c.substring(e + 8) }
-            else { val s = c.indexOf("<think>"); if (s < 0) { out.append(c); c = "" } else { out.append(c, 0, s); inThink = true; c = c.substring(s + 7) } }
-        }
-        return out.isNotBlank()
+        seen.append((((j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>)?.get("delta") as? Map<*, *>)?.get("content") as? String ?: return false)
+        var s = seen.toString().replace(Regex("(?s)<think>.*?</think>"), "").replace(Regex("(?s)<think>.*"), "")
+        // "<", "<thi", "</thin" … at the end may be the start of a tag still arriving
+        val lt = s.lastIndexOf('<')
+        if (lt >= 0 && ("<think>".startsWith(s.substring(lt)) || "</think>".startsWith(s.substring(lt)))) s = s.substring(0, lt)
+        return s.replace("</think>", "").isNotBlank()
     }
 
     override fun cancel() = calls.cancel()
@@ -367,10 +369,14 @@ class ByokTranslator(
         return null
     }
 
-    /** After [probe] returned null: true when every switch was tried and answered (none turns thinking off), false
-     *  when it stopped early (cancelled, a service error) and should run again next time. */
-    fun exhausted(steps: List<Step>) = steps.size == THINKING_OFF.size && steps.last().result.let { it.error != "cancelled" && !fatal(it) } &&
-        steps.any { it.result.stop == 'e' || it.result.stop == 'l' }
+    /**
+     * After [probe] returned null: true when every switch got a conclusive answer (a full answer that still thought, or
+     * the parameter refused with 400/422) so none turns thinking off; false when any step was inconclusive
+     * (cancelled, timeout, 5xx, broken reply, a service error): then nothing is stored and the next use probes again.
+     */
+    fun exhausted(steps: List<Step>) = steps.size == THINKING_OFF.size &&
+        steps.all { it.result.stop == 'e' || it.result.stop == 'l' || it.result.thinking || it.result.http == 400 || it.result.http == 422 } &&
+        steps.any { it.result.stop == 'e' || it.result.stop == 'l' || it.result.thinking }
     // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
     // (a timeout is not among them: thinking can make an answer slow)
     private fun fatal(r: MtResult) = r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)

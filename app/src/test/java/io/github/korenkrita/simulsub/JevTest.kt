@@ -491,6 +491,33 @@ class JevTest {
         steps.clear()
         assertNull(byok().probe(steps)); assertEquals(ByokTranslator.THINKING_OFF.size, steps.size)
         assertTrue(steps.all { it.result.usable && it.result.thinking })
+        assertTrue(byok().exhausted(steps))
+        // a rate limit half way: not "none works", try again next time
+        reply = { _ -> if (lastBody.get()!!.contains("chat_template_kwargs")) 429 to "{}" else 200 to thought }
+        steps.clear()
+        assertNull(byok().probe(steps)); assertEquals(2, steps.size); assertFalse(byok().exhausted(steps))
+        // a token-capped answer is not a complete one: the next switch is tried
+        reply = { _ -> if (lastBody.get()!!.contains("\"thinking\":{")) 200 to sse("""{"choices":[{"delta":{"content":"你"},"finish_reason":"length"}]}""") else 200 to plain }
+        steps.clear()
+        assertEquals("template", byok().probe(steps)?.name)
+    }
+
+    @Test
+    fun byokNeverShowsReasoningOrTheKeyAndThinkingIsNotTheFirstText() {
+        // the key echoed in the answer itself
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"key sk-test"},"finish_reason":"stop"}]}""") }
+        val r = byok().translate("x")!!
+        assertFalse(r.raw.contains("sk-test")); assertFalse(r.response!!.contains("sk-test"))
+        // ran out of tokens while thinking: nothing to show
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"<think>let me"},"finish_reason":"length"}]}""") }
+        val t = byok().translate("x")!!
+        assertFalse(t.usable); assertTrue(t.thinking)
+        // thinking in the content at once, the translation only after 1 s: no translated text within 1 s
+        pieces = listOf("data: " + """{"choices":[{"delta":{"content":"<think>嗯"}}]}""" + "\n\n" to 0L,
+            "data: " + """{"choices":[{"delta":{"content":"</think>你好"},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 1_500L)
+        val late = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null,
+            deadlineMs = 4_000, firstContentMs = 1_000).translate("x")!!
+        assertEquals("no content in 1000ms", late.error)
     }
 
     @Test
@@ -501,6 +528,8 @@ class JevTest {
         assertEquals("https://h.io:8443/api/openai/v1/chat/completions", ByokTranslator.chatUrl("https://h.io:8443/api/openai").second)
         for (u in listOf("", "http://api.example.com", "https://u:p@h.io", "https://h.io/v1?x=1", "https://h.io/#a", "api.example.com"))
             assertNull(u, ByokTranslator.chatUrl(u).second)
+        for (u in listOf("https://h.io:65536", "https://h.io:0")) assertNull(u, ByokTranslator.chatUrl(u).second)
+        assertEquals("https://[::1]:8443/v1/chat/completions", ByokTranslator.chatUrl("HTTPS://[::1]:8443/v1/").second)
     }
 
     @Test

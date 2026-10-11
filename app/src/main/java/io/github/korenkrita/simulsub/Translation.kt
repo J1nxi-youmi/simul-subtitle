@@ -306,10 +306,38 @@ class ByokTranslator(
             "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
             "stream_options" to mapOf("include_usage" to true),
         ) + (v?.params ?: emptyMap()))
-        val r = calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
-            firstContentMs = firstMs, isContent = OnlineTranslator::hasText, isEnd = OnlineTranslator::isDone)
-        // the key is in a header, not the body; a service may still echo it in an error
-        return OnlineTranslator.streamResult(r, body, r.body?.let { Jev.redact(it, apiKey) })
+        inThink = false // one call at a time (the MT thread, or the probe)
+        // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
+        val r = try {
+            calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
+                firstContentMs = firstMs, isContent = ::hasAnswer, isEnd = OnlineTranslator::isDone)
+        } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
+        // the key is in a header, not the body; a service may still echo it, in an error or in the answer itself
+        val res = OnlineTranslator.streamResult(r, body, r.body?.let { Jev.redact(it, apiKey) })
+        // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
+        val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
+        if (!open && !res.raw.contains(apiKey)) return res
+        return MtResult(if (open) "" else res.raw.replace(apiKey, "***"), if (open) 'f' else res.stop, res.promptTokens,
+            res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = res.response, http = res.http,
+            error = if (open) "unfinished thinking" else res.error, thinking = res.thinking || open, cachedTokens = res.cachedTokens)
+    }
+
+    /**
+     * Translated text has started (for the 1 s cutoff): content outside a <think>…</think> block that is not only
+     * whitespace. Lines arrive in order on one reader thread, so [inThink] follows a block across chunks; a tag split
+     * between two chunks is not recognised (then that chunk counts as text).
+     */
+    @Volatile private var inThink = false
+    private fun hasAnswer(line: String): Boolean {
+        if (!OnlineTranslator.hasText(line)) return false
+        val j = runCatching { Json.parse(line.removePrefix("data:").trim()) as? Map<*, *> }.getOrNull() ?: return false
+        var c = (((j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>)?.get("delta") as? Map<*, *>)?.get("content") as? String ?: return false
+        val out = StringBuilder()
+        while (c.isNotEmpty()) {
+            if (inThink) { val e = c.indexOf("</think>"); if (e < 0) return false; inThink = false; c = c.substring(e + 8) }
+            else { val s = c.indexOf("<think>"); if (s < 0) { out.append(c); c = "" } else { out.append(c, 0, s); inThink = true; c = c.substring(s + 7) } }
+        }
+        return out.isNotBlank()
     }
 
     override fun cancel() = calls.cancel()
@@ -321,23 +349,31 @@ class ByokTranslator(
     class Step(val variant: ThinkingOff, val result: MtResult)
 
     /**
-     * Tries [THINKING_OFF] in order with a short test sentence until one answers in full and without reasoning; that
-     * one is returned (the caller keeps it for this URL + model). Null = none did, see [steps]. Waits up to the whole
-     * deadline for each (no 1 s first-text cutoff: a slow first answer is not a wrong switch). Stops early when the
-     * service clearly fails for a reason no switch changes (wrong key, unknown model, not reachable).
+     * Tries [THINKING_OFF] in order with a short test sentence until one ends normally with an answer and without
+     * reasoning; that one is returned (the caller keeps it for this URL + model). Null = none did, see [steps]: when
+     * every switch was tried (steps.size == THINKING_OFF.size, nothing cancelled) none works for this model; otherwise
+     * the probe stopped early and should run again later. Waits up to the whole deadline for each (no 1 s first-text
+     * cutoff: a slow first answer is not a wrong switch). Stops early when the service fails for a reason no switch
+     * changes (wrong key, unknown model, rate limit, not reachable).
      */
     fun probe(steps: MutableList<Step>): ThinkingOff? {
         for (v in THINKING_OFF) {
             val r = call(byokUser(PROBE_TEXT), v, deadlineMs)
             steps += Step(v, r)
             if (r.error == "cancelled") return null
-            if (r.usable && !r.thinking) return v
-            // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
-            // (a timeout is not among them: thinking can make an answer slow)
-            if (r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)) return null
+            if (r.stop == 'e' && r.text.isNotEmpty() && !r.thinking) return v
+            if (fatal(r)) return null
         }
         return null
     }
+
+    /** After [probe] returned null: true when every switch was tried and answered (none turns thinking off), false
+     *  when it stopped early (cancelled, a service error) and should run again next time. */
+    fun exhausted(steps: List<Step>) = steps.size == THINKING_OFF.size && steps.last().result.let { it.error != "cancelled" && !fatal(it) } &&
+        steps.any { it.result.stop == 'e' || it.result.stop == 'l' }
+    // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
+    // (a timeout is not among them: thinking can make an answer slow)
+    private fun fatal(r: MtResult) = r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)
 
     companion object {
         const val PROBE_TEXT = "こんにちは、今日もよろしくお願いします。"
@@ -391,11 +427,15 @@ class ByokTranslator(
             if (u.scheme?.lowercase() != "https") return "地址要以 https:// 开头" to null
             if (u.host.isNullOrEmpty()) return "地址里没有域名" to null
             if (u.rawUserInfo != null || u.rawQuery != null || u.rawFragment != null) return "地址里不要带用户名、?参数 或 #" to null
+            if (u.port == 0 || u.port > 65535) return "端口号不对" to null
             var path = (u.rawPath ?: "").trimEnd('/')
             path = path.removeSuffix("/chat/completions")
             if (!path.endsWith("/v1")) path += "/v1"
             val port = if (u.port > 0) ":${u.port}" else ""
-            return null to "https://${u.host.lowercase()}$port$path/chat/completions"
+            val out = "https://${u.host.lowercase()}$port$path/chat/completions"
+            // what OkHttp will be given: it must accept it too (IPv6 brackets, odd characters, ...)
+            if (okhttp3.HttpUrl.Companion.run { out.toHttpUrlOrNull() } == null) return "地址格式不对" to null
+            return null to out
         }
     }
 }

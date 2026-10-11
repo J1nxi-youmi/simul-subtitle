@@ -153,8 +153,9 @@ class CaptionService : Service() {
             if (wantJev && judge == null) setStatus("⚠ AI 辅助需要 ${provider.label} 的 key，这次先不用")
             if (mode == MtMode.BYOK) {
                 val system = byokSystem(scene, source, target)
-                var variant = ByokTranslator.variant(prefs.byokVariant(byokUrl!!, byokModel))
-                if (variant == null && prefs.byokVariant(byokUrl, byokModel) != ByokTranslator.NONE_WORKED) {
+                val stored = prefs.byokVariant(byokUrl!!, byokModel)
+                var variant = ByokTranslator.variant(stored)
+                if (variant == null && stored != ByokTranslator.NONE_WORKED) {
                     // first use of this URL + model: find the switch that turns thinking off, logged like any MT call
                     setStatus("第一次用这个模型，正在试怎样关闭思考…")
                     val probe = ByokTranslator(byokUrl, byokModel, byokKey!!, system, null, maxTokens = mtMaxTokens(target))
@@ -166,15 +167,17 @@ class CaptionService : Service() {
                         "http" to s.result.http, "response" to s.result.response, "error" to s.result.error, "usable" to s.result.usable,
                         "thinking" to s.result.thinking, "first_content_ms" to s.result.firstContentMs)) }
                     if (stopping) return
-                    val anyAnswer = steps.any { it.result.usable }
+                    val none = variant == null && probe.exhausted(steps)
                     when {
                         variant != null -> prefs.setByokVariant(byokUrl, byokModel, variant.name)
-                        anyAnswer -> prefs.setByokVariant(byokUrl, byokModel, ByokTranslator.NONE_WORKED)
+                        none -> prefs.setByokVariant(byokUrl, byokModel, ByokTranslator.NONE_WORKED)
                     }
-                    if (variant == null) setStatus(if (anyAnswer) "⚠ 试过的参数都关不掉这个模型的思考，翻译可能很慢；先照常翻译"
-                        else "⚠ 连不上你的翻译服务：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}")
-                    else setStatus("准备好了，开始播放就会出字幕")
+                    // stopped early (service error): no switch is stored, the next session tries again
+                    if (variant == null && !none) notice = "⚠ 你的翻译服务现在不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
+                    setStatus("准备好了，开始播放就会出字幕")
                 }
+                if (variant == null && (stored == ByokTranslator.NONE_WORKED || prefs.byokVariant(byokUrl, byokModel) == ByokTranslator.NONE_WORKED))
+                    notice = "⚠ 关不掉这个模型的思考，翻译可能很慢或经常失败"
                 sl.write(mapOf("ev" to "byok", "variant" to variant?.name, "system" to system))
                 mt = ByokTranslator(byokUrl, byokModel, byokKey!!, system, variant, maxTokens = mtMaxTokens(target))
                 synchronized(cancelLock) { translator = mt }
@@ -323,6 +326,8 @@ class CaptionService : Service() {
     }
 
     private fun setStatus(s: String) { status = s; refresh() }
+    /** A warning that stays for the whole session (the status line is cleared once capture starts). */
+    @Volatile private var notice = ""
 
     private fun refresh() = main.post {
         val v = overlay ?: return@post
@@ -333,6 +338,7 @@ class CaptionService : Service() {
         // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
+            if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
             if (prefs.showStats && status.isEmpty()) shown.lastOrNull()?.let { c ->

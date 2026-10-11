@@ -570,16 +570,18 @@ class MainActivity : Activity() {
             if (k.isNotEmpty()) { prefs.byokKey = k; key.setText("") }
             return ByokTranslator.chatUrl(u).second
         }
+        val testing = byokTest != null
+        // while a test runs the boxes are locked, so its result always belongs to what they show
+        listOf(url, model, key).forEach { it.isEnabled = !running && !testing }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = "清除 key"; textSize = 16f; isEnabled = saved != null && !running
+            text = "清除 key"; textSize = 16f; isEnabled = saved != null && !running && !testing
             setOnClickListener { prefs.byokKey = null; renderTranslate() }
         })
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = "保存"; textSize = 16f; isEnabled = !running
+            text = "保存"; textSize = 16f; isEnabled = !running && !testing
             setOnClickListener { if (save() != null) renderTranslate() }
         })
-        val testing = byokTest != null
         val test = MaterialButton(this).apply { text = if (testing) "测试中…" else "测试连接"; textSize = 16f; isEnabled = !running && !testing }
         row.addView(test)
         box.addView(row)
@@ -599,24 +601,24 @@ class MainActivity : Activity() {
             val t = ByokTranslator(chatUrl, m, k, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
                 maxTokens = mtMaxTokens(prefs.targetLang))
             byokTest?.cancel(); byokTest = t
-            renderTranslate() // shows "testing" and disables the button
+            renderTranslate() // shows "testing" and locks the boxes
             Thread {
                 val steps = mutableListOf<ByokTranslator.Step>()
                 val v = t.probe(steps)
                 main.post {
-                    if (byokTest !== t || isDestroyed) return@post // a newer test, or the screen is gone
+                    if (byokTest !== t || isDestroyed) return@post // cancelled (captions started), or the screen is gone
                     byokTest = null
                     val ok = steps.firstOrNull { it.variant === v }?.result
-                    val answered = steps.any { it.result.usable }
+                    val none = v == null && t.exhausted(steps)
                     when {
                         v != null -> prefs.setByokVariant(chatUrl, m, v.name)
-                        answered -> prefs.setByokVariant(chatUrl, m, ByokTranslator.NONE_WORKED)
+                        none -> prefs.setByokVariant(chatUrl, m, ByokTranslator.NONE_WORKED)
                     }
                     // shown once by the next render
                     byokResult = when {
                         ok != null -> "✓ 可以用。关闭思考：${v!!.label}；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
                             (if ((ok.firstContentMs ?: 0) > 1000) "（超过 1 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
-                        answered -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
+                        none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
                         else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
                     }
                     renderTranslate()
@@ -922,6 +924,8 @@ class MainActivity : Activity() {
             status(R.color.err, "自己的模型还没填完整", "请在下面「怎么翻译」里填好服务地址、模型 ID 和 API Key 并保存，或者换回在线翻译。")
             return
         }
+        // a connectivity test still running would probe the same service again alongside the session's own probe
+        byokTest?.let { it.cancel(); byokTest = null; renderTranslate() }
         if (!hasAudio()) {
             val ask = mutableListOf(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) ask += Manifest.permission.POST_NOTIFICATIONS // optional

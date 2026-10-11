@@ -78,4 +78,11 @@ class AppUpdaterTest {
         assertEquals("新功能\n\n• 更新更方便\n• 说明", UpdateRelease.readableNotes(release.notes))
         assertFalse(UpdateRelease.readableNotes("   ").isBlank())
     }
+
+    @Test fun hostileNotesFormatQuickly() {
+        val t = System.nanoTime()
+        UpdateRelease.readableNotes("[".repeat(120_000))
+        UpdateRelease.readableNotes("[a](".repeat(30_000))
+        assertTrue((System.nanoTime() - t) / 1_000_000 < 500)
+    }
 }

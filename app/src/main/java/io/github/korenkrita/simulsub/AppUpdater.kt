@@ -62,6 +62,7 @@ internal data class UpdateRelease(
         const val CHECK_INTERVAL = 12 * 60 * 60 * 1000L
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024
+        const val MAX_NOTES = 8_000 // characters shown in the dialog
         // Same order as ModelStore.GH_PROXIES. Never send api.github.com through these download proxies.
         fun sources(url: String) = listOf(url, "https://gh-proxy.com/$url", "https://gh.llkk.cc/$url")
 
@@ -82,9 +83,11 @@ internal data class UpdateRelease(
             return UpdateRelease(code, name, j.getString("notes"), url, size, hash)
         }
 
-        fun readableNotes(markdown: String): String = markdown
-            .replace(Regex("!\\[([^]]*)]\\([^)]*\\)"), "$1")
-            .replace(Regex("\\[([^]]+)]\\([^)]*\\)"), "$1")
+        // Notes come from the network (possibly a proxy): cap the length and keep the link patterns bounded and
+        // free of nested brackets, so no input makes the regexes backtrack for seconds on the main thread.
+        fun readableNotes(markdown: String): String = markdown.take(MAX_NOTES)
+            .replace(Regex("!\\[([^\\[\\]\\n]{0,200})]\\([^()\\n]{0,500}\\)"), "$1")
+            .replace(Regex("\\[([^\\[\\]\\n]{1,200})]\\([^()\\n]{0,500}\\)"), "$1")
             .replace(Regex("(?m)^[\\t ]{0,3}#{1,6}[\\t ]+"), "")
             .replace(Regex("(?m)^[\\t ]*[-*+][\\t ]+"), "• ")
             .replace("**", "").replace("__", "").replace("`", "")
@@ -140,7 +143,8 @@ internal class AppUpdater(private val activity: Activity) {
             }
             return
         }
-        val pending = prefs.getString("pendingInstall", null) ?: return
+        // nothing unfinished: a reopened (retained) activity also checks again once the interval has passed
+        val pending = prefs.getString("pendingInstall", null) ?: return start()
         val release = runCatching { UpdateRelease.parse(pending) }.getOrNull()
         if (release == null || !release.isNewer(BuildConfig.VERSION_CODE)) {
             prefs.edit().remove("pendingInstall").apply()

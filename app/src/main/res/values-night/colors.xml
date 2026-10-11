@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="brand">#FF9D93FF</color>
+    <!-- light brand / err at night: dark text keeps ≥ 6.5:1 (white would be ~2.6:1) -->
+    <color name="on_brand">#FF17132B</color>
     <color name="brand_pink">#FFF472B6</color>
     <color name="bg">#FF121117</color>
     <color name="card">#FF1D1B24</color>

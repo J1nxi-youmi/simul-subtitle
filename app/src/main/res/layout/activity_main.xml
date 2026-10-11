@@ -126,7 +126,9 @@
                     app:iconSize="28dp"
                     app:cornerRadius="18dp"
                     app:iconGravity="textStart"
-                    app:iconPadding="10dp" />
+                    app:iconPadding="10dp"
+                    android:textColor="@color/on_brand"
+                    app:iconTint="@color/on_brand" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/secondary"

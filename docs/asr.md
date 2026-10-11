@@ -35,4 +35,4 @@
 
 ## 可能的改进
 
-- 只听日语时换用纯日语的 [reazonspeech-k2-v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)，避免日语被识别成英语（未测试）。
+- 只听日语时换用纯日语的 [reazonspeech-k2-v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)，评估能否减少日语被识别成英语的情况（还没有测试）。

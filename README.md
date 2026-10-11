@@ -42,7 +42,7 @@
 ## 安装
 
 - 系统要求：Android 10 及以上，arm64 手机。「手机上翻译」还需要支持 ARMv8.6（dotprod、i8mm、fp16）的处理器，例如骁龙 8 Gen 3（已在这款芯片上使用）；不确定的话请用在线翻译。
-- 到 [Releases](https://github.com/KorenKrita/simul-subtitle/releases) 下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
+- 发布后，可以在本仓库的 [Releases](https://github.com/KorenKrita/simul-subtitle/releases) 页面下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
 - 想自己编译，看 [构建说明](docs/build.md)。
 
 ## 常见问题

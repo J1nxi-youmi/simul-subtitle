@@ -424,14 +424,14 @@ class MainActivity : Activity() {
             box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, !running) {
                 if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            box.addView(hint("用 B 站提供的免费 Index 翻译服务，速度快、译得好，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。模型越大译得越好，越小越快。"))
+            box.addView(hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。"))
         } else {
             box.addView(hint("翻译也在手机上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。"))
         }
 
         box.addView(label("内容类型"))
         box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
-        box.addView(hint("选「VTuber 直播」时，翻译会按直播闲聊的口吻来译，并认得直播里的常用词。"))
+        box.addView(hint("选「B站 VTuber 直播」时，翻译会知道这是虚拟主播在 B 站和观众闲聊、念弹幕，并按 B 站的说法翻译「SC」「舰长」「弹幕」这类直播用语。"))
 
         // translation context: on/off and how many finished sentences (applies to the next start)
         val ctxCount = label("")
@@ -444,7 +444,7 @@ class MainActivity : Activity() {
             ctxCount.visibility = if (prefs.contextOn) View.VISIBLE else View.GONE
             ctxSlider.visibility = ctxCount.visibility
         }
-        switchRow(box, "结合上文来翻译", "翻译每句话时，把前面刚说过的几句一起交给翻译参考，人称、指代和省略的内容会译得更连贯。参考的句子越多，翻译越慢。",
+        switchRow(box, "结合上文来翻译", "翻译每句话时，把前面刚说过的几句一起交给翻译参考，帮助它理解人称、指代和省略的内容。参考的句子越多，翻译要处理的文字越多，可能更慢。",
             prefs.contextOn) { prefs.contextOn = it; showCtx() }
         box.addView(ctxCount)
         box.addView(ctxSlider)

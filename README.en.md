@@ -40,7 +40,7 @@ The app's interface is in Chinese.
 ## Install
 
 - Android 10 or newer, arm64. On-device translation additionally needs an ARMv8.6 CPU (dotprod, i8mm, fp16), e.g. Snapdragon 8 Gen 3 (the chip it is used on); if unsure, use online translation.
-- Download the APK from [Releases](https://github.com/KorenKrita/simul-subtitle/releases) and open it on the phone (allow "install unknown apps").
+- Once published, download the APK from this repository's [Releases](https://github.com/KorenKrita/simul-subtitle/releases) page and open it on the phone (allow "install unknown apps").
 - To build it yourself, see [docs/build.md](docs/build.md).
 
 ## FAQ

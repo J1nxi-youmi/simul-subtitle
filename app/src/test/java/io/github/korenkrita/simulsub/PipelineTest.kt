@@ -613,6 +613,52 @@ class PipelineTest {
     }
 
     @Test
+    fun contextCanBeTurnedOffOrSetFromOneToFiveSentences() {
+        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        fun run(n: Int): List<String> {
+            val mt = FakeMt(1); val done = CountDownLatch(7)
+            val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, previousSentences = n)
+            p.start()
+            try {
+                for (s in 1L..7L) p.submit(job(s, 1, true, s.toInt() * 10))
+                assertTrue(done.await(2, TimeUnit.SECONDS))
+            } finally { p.stop(); p.awaitStopped() }
+            return mt.calls
+        }
+        // 0 = off: no sentence gets a context
+        run(0).forEach { assertTrue(it, !it.contains(ctx)) }
+        // 1: only the sentence right before
+        val one = run(1)
+        assertEquals(one[6], "ja60", one[6].substringAfter(ctx).lineSequence().first().trim())
+        // 5: the five before, oldest first, never six
+        val five = run(Pipeline.MAX_PREVIOUS_SENTENCES)
+        assertTrue(five[6], five[6].contains(ctx + "ja20 / ja30 / ja40 / ja50 / ja60"))
+        assertTrue(five[6], !five[6].contains("ja10 / ja20"))
+    }
+
+    @Test
+    fun aLateRetryKeepsItsOwnContextWithFiveSentences() {
+        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        val judge = GateJudge(choice = "negation")
+        val mt = FakeMt(1); val done = CountDownLatch(8)
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true,
+            previousSentences = 5)
+        p.start()
+        try {
+            p.submit(job(1, 1, true, 10))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            for (s in 2L..8L) p.submit(job(s, 1, true, s.toInt() * 10))
+            val t0 = System.nanoTime()
+            while (mt.calls.size < 8 && System.nanoTime() - t0 < 2_000_000_000L) Thread.sleep(5)
+            judge.gate.countDown()
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+        // segment 1 had no context on its first translation, so its retry has none either
+        val retry1 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja10" }
+        assertTrue(retry1, !retry1.contains(ctx))
+    }
+
+    @Test
     fun endOfSpeechDraftIsJudgedAndTheAnswerIsKeyedByRevision() {
         val judge = FakeJudge(unfinishedP = 0.9)
         val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge)

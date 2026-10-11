@@ -58,6 +58,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
         setPadding(dp(10f).toInt(), dp(8f).toInt(), dp(10f).toInt(), dp(8f).toInt())
+        minHeight = dp(48f).toInt(); minWidth = dp(48f).toInt() // a finger-sized tap area
         setOnClickListener { onToggleMode(); bumpToolbarTimer() }
     }
     /** Shows the current mode on the toolbar button; the label is what is on screen now. */
@@ -219,7 +220,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         }
         fun btn(icon: Int, label: String, onClick: () -> Unit) = ImageButton(context).apply {
             setImageResource(icon); contentDescription = label
-            background = null; setPadding(dp(10f).toInt(), dp(8f).toInt(), dp(10f).toInt(), dp(8f).toInt())
+            background = null; setPadding(dp(12f).toInt(), dp(12f).toInt(), dp(12f).toInt(), dp(12f).toInt())
+            minimumWidth = dp(48f).toInt(); minimumHeight = dp(48f).toInt()
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun tag(t: String) = TextView(context).apply {
@@ -231,7 +233,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         fun tbtn(label: String, desc: String, onClick: () -> Unit) = TextView(context).apply {
             text = label; contentDescription = desc
             setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER; minWidth = dp(40f).toInt()
+            gravity = Gravity.CENTER; minWidth = dp(48f).toInt(); minHeight = dp(48f).toInt()
             setPadding(dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt())
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }

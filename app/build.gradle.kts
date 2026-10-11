@@ -59,9 +59,15 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
-    // The sherpa-onnx AAR (shared-onnxruntime build) also ships its C and C++ API libraries; the Kotlin API only loads libsherpa-onnx-jni.so,
-    // which links libonnxruntime.so and none of their symbols.
-    packaging { jniLibs { excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so") } }
+    // The sherpa-onnx AAR also ships its C and C++ API libraries; the Kotlin API only loads libsherpa-onnx-jni.so, which links none of their symbols.
+    // useLegacyPackaging: .so files are stored compressed in the APK (download ~15 MB instead of ~31 MB) and extracted
+    // on install, so the installed footprint is larger (APK + extracted libraries) and the first install is slower.
+    packaging {
+        jniLibs {
+            excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {

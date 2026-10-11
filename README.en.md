@@ -59,7 +59,7 @@ No. Audio is turned into text on the phone; with online translation only the rec
 Built on these open-source projects:
 
 - **[Index-Translate](https://github.com/bilibili/Index-Translate)** by bilibili: the translation model at the heart of this app. Online translation uses bilibili's free public Index-Translate API; on-device translation uses Index-Translate-2B. Many thanks to the Index team for open-sourcing the models and offering the free service.
-- **[ReazonSpeech](https://research.reazon.jp/projects/ReazonSpeech/)**: Japanese / English speech recognition.
+- **[ReazonSpeech](https://github.com/reazon-research/ReazonSpeech)**: Japanese / English speech recognition (the app uses the sherpa-onnx export [reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)).
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: on-device speech recognition and voice activity detection (Silero VAD).
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**: on-device translation model runtime.
 

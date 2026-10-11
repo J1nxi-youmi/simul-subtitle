@@ -64,7 +64,7 @@
 同传字幕站在这些优秀的开源项目上：
 
 - **[Index-Translate](https://github.com/bilibili/Index-Translate)**：B 站开源的翻译模型，也是本 App 的翻译核心。在线翻译使用 B 站开放的 Index-Translate 免费接口，手机上翻译使用 Index-Translate-2B。衷心感谢 Index 团队的开源和免费开放的服务。
-- **[ReazonSpeech](https://research.reazon.jp/projects/ReazonSpeech/)**：日语 / 英语语音识别模型。
+- **[ReazonSpeech](https://github.com/reazon-research/ReazonSpeech)**：日语 / 英语语音识别模型（App 使用 sherpa-onnx 导出版 [reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)）。
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机上运行语音识别和静音检测（Silero VAD）。
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**：在手机上运行翻译模型。
 

@@ -2,7 +2,7 @@
 
 ## 现在用的模型
 
-[ReazonSpeech k2 v2 ja-en](https://huggingface.co/reazon-research/reazonspeech-k2-v2-ja-en)（sherpa-onnx 导出版，int8），一个模型同时识别日语和英语。
+ReazonSpeech k2 v2 ja-en，App 下载的是 sherpa-onnx 导出版 [csukuangfj/reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)（int8；原始模型由 [ReazonSpeech](https://github.com/reazon-research/ReazonSpeech) 发布），一个模型同时识别日语和英语。
 
 - 文件约 77 MB（encoder 70.9 MB + decoder 5.2 MB + joiner 1.0 MB + tokens）。
 - 输入前后各补 0.3 s 静音：语音从第 0 个采样就开始时，这个模型会丢掉第一个词。

@@ -523,19 +523,24 @@ class Pipeline(
                 val words = latin(piece)
                 if (words && !(boundary(kept, kept.length - n) && boundary(tail, n))) continue
                 val inWhole = (0..whole.length - n).count { i -> whole.startsWith(piece, i) && (!words || boundary(whole, i) && boundary(whole, i + n)) }
-                return if (inWhole >= 2) join(kept, tail) else join(kept, tail.substring(n).trimStart())
+                // Latin: the separator after the dropped words is rebuilt by join(); Japanese keeps the rest exactly as before
+                val rest = tail.substring(n).let { if (words) it.trimStart() else it }
+                return if (inWhole >= 2) join(kept, tail) else join(kept, rest)
             }
             return join(kept, tail)
         }
         const val MIN_REPEAT = 3
 
-        /** contains a letter below the CJK ranges (Latin, also Cyrillic etc.); Japanese text has none or few */
-        private fun latin(s: String) = s.any { it.isLetter() && it.code < 0x2E80 }
-        /** no letter/digit on both sides of position [i] */
+        /** a letter of the Latin (incl. full-width), Cyrillic or Greek script: text whose words are separated by spaces */
+        private fun spacedLetter(c: Char) = c.isLetter() && Character.UnicodeScript.of(c.code).let {
+            it == Character.UnicodeScript.LATIN || it == Character.UnicodeScript.CYRILLIC || it == Character.UnicodeScript.GREEK
+        }
+        private fun latin(s: String) = s.any(::spacedLetter)
+        /** no word character on both sides of position [i] */
         private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !word(s, i - 1) || !word(s, i)
-        /** a word character; an apostrophe between letters (CAN'T, DON’T) is part of the word */
+        /** a word character; an apostrophe inside a word (CAN'T, DON’T, MP3'S) is part of it */
         private fun word(s: String, i: Int) = s[i].isLetterOrDigit() ||
-            (s[i] == '\'' || s[i] == '’') && i > 0 && i < s.length - 1 && s[i - 1].isLetter() && s[i + 1].isLetter()
+            (s[i] == '\'' || s[i] == '’') && i > 0 && i < s.length - 1 && s[i - 1].isLetterOrDigit() && s[i + 1].isLetterOrDigit()
         /**
          * Latin-script text is joined with a space when neither side of the join is CJK (or already whitespace), so
          * "THANK YOU." + "SO" gets one; Japanese, also with a Latin word in it ("SC" + "です"), is joined directly.
@@ -543,10 +548,11 @@ class Pipeline(
         fun join(a: String, b: String) = when {
             a.isEmpty() -> b; b.isEmpty() -> a
             (latin(a) || latin(b)) && !a.last().isWhitespace() && !b.first().isWhitespace() &&
-                !isCjk(a.last()) && !isCjk(b.first()) -> "$a $b"
+                !cjk(a.last()) && !cjk(b.first()) -> "$a $b"
             else -> a + b
         }
-        private fun isCjk(c: Char) = c.code >= 0x2E80
+        /** a character of text written without spaces: anything at or above the CJK ranges except spaced letters (full-width Latin) */
+        private fun cjk(c: Char) = c.code >= 0x2E80 && !spacedLetter(c)
 
         /** share of [a]'s characters found, in order, in [b] */
         fun keptRatio(a: String, b: String): Double {

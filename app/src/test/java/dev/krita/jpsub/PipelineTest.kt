@@ -538,6 +538,10 @@ class PipelineTest {
         // CAN is part of CAN'T: no repeat; a whole DON'T repeated is one
         assertEquals("WE CAN CAN'T GO", Pipeline.joinWithoutRepeat("WE CAN", "CAN'T GO", "GO"))
         assertEquals("I DON'T KNOW", Pipeline.joinWithoutRepeat("I DON'T", "DON'T KNOW", "KNOW"))
+        // review round 4 fix: an apostrophe after a digit, full-width Latin, Japanese keeps the space after a repeat
+        assertEquals("THE MP3 MP3'S GOOD", Pipeline.joinWithoutRepeat("THE MP3", "MP3'S GOOD", "GOOD"))
+        assertEquals("ＴＨＥ ＰＬＡＮＥＴ ＮＥＴＷＯＲＫ", Pipeline.joinWithoutRepeat("ＴＨＥ ＰＬＡＮＥＴ", "ＮＥＴＷＯＲＫ", "ＮＥＸＴ"))
+        assertEquals("ありがとう またね", Pipeline.joinWithoutRepeat("ありがとう", "ありがとう またね", "またね"))
         // Japanese with a Latin word stays unspaced, as before
         assertEquals("SCありがとう", Pipeline.join("SC", "ありがとう"))
         assertEquals("今日も一日お疲れさまでしたいただきます",

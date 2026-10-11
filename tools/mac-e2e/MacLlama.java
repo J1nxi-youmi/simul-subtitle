@@ -1,4 +1,4 @@
-package dev.krita.jpsub;
+package io.github.korenkrita.simulsub;
 public class MacLlama {
   static { System.loadLibrary("jpsub_mac"); }
   public static native long nativeLoad(String p, int t);

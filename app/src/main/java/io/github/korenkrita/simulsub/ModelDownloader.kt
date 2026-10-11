@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 import android.app.DownloadManager
 import android.content.Context

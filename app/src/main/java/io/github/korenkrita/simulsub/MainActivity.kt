@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 import android.Manifest
 import android.app.Activity

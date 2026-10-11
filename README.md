@@ -59,7 +59,7 @@ Every caption is logged with a per-stage breakdown:
 ```bash
 adb logcat -s jpsub                          # seg=3.4F audio=3072 wait=319 asrQ=9 asr=35 mtQ=13 mt=225 mtDone=601 | …
                                              # shown seg=3.4F update=640ms hal=true
-adb pull /sdcard/Android/data/dev.krita.jpsub/files/timing.csv
+adb pull /sdcard/Android/data/io.github.korenkrita.simulsub/files/timing.csv
 ```
 
 `wait` = end-of-speech detection, `mtDone` = last captured sample → translation done.

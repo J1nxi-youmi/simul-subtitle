@@ -1,5 +1,5 @@
 import com.k2fsa.sherpa.onnx.*
-import dev.krita.jpsub.*
+import io.github.korenkrita.simulsub.*
 import java.io.File
 import javax.sound.sampled.AudioSystem
 

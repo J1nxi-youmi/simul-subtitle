@@ -2,8 +2,8 @@
 # GetFieldID) and calls back into them, so nothing in the package may be renamed or removed.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
 
-# libjpsub.so exports Java_dev_krita_jpsub_LlamaTranslator_*: the class name and its native methods must stay.
--keepclasseswithmembernames,includedescriptorclasses class dev.krita.jpsub.LlamaTranslator {
+# libjpsub.so exports Java_io_github_korenkrita_simulsub_LlamaTranslator_*: the class name and its native methods must stay.
+-keepclasseswithmembernames,includedescriptorclasses class io.github.korenkrita.simulsub.LlamaTranslator {
     native <methods>;
 }
 

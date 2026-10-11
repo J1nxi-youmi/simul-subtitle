@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

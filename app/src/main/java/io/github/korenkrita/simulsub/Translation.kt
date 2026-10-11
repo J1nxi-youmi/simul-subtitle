@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 // Translator prompt and native result format. Pure Kotlin so the Mac harness (tools/mac-e2e) compiles the same code.
 

@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 import java.util.concurrent.LinkedBlockingDeque
 

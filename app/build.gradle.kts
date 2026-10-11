@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "dev.krita.jpsub"
+    namespace = "io.github.korenkrita.simulsub"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "dev.krita.jpsub"
+        applicationId = "io.github.korenkrita.simulsub"
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
         versionCode = 2

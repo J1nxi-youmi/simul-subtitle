@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 import java.io.IOException
 import java.util.concurrent.CountDownLatch

@@ -32,7 +32,7 @@ if [ ! -s "$W/llama/bin/libllama.dylib" ] || [ "$(cat "$W/llama/REV" 2>/dev/null
   "$CMAKE" --build "$W/llama" -j 8 --target llama >/dev/null
   echo "$LREV" > "$W/llama/REV"
 fi
-sed 's/Java_dev_krita_jpsub_LlamaTranslator_/Java_dev_krita_jpsub_MacLlama_/' "$ROOT/app/src/main/cpp/translator_jni.cpp" > "$W/mac_jni.cpp"
+sed 's/Java_io_github_korenkrita_simulsub_LlamaTranslator_/Java_io_github_korenkrita_simulsub_MacLlama_/' "$ROOT/app/src/main/cpp/translator_jni.cpp" > "$W/mac_jni.cpp"
 clang++ -std=c++17 -O2 -shared -fPIC -I"$JH/include" -I"$JH/include/darwin" -I"$L/include" -I"$L/ggml/include" \
   "$W/mac_jni.cpp" -L"$W/llama/bin" -lllama -Wl,-rpath,"$W/llama/bin" -o "$W/native/libjpsub_mac.dylib"
 
@@ -51,7 +51,7 @@ KC="$KC:$(jar org.jetbrains.intellij.deps 'trove4j*.jar'):$(jar org.jetbrains/an
 # a fresh output dir per run: stale classes of removed/renamed declarations break overload resolution
 C="$(mktemp -d "$W/classes.XXXXXX")"
 "$JH/bin/javac" -d "$C" "$HERE/MacLlama.java"
-P="$ROOT/app/src/main/java/dev/krita/jpsub"
+P="$ROOT/app/src/main/java/io/github/korenkrita/simulsub"
 "$JH/bin/java" -cp "$KC" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -nowarn \
   -cp "$STD:$W/sherpa-jvm.jar:$C" -d "$C" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$P/Jev.kt" "$HERE/E2E.kt"
 

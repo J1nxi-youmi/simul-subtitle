@@ -28,7 +28,7 @@ if [ ! -s models/asr/tokens.txt ]; then
 fi
 
 if [ "${1:-}" = push ]; then
-  DST=/sdcard/Android/data/dev.krita.jpsub/files
+  DST=/sdcard/Android/data/io.github.korenkrita.simulsub/files
   for d in asr vad mt; do
     adb shell mkdir -p "$DST/$d"
     for f in models/$d/*; do adb push "$f" "$DST/$d/"; done

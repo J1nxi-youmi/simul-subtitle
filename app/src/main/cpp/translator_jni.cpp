@@ -19,7 +19,7 @@ struct Translator {
 };
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_krita_jpsub_LlamaTranslator_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint nThreads) {
+Java_io_github_korenkrita_simulsub_LlamaTranslator_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint nThreads) {
     llama_backend_init();
     const char *path = env->GetStringUTFChars(jpath, nullptr);
     auto mp = llama_model_default_params();
@@ -53,7 +53,7 @@ Java_dev_krita_jpsub_LlamaTranslator_nativeLoad(JNIEnv *env, jclass, jstring jpa
  *   'e' end of generation, 'l' hit maxTokens, 'p' prompt too long for the context, 'f' decode/tokenize failure.
  */
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_dev_krita_jpsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong h, jstring jprompt, jint maxTokens) {
+Java_io_github_korenkrita_simulsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong h, jstring jprompt, jint maxTokens) {
     auto *t = reinterpret_cast<Translator *>(h);
     // cancel is sticky: it is only used to stop the session, so it is never reset.
     if (t->cancel.load()) return nullptr;
@@ -107,12 +107,12 @@ Java_dev_krita_jpsub_LlamaTranslator_nativeTranslate(JNIEnv *env, jclass, jlong 
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_krita_jpsub_LlamaTranslator_nativeCancel(JNIEnv *, jclass, jlong h) {
+Java_io_github_korenkrita_simulsub_LlamaTranslator_nativeCancel(JNIEnv *, jclass, jlong h) {
     if (h) reinterpret_cast<Translator *>(h)->cancel.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_krita_jpsub_LlamaTranslator_nativeFree(JNIEnv *, jclass, jlong h) {
+Java_io_github_korenkrita_simulsub_LlamaTranslator_nativeFree(JNIEnv *, jclass, jlong h) {
     auto *t = reinterpret_cast<Translator *>(h);
     if (!t) return;
     llama_sampler_free(t->smpl);

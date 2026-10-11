@@ -1,4 +1,4 @@
-package dev.krita.jpsub
+package io.github.korenkrita.simulsub
 
 /**
  * Turns a 16 kHz mono stream into ASR jobs.

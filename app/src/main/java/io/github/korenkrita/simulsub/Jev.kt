@@ -155,7 +155,7 @@ class Jev(
 }
 
 /** One POST as the session log records it. [error] is a fixed code or an exception class name, never a message. */
-class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?)
+class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?, val firstContentMs: Long? = null)
 
 /**
  * POSTs of one session (Jev and online MT). Each request is an OkHttp [Call], registered before it runs:
@@ -171,21 +171,36 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         .callTimeout(deadlineMs, TimeUnit.MILLISECONDS) // the whole call, including a slowly trickling body
         .dns(dns).apply { proxy?.let { proxy(it) } }
         .build()
-    /** registered calls and the latch their caller waits on */
-    private val inFlight = java.util.concurrent.ConcurrentHashMap<Call, CountDownLatch>()
+    /** what a caller waits on: the end of its call, and (streamed) the first content */
+    private class Waiters(val done: CountDownLatch, val started: CountDownLatch)
+    /** registered calls and their callers' latches */
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<Call, Waiters>()
     @Volatile private var cancelled = false
 
-    fun cancel() { cancelled = true; inFlight.forEach { (c, l) -> c.cancel(); l.countDown() } }
+    fun cancel() { cancelled = true; inFlight.forEach { (c, w) -> c.cancel(); w.done.countDown(); w.started.countDown() } }
 
-    fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {}): HttpResult {
+    /**
+     * Streamed answers (online MT): [firstContentMs] is set and [isContent] tells, per body line, whether real output
+     * has started (for SSE: the first chunk with non-empty text). Without such a line within [firstContentMs] of the
+     * start the call is given up; afterwards the whole call still ends [deadlineMs] after the start. Reading stops
+     * after a line [isEnd] accepts (the stream's end marker). [HttpResult.firstContentMs] reports when the content
+     * started. Without [firstContentMs] (Jev) the body is read whole, as before.
+     */
+    fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {},
+             firstContentMs: Long? = null, isContent: (String) -> Boolean = { false },
+             isEnd: (String) -> Boolean = { false }): HttpResult {
         val t0 = monoMs()
         if (cancelled) return HttpResult(0, null, 0, "cancelled")
         val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
             .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
         val call = client.newCall(req)
+        // counted down by the end of the call, by cancel(), and (streamed) by the first content line
         val done = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val first = java.util.concurrent.atomic.AtomicLong(-1)
+        fun firstOrNull() = first.get().takeIf { it >= 0 }
         val result = AtomicReference<HttpResult?>()
-        inFlight[call] = done
+        inFlight[call] = Waiters(done, started)
         // cancel() either saw the call in the map or set the flag before this check
         if (cancelled) { inFlight.remove(call); return HttpResult(0, null, 0, "cancelled") }
         var admitted = false
@@ -198,30 +213,50 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     PENDING.release()
-                    result.set(HttpResult(0, null, monoMs() - t0, why(e, t0))); done.countDown()
+                    result.set(HttpResult(0, null, monoMs() - t0, why(e, t0), firstOrNull())); done.countDown(); started.countDown()
                 }
                 override fun onResponse(call: Call, response: Response) {
-                    val r = try {
-                        response.use { resp ->
-                            val src = resp.body?.source()
+                    var r: HttpResult? = null
+                    try {
+                        val src = response.body?.source()
+                        r = when {
+                            src == null -> HttpResult(response.code, null, monoMs() - t0, null)
+                            firstContentMs != null && response.code == 200 -> readStream(src, t0, first, started, isContent, isEnd)
                             // a real answer is a few KB; anything far larger is not one
-                            if (src != null && src.request(MAX_RESPONSE + 1L)) HttpResult(resp.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes")
-                            else HttpResult(resp.code, src?.buffer?.readUtf8(), monoMs() - t0, null)
+                            src.request(MAX_RESPONSE + 1L) -> HttpResult(response.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes")
+                            else -> HttpResult(response.code, src.buffer.readUtf8(), monoMs() - t0, null)
                         }
-                    } catch (e: IOException) { HttpResult(response.code, null, monoMs() - t0, why(e, t0)) }
-                    finally { PENDING.release() }
-                    result.set(r); done.countDown()
+                    } catch (e: IOException) { r = HttpResult(response.code, null, monoMs() - t0, why(e, t0), firstOrNull()) }
+                    finally {
+                        // publish before closing: closing an unfinished chunked body may first try to drain it
+                        result.set(r); done.countDown(); started.countDown()
+                        if (firstContentMs != null) call.cancel() // the stream's end marker was read: drop the rest
+                        response.close()
+                        PENDING.release()
+                    }
                 }
             })
+            // no output yet [firstContentMs] after the start (queueing, a slow connection, ...): give up; the end of
+            // the call (also a failure) or cancel() ends this wait at once. Decided by when the text arrived, not by
+            // when this thread happens to wake up.
+            if (firstContentMs != null && firstContentMs < deadlineMs) {
+                started.await(maxOf(0, t0 + firstContentMs - monoMs()), TimeUnit.MILLISECONDS)
+                if (!cancelled) {
+                    val f = first.get()
+                    // finished without text (an HTTP error, a failure, an empty answer): reported as what it is
+                    val late = if (f >= 0) f > firstContentMs else done.count > 0
+                    if (late) { call.cancel(); return HttpResult(0, null, monoMs() - t0, "no content in ${firstContentMs}ms", firstOrNull()) }
+                }
+            }
             // the deadline is absolute from the start of post(); cancel() wakes this at once
             done.await(maxOf(0, t0 + deadlineMs - monoMs()), TimeUnit.MILLISECONDS)
             return when {
-                cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled")
-                else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms") }
+                cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled", firstOrNull())
+                else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms", firstOrNull()) }
             }
         } catch (e: InterruptedException) {
             call.cancel(); Thread.currentThread().interrupt()
-            return HttpResult(0, null, monoMs() - t0, "cancelled")
+            return HttpResult(0, null, monoMs() - t0, "cancelled", firstOrNull())
         } finally {
             inFlight.remove(call)
             if (!admitted) call.cancel()
@@ -236,9 +271,33 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         else -> e.javaClass.name
     }
 
+    /**
+     * Reads a streamed body line by line up to [isEnd], never holding more than [MAX_STREAM] bytes (also for one
+     * endless line), and records when the first line [isContent] accepts arrived.
+     */
+    private fun readStream(src: okio.BufferedSource, t0: Long, first: java.util.concurrent.atomic.AtomicLong,
+                           started: CountDownLatch, isContent: (String) -> Boolean, isEnd: (String) -> Boolean): HttpResult {
+        val out = StringBuilder(); var used = 0L
+        while (true) {
+            val nl = src.indexOf('\n'.code.toByte(), 0, MAX_STREAM - used + 1)
+            if (nl < 0) {
+                // no line end within the budget: the rest is over the cap, or the body ended without a newline
+                if (src.request(MAX_STREAM - used + 1)) return HttpResult(200, null, monoMs() - t0, "response over $MAX_STREAM bytes", first.get().takeIf { it >= 0 })
+                break // ended: a last unterminated line is not an event (and [DONE] never came after it)
+            }
+            val line = src.readUtf8(nl).removeSuffix("\r"); src.skip(1); used += nl + 1
+            out.append(line).append('\n')
+            if (first.get() < 0 && isContent(line)) { first.set(monoMs() - t0); started.countDown() }
+            if (isEnd(line)) break
+        }
+        return HttpResult(200, out.toString(), monoMs() - t0, null, first.get().takeIf { it >= 0 })
+    }
+
     companion object {
         private val JSON = "application/json".toMediaType()
         private const val MAX_RESPONSE = 64 * 1024
+        /** a streamed answer repeats ~200 bytes of JSON per token: 160 tokens are ~40 KB */
+        private const val MAX_STREAM = 256 * 1024
         /** Jev asks from two threads and MT from one, so a few requests per session; more means stuck work */
         const val MAX_PENDING = 8
         private val PENDING = java.util.concurrent.Semaphore(MAX_PENDING)

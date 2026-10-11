@@ -3,6 +3,7 @@ package io.github.korenkrita.simulsub
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -23,6 +24,8 @@ class JevTest {
     @Volatile private var delayMs = 0L
     @Volatile private var trickleMs = 0L
     @Volatile private var redirectTo: String? = null
+    /** streamed reply: (text, pause before it) pieces written one by one after the headers, no Content-Length */
+    @Volatile private var pieces: List<Pair<String, Long>>? = null
 
     init {
         Thread {
@@ -43,6 +46,11 @@ class JevTest {
                         val out = sock.getOutputStream()
                         val r = redirectTo
                         if (r != null) { out.write("HTTP/1.1 307 Temporary Redirect\r\nLocation: $r\r\nContent-Length: 0\r\n\r\n".toByteArray()); return@use }
+                        pieces?.let { ps ->
+                            out.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".toByteArray()); out.flush()
+                            for ((p, pause) in ps) { Thread.sleep(pause); out.write(p.toByteArray()); out.flush() }
+                            return@use
+                        }
                         val (code, text) = reply(hits.get())
                         val b = text.toByteArray()
                         out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray())
@@ -62,16 +70,21 @@ class JevTest {
         Jev(JevProvider.OFFICIAL, "sk-secret", deadline, url = "http://127.0.0.1:$port/v1/systemone")
 
     private fun online(deadline: Long = 2_000) = OnlineTranslator(OnlineModel.B9, deadline, url = "http://127.0.0.1:$port/v1/chat/completions")
+    private fun sse(vararg chunks: String) = chunks.joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
 
     @Test
     fun onlineTranslationSendsTheOfficialRequestAndKeepsTheRawResponse() {
-        // shape recorded from index-translate.bilibili.com on 2026-10-10
-        reply = { 200 to """{"model":"Index-Translate-9B","choices":[{"index":0,"message":{"role":"assistant","content":"真的吗？"},"finish_reason":"stop"}],"usage":{"prompt_tokens":34,"completion_tokens":4}}""" }
+        // stream shape recorded from index-translate.bilibili.com on 2026-10-11
+        reply = { 200 to sse("""{"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}]}""",
+            """{"choices":[{"finish_reason":null,"index":0,"delta":{"content":"真的"}}]}""",
+            """{"choices":[{"finish_reason":null,"index":0,"delta":{"content":"吗？"}}]}""",
+            """{"choices":[{"finish_reason":"stop","index":0,"delta":{}}]}""",
+            """{"choices":[],"usage":{"prompt_tokens":34,"completion_tokens":4}}""") }
         val r = online().translate("请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n本当に？")!!
         assertEquals("真的吗？", r.text); assertTrue(r.usable); assertEquals(200, r.http); assertNull(r.error)
-        assertEquals(34, r.promptTokens); assertEquals(4, r.outputTokens); assertNull(r.prefillMs)
+        assertEquals(34, r.promptTokens); assertEquals(4, r.outputTokens); assertNotNull(r.firstContentMs); assertNull(r.prefillMs)
         val req = Json.parse(lastBody.get()!!) as Map<*, *>
-        assertEquals("Index-Translate-9B", req["model"])
+        assertEquals("Index-Translate-9B", req["model"]); assertEquals(true, req["stream"])
         assertEquals(mapOf("enable_thinking" to false), req["chat_template_kwargs"])
         assertEquals("本当に？", ((req["messages"] as List<*>).single() as Map<*, *>)["content"].toString().substringAfter("\n\n"))
         assertEquals(r.request, lastBody.get()); assertTrue(r.response!!.contains("finish_reason"))
@@ -82,12 +95,54 @@ class JevTest {
         reply = { 503 to "busy" }
         val a = online().translate("x")!!
         assertFalse(a.usable); assertEquals(503, a.http); assertEquals("HTTP 503", a.error); assertEquals("busy", a.response)
-        reply = { 200 to """{"choices":[{"message":{"content":"很长"},"finish_reason":"length"}]}""" }
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"很长"},"finish_reason":"length"}]}""") }
         val b = online().translate("x")!!
         assertEquals('l', b.stop); assertTrue(b.usable); assertNull(b.promptTokens)
         delayMs = 3_000
         val c = online(deadline = 300).translate("x")!!
         assertFalse(c.usable); assertTrue(c.error!!, c.error!!.startsWith("deadline"))
+    }
+
+    private fun streamed(firstContentMs: Long, deadline: Long = 8_000) =
+        OnlineTranslator(OnlineModel.B9, deadline, url = "http://127.0.0.1:$port/v1/chat/completions", firstContentMs = firstContentMs)
+
+    @Test
+    fun noTranslatedTextWithinTheFirstContentWaitFailsTheCaption() {
+        // a queueing server: nothing at all
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"晚"},"finish_reason":"stop"}]}""") }
+        delayMs = 3_000
+        val t0 = monoMs(); val r = streamed(300).translate("x")!!
+        assertFalse(r.usable); assertEquals("no content in 300ms", r.error); assertTrue(monoMs() - t0 < 2_000)
+        // headers, a role-only chunk and a keep-alive at once, the text only later: still no content in time
+        delayMs = 0
+        pieces = listOf("data: " + """{"choices":[{"delta":{"role":"assistant","content":null}}]}""" + "\n\n" to 0L,
+            ": keep-alive\n\n" to 50L,
+            "data: " + """{"choices":[{"delta":{"content":"晚上好"},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 1_000L)
+        val late = streamed(300).translate("x")!!
+        assertFalse(late.usable); assertEquals("no content in 300ms", late.error)
+    }
+
+    @Test
+    fun onceTextFlowsTheRestIsWaitedForUpToTheDeadline() {
+        val chunk = { s: String -> "data: " + """{"choices":[{"delta":{"content":"$s"}}]}""" + "\n\n" }
+        pieces = listOf(chunk("晚") to 50L, chunk("上") to 600L, chunk("好") to 600L,
+            "data: " + """{"choices":[{"delta":{},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 0L)
+        val r = streamed(300).translate("x")!!
+        assertTrue(r.error, r.usable); assertEquals("晚上好", r.text); assertTrue(r.firstContentMs!! < 300)
+        // but the whole call still ends at the deadline, counted from sending
+        pieces = listOf(chunk("晚") to 50L, chunk("上") to 2_000L)
+        val slow = streamed(300, deadline = 1_000).translate("x")!!
+        assertFalse(slow.usable); assertTrue(slow.error!!, slow.error!!.startsWith("deadline")); assertNotNull(slow.firstContentMs)
+    }
+
+    @Test
+    fun stoppingDuringTheFirstContentWaitReturnsAtOnce() {
+        delayMs = 3_000
+        val u = streamed(2_000)
+        val got = AtomicReference<MtResult?>()
+        val th = Thread { got.set(u.translate("x")) }.apply { start() }
+        Thread.sleep(300); val c0 = monoMs(); u.cancel(); th.join(1_000)
+        assertEquals("cancelled", got.get()!!.error); assertTrue(monoMs() - c0 < 100)
     }
 
     @Test
@@ -171,11 +226,30 @@ class JevTest {
 
     @Test
     fun anUnknownFinishReasonIsNotAUsableTranslation() {
-        reply = { 200 to """{"choices":[{"message":{"content":"半分"},"finish_reason":"content_filter"}]}""" }
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"半分"},"finish_reason":"content_filter"}]}""") }
         val a = online().translate("x")!!
         assertFalse(a.usable); assertEquals("finish_reason", a.error); assertTrue(a.response!!.contains("content_filter"))
-        reply = { 200 to """{"choices":[{"message":{"content":"半分"}}]}""" }
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"半分"}}]}""") }
         assertFalse(online().translate("x")!!.usable)
+        reply = { 200 to """{"choices":[{"message":{"content":"不是流"},"finish_reason":"stop"}]}""" }
+        assertEquals("bad response", online().translate("x")!!.error)
+        // a broken chunk in the middle could have held part of the text
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"我"}}]}""", """{"choices":[{"delta":{"content":"不"}}]""",
+            """{"choices":[{"delta":{"content":"同意"},"finish_reason":"stop"}]}""") }
+        assertEquals("bad response", online().translate("x")!!.error)
+        // an error event between good chunks, a stream cut off before [DONE], a wrongly typed content
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"我"}}]}""", """{"error":{"message":"overloaded"}}""",
+            """{"choices":[{"delta":{"content":"同意"},"finish_reason":"stop"}]}""") }
+        assertEquals("bad response", online().translate("x")!!.error)
+        reply = { 200 to "data: " + """{"choices":[{"delta":{"content":"我"},"finish_reason":"stop"}]}""" + "\n\n" }
+        assertEquals("bad response", online().translate("x")!!.error)
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":5},"finish_reason":"stop"}]}""") }
+        assertEquals("bad response", online().translate("x")!!.error)
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"我"}}]}""", """{"choices":[null]}""",
+            """{"choices":[{"delta":{"content":"同意"},"finish_reason":"stop"}]}""") }
+        assertEquals("bad response", online().translate("x")!!.error)
+        reply = { 200 to "event: error\n" + sse("""{"choices":[]}""", """{"choices":[{"delta":{"content":"好"},"finish_reason":"stop"}]}""") }
+        assertEquals("bad response", online().translate("x")!!.error)
     }
 
     @Test

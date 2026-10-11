@@ -84,6 +84,8 @@ fun mtMaxTokens(target: Lang) = if (target == Lang.ZH) 160 else 256
 class MtResult(
     val raw: String, val stop: Char, val promptTokens: Int?, val outputTokens: Int?,
     val prefillMs: Long? = null, val decodeMs: Long? = null,
+    /** online, streamed: ms from sending until the first translated text arrived */
+    val firstContentMs: Long? = null,
     val request: String? = null, val response: String? = null, val http: Int? = null, val error: String? = null,
 ) {
     val text: String get() = stripThink(raw)
@@ -110,14 +112,19 @@ enum class OnlineModel(val id: String, val label: String) {
 
 /**
  * bilibili's free public Index-Translate API (inference/llm/call_api.py): no key, the client's User-Agent, thinking off.
- * No retry and no fallback: a failure is a failed caption, visible as such. [cancel] is terminal (stop).
+ * Streamed, as the Index developers advise: their gateway answers 504 to a request that waits over 20 s for a free
+ * slot, a streamed one is answered early. No translated text within [firstContentMs] (queueing, a slow network, ...)
+ * fails this caption; once text flows, the whole call still ends [deadlineMs] after sending. The caption shows the
+ * whole sentence at once. No retry and no fallback: a failure is a failed caption, visible as such.
+ * [cancel] is terminal (stop).
  */
 class OnlineTranslator(
     private val model: OnlineModel,
-    deadlineMs: Long = 8_000,
+    private val deadlineMs: Long = 8_000,
     private val maxTokens: Int = mtMaxTokens(Lang.ZH),
     /** tests point this at a local server */
     private val url: String = URL,
+    private val firstContentMs: Long = 1_000,
 ) : Mt {
     private val calls = Calls(deadlineMs)
 
@@ -125,33 +132,73 @@ class OnlineTranslator(
         val body = Json.encode(mapOf(
             "model" to model.id,
             "messages" to listOf(mapOf("role" to "user", "content" to prompt)),
-            "temperature" to 0, "max_tokens" to maxTokens,
+            "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
+            "stream_options" to mapOf("include_usage" to true),
             "chat_template_kwargs" to mapOf("enable_thinking" to false),
         ))
-        val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"))
+        val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"),
+            firstContentMs = firstContentMs, isContent = ::hasText, isEnd = { it.trim() == "data: [DONE]" })
         // a stopped call is still logged with what was sent; the pipeline checks running before showing anything
-        if (r.error == "cancelled") return MtResult("", 'f', null, null, request = body, http = r.status, error = "cancelled")
-        val j = r.body?.let { runCatching { Json.parse(it) as? Map<*, *> }.getOrNull() }
-        val choice = (j?.get("choices") as? List<*>)?.firstOrNull() as? Map<*, *>
-        val content = (choice?.get("message") as? Map<*, *>)?.get("content") as? String
-        val usage = j?.get("usage") as? Map<*, *>
+        if (r.error == "cancelled") return MtResult("", 'f', null, null, firstContentMs = r.firstContentMs, request = body, http = r.status, error = "cancelled")
+        val s = if (r.status == 200) r.body?.let { parseStream(it) } else null
         val stop = when {
-            r.status != 200 || content == null -> 'f'
-            choice["finish_reason"] == "stop" -> 'e'
-            choice["finish_reason"] == "length" -> 'l'
+            r.status != 200 || s == null -> 'f'
+            s.finish == "stop" -> 'e'
+            s.finish == "length" -> 'l'
             else -> 'f' // missing or unknown: not a translation we can trust; the raw response is kept
         }
         val error = r.error ?: when {
-            r.status != 200 -> "HTTP ${r.status}"; content == null -> "bad response"; stop == 'f' -> "finish_reason"; else -> null
+            r.status != 200 -> "HTTP ${r.status}"; s == null -> "bad response"; stop == 'f' -> "finish_reason"; else -> null
         }
-        return MtResult(content ?: "", stop, (usage?.get("prompt_tokens") as? Number)?.toInt(),
-            (usage?.get("completion_tokens") as? Number)?.toInt(), request = body, response = r.body, http = r.status, error = error)
+        return MtResult(s?.content ?: "", stop, s?.promptTokens, s?.outputTokens, firstContentMs = r.firstContentMs,
+            request = body, response = r.body, http = r.status, error = error)
     }
 
     override fun cancel() = calls.cancel()
 
+    class Streamed(val content: String, val finish: String?, val promptTokens: Int?, val outputTokens: Int?)
+
     companion object {
         const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
+
+        /** One SSE line carrying translated text (not a role-only, empty, usage or keep-alive event). */
+        fun hasText(line: String): Boolean {
+            val data = line.takeIf { it.startsWith("data:") }?.removePrefix("data:")?.trim() ?: return false
+            val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return false
+            val choice = (j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>
+            return ((choice?.get("delta") as? Map<*, *>)?.get("content") as? String).orEmpty().isNotEmpty()
+        }
+
+        /**
+         * OpenAI-style server-sent events: "data: {chunk}" lines up to "data: [DONE]"; other lines (comments, event
+         * names, blank) are skipped. Null (not trusted) when the stream does not end with [DONE], a chunk is not a
+         * JSON object, reports an error, or its choices / delta / content have the wrong type: part of the text may
+         * be missing. Role-only and usage-only chunks are fine.
+         */
+        fun parseStream(body: String): Streamed? {
+            val text = StringBuilder(); var finish: String? = null; var done = false
+            var promptTokens: Int? = null; var outputTokens: Int? = null
+            for (line in body.lineSequence()) {
+                if (line.startsWith("event:") && line.removePrefix("event:").trim() == "error") return null
+                if (!line.startsWith("data:")) continue
+                val data = line.removePrefix("data:").trim()
+                if (data == "[DONE]") { done = true; break }
+                val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return null
+                if (j["error"] != null) return null
+                val choices = j["choices"] as? List<*> ?: return null
+                if (choices.isNotEmpty()) {
+                    val choice = choices[0] as? Map<*, *> ?: return null
+                    val delta = choice["delta"]
+                    if (delta != null && delta !is Map<*, *>) return null
+                    when (val c = (delta as? Map<*, *>)?.get("content")) { null -> {}; is String -> text.append(c); else -> return null }
+                    when (val f = choice["finish_reason"]) { null -> {}; is String -> finish = f; else -> return null }
+                }
+                (j["usage"] as? Map<*, *>)?.let { u ->
+                    promptTokens = (u["prompt_tokens"] as? Number)?.toInt(); outputTokens = (u["completion_tokens"] as? Number)?.toInt()
+                }
+            }
+            return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens)
+        }
     }
 }
 

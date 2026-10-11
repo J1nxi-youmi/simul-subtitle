@@ -346,7 +346,8 @@ class Pipeline(
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
             "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
-            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs, "ms" to clock() - t0,
+            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs,
+            "first_content_ms" to r?.firstContentMs, "ms" to clock() - t0,
             // reused: everything but ms is that of the earlier call (rev reused_from)
             "reused" to (hit != null), "reused_from" to hit?.rev))
         if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r)

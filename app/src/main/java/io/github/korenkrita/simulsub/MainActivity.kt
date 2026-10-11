@@ -92,17 +92,91 @@ class MainActivity : Activity() {
         setupStyle()
         renderTranslate()
         findViewById<LinearLayout>(R.id.themeBox).apply {
-            addView(label("首页的白天 / 夜间外观（不影响悬浮字幕，配色在「字幕样式」里选）", top = 0))
+            addView(label("这个页面用白天还是夜间颜色（不影响悬浮字幕，字幕颜色在上面选）", top = 0))
             // recreate re-reads resources with the new mode; the overlay lives in the service and is untouched
             addView(choice(listOf("system" to "跟随系统", "light" to "白天", "dark" to "夜间"), prefs.theme) {
                 if (prefs.theme != it) { prefs.theme = it; recreate() }
             })
         }
+        findViewById<View>(R.id.openSettings).setOnClickListener { showSettings(true) }
+        findViewById<View>(R.id.closeSettings).setOnClickListener { showSettings(false) }
+        findViewById<TextView>(R.id.aboutVersion).text = "${getString(R.string.app_name)}  版本 ${BuildConfig.VERSION_NAME}"
+        findViewById<View>(R.id.openRepo).setOnClickListener {
+            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
+            catch (_: android.content.ActivityNotFoundException) { }
+        }
+        // a theme switch recreates the activity from the settings page: stay there
+        showSettings(savedInstanceState?.getBoolean("settings") == true)
+    }
+
+    private var inSettings = false
+
+    private fun showSettings(on: Boolean) {
+        inSettings = on
+        findViewById<View>(R.id.homePage).visibility = if (on) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.settingsPage).visibility = if (on) View.VISIBLE else View.GONE
+        findViewById<android.widget.ScrollView>(R.id.scroll).scrollTo(0, 0)
+        if (on) {
+            loadStyle() // the preview needs the stage's real width, known once the page is laid out
+            findViewById<View>(R.id.previewStage).post { loadStyle() }
+        } else renderLang()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("settings", inSettings)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (inSettings) showSettings(false) else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    /** The home page's two questions: what is spoken, what the captions should be in. Next start, like the settings. */
+    private fun renderLang() {
+        val box = findViewById<LinearLayout>(R.id.langBox)
+        box.removeAllViews()
+        val running = CaptionService.running
+        val dp = resources.displayMetrics.density
+        fun big(t: String, top: Int) = TextView(this).apply {
+            text = t; textSize = 18f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, (top * dp).toInt(), 0, (8 * dp).toInt())
+        }
+        fun spinner(items: List<String>, sel: Int, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
+            adapter = object : android.widget.ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items) {
+                override fun getView(p: Int, c: View?, g: android.view.ViewGroup) =
+                    (super.getView(p, c, g) as TextView).apply { textSize = 20f; minHeight = (52 * dp).toInt() }
+                override fun getDropDownView(p: Int, c: View?, g: android.view.ViewGroup) =
+                    (super.getDropDownView(p, c, g) as TextView).apply { textSize = 19f; minHeight = (52 * dp).toInt() }
+            }
+            setSelection(sel, false)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = onPick(pos)
+                override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+            }
+            isEnabled = !running
+        }
+        box.addView(big("视频里说的是", 0))
+        val sources = Lang.SOURCES
+        box.addView(spinner(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0)) {
+            if (prefs.sourceLang != sources[it]) { prefs.sourceLang = sources[it]; renderTranslate() }
+        })
+        box.addView(big("字幕翻译成", 18))
+        val targets = Lang.entries
+        box.addView(spinner(targets.map { it.zh }, prefs.targetLang.ordinal) {
+            if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate() }
+        })
+        box.addView(TextView(this).apply {
+            text = if (running) "字幕运行中，停止后才能改语言。" else "知道是哪种语言就选上，翻译会更准。"
+            textSize = 14f; setTextColor(getColor(R.color.text2))
+            setPadding(0, (10 * dp).toInt(), 0, 0)
+        })
     }
 
     override fun onResume() {
         super.onResume()
         loadStyle() // the overlay toolbar may have changed size / opacity / mode meanwhile (no listener while paused)
+        renderLang()
         syncMode()
         prefs.listen(styleListener)
         renderPermissions()
@@ -122,7 +196,7 @@ class MainActivity : Activity() {
         override fun run() {
             render()
             // the translation switches are disabled while a session runs
-            if (CaptionService.running != translateRunning) renderTranslate()
+            if (CaptionService.running != translateRunning) { renderTranslate(); renderLang() }
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
             val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.activeFiles()
             if (now != listedLogs) renderLogs()
@@ -143,15 +217,15 @@ class MainActivity : Activity() {
         secondary.visibility = View.GONE
         primary.isEnabled = true
         if (CaptionService.running) {
-            status(R.color.ok, "字幕运行中", "回到要翻译的 App 即可。点一下字幕可调整字号、透明度或停止。")
+            status(R.color.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止。")
             primary.text = "停止字幕"; primary.setIconResource(R.drawable.ic_stop)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err))
             primary.setOnClickListener { CaptionService.stop(this); main.postDelayed({ render() }, 300) }
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
-            val hint = if (missingPerm) "开始前需要授予下方的权限，点开始会依次引导。" else "点开始，然后在系统弹窗里选择要翻译的 App。"
-            if (startRefused) status(R.color.err, "Android 暂时不允许启动字幕", "请再点一次开始重试；如果仍然失败，请反馈出现这个提示前的操作步骤。")
-            else status(R.color.brand, "准备就绪", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
+            val hint = if (missingPerm) "点下面的按钮，按提示允许下方两项，就能开始。" else "点下面的按钮，再在弹出的窗口里选你要看的 App。"
+            if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
+            else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
             primary.setOnClickListener { start() }
@@ -186,10 +260,10 @@ class MainActivity : Activity() {
             }
             else -> {
                 val left = store.totalBytes() - store.installedBytes()
-                if (prefs.mtOnline) status(R.color.warn, "需要下载识别模型",
-                    "一次性下载约 ${gb(left)}，语音识别在手机本地运行，翻译用在线接口。\n来源：huggingface.co、github.com。")
-                else status(R.color.warn, "需要下载识别和翻译模型",
-                    "一次性下载约 ${gb(left)}，之后翻译也在手机本地运行（Jev 仍需联网）。\n来源：huggingface.co、github.com（建议连 Wi‑Fi）。")
+                if (prefs.mtOnline) status(R.color.warn, "第一次用，先下载一下",
+                    "要下载约 ${gb(left)} 的识别文件，只需要下载一次。听声音在手机上完成，翻译用网络。\n文件来自 huggingface.co、github.com。")
+                else status(R.color.warn, "第一次用，先下载一下",
+                    "要下载约 ${gb(left)} 的识别和翻译文件，只需要下载一次，之后翻译也在手机上完成（Jev 仍需联网）。建议连 Wi‑Fi。\n文件来自 huggingface.co、github.com。")
                 primary.text = "下载模型"; primary.isEnabled = true
                 primary.setOnClickListener { dl.start(); render() }
                 secondary.visibility = View.GONE
@@ -216,14 +290,17 @@ class MainActivity : Activity() {
 
     private fun renderPermissions() {
         permList.removeAllViews()
-        permRow("捕获 App 声音", "只录制被共享 App 的播放声音，不使用麦克风", hasAudio()) {
+        // the home page shows this card only while something required is missing; after that it is just noise
+        findViewById<View>(R.id.permCard).visibility =
+            if (hasAudio() && Settings.canDrawOverlays(this)) View.GONE else View.VISIBLE
+        permRow("① 听 App 的声音", "只听你选的那个 App 播放的声音，不用麦克风", hasAudio()) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_PERM_ONLY)
         }
-        permRow("悬浮窗", "在其他 App 上方显示字幕", Settings.canDrawOverlays(this)) {
+        permRow("② 在屏幕上显示字幕", "让字幕浮在其他 App 上面", Settings.canDrawOverlays(this)) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         if (Build.VERSION.SDK_INT >= 33) {
-            permRow("通知（可选）", "显示运行状态和下载进度", checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            permRow("通知（可以不开）", "显示运行状态和下载进度", checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM_ONLY)
             }
         }
@@ -237,14 +314,14 @@ class MainActivity : Activity() {
             setPadding((20 * dp).toInt(), (12 * dp).toInt(), (14 * dp).toInt(), (12 * dp).toInt())
         }
         val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
-        texts.addView(TextView(this).apply { text = sub; textSize = 12.5f; setTextColor(getColor(R.color.text2)) })
+        texts.addView(TextView(this).apply { text = title; textSize = 18f; setTextColor(getColor(R.color.text)) })
+        texts.addView(TextView(this).apply { text = sub; textSize = 14f; setTextColor(getColor(R.color.text2)) })
         row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         if (granted) {
-            row.addView(TextView(this).apply { text = "已开启"; textSize = 13f; setTextColor(getColor(R.color.ok)) })
+            row.addView(TextView(this).apply { text = "✓ 已允许"; textSize = 16f; setTextColor(getColor(R.color.ok)) })
         } else {
-            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "去开启"; setOnClickListener { grant() }
+            row.addView(MaterialButton(this).apply {
+                text = "去允许"; textSize = 16f; minHeight = (52 * dp).toInt(); setOnClickListener { grant() }
             })
         }
         permList.addView(row)
@@ -252,9 +329,50 @@ class MainActivity : Activity() {
 
     // ---- translation / Jev ---------------------------------------------------------------------------------
 
+    private val dpx get() = resources.displayMetrics.density
+
+    /** Small grey caption above a control. */
     private fun label(t: String, top: Int = 14) = TextView(this).apply {
-        text = t; textSize = 13f; setTextColor(getColor(R.color.text2))
-        setPadding(0, (top * resources.displayMetrics.density).toInt(), 0, (6 * resources.displayMetrics.density).toInt())
+        text = t; textSize = 15f; setTextColor(getColor(R.color.text2))
+        setPadding(0, (top * dpx).toInt(), 0, (8 * dpx).toInt())
+    }
+
+    /** Heading of a group inside a settings card. */
+    private fun heading(t: String, top: Int = 26) = TextView(this).apply {
+        text = t; textSize = 18f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
+        setPadding(0, (top * dpx).toInt(), 0, (4 * dpx).toInt())
+    }
+
+    /** One or two lines saying what an option does. */
+    private fun hint(t: String) = TextView(this).apply {
+        text = t; textSize = 14f; setTextColor(getColor(R.color.text2)); setLineSpacing(3 * dpx, 1f)
+        setPadding(0, (6 * dpx).toInt(), 0, 0)
+    }
+
+    /** A switch with its title, and the description under it. */
+    private fun switchRow(box: LinearLayout, title: String, desc: String, on: Boolean, onChange: (Boolean) -> Unit): MaterialSwitch {
+        val s = MaterialSwitch(this).apply {
+            text = title; textSize = 17f; setTextColor(getColor(R.color.text)); isChecked = on
+            minHeight = (52 * dpx).toInt()
+            setOnCheckedChangeListener { _, v -> onChange(v) }
+        }
+        box.addView(s, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (14 * dpx).toInt()
+        })
+        box.addView(hint(desc).apply { setPadding(0, 0, (56 * dpx).toInt(), 0) })
+        return s
+    }
+
+    /** A full-width dropdown. */
+    private fun dropdown(items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
+        adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
+        setSelection(sel, false)
+        onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = onPick(pos)
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+        isEnabled = enabled
+        minimumHeight = (52 * dpx).toInt()
     }
 
     /** Single-choice row of segmented buttons. */
@@ -263,7 +381,8 @@ class MainActivity : Activity() {
             isSingleSelection = true; isSelectionRequired = true
             options.forEach { (v, t) ->
                 val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                    id = View.generateViewId(); text = t; tag = v
+                    id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
+                    maxLines = 2
                 }
                 addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 if (v == current) check(b.id)
@@ -277,84 +396,39 @@ class MainActivity : Activity() {
     private fun renderTranslate() {
         val box = findViewById<LinearLayout>(R.id.translateList)
         box.removeAllViews()
-        box.addView(label("翻译（下次开始时生效）", top = 0))
         val running = CaptionService.running
         translateRunning = running
-        val engine = choice(listOf(true to "在线 Index", false to "本地 2B"), prefs.mtOnline) {
+        if (running) box.addView(TextView(this).apply {
+            text = "字幕正在运行：下面的改动从下次开始字幕时生效（显示方式除外，马上生效）。"
+            textSize = 15f; setTextColor(getColor(R.color.warn)); setPadding(0, 0, 0, (6 * dpx).toInt())
+        })
+
+        // -- how it translates
+        box.addView(heading("怎么翻译", top = 0))
+        box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
+        val engine = choice(listOf(true to "在线翻译", false to "手机上翻译"), prefs.mtOnline) {
             if (prefs.mtOnline != it) { prefs.mtOnline = it; renderTranslate(); render() } // local needs its model file
         }
-        box.addView(label("说话语言 → 字幕语言"))
-        val sources = choice(Lang.SOURCES.map { it to (it?.zh ?: "自动（日/英）") }, prefs.sourceLang) { prefs.sourceLang = it }
-        if (running) for (i in 0 until sources.childCount) sources.getChildAt(i).isEnabled = false
-        box.addView(sources)
-        val targets = Lang.entries
-        box.addView(android.widget.Spinner(this).apply {
-            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                targets.map { "译成 ${it.zh}" })
-            setSelection(prefs.targetLang.ordinal, false)
-            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    if (prefs.targetLang.ordinal != pos) prefs.targetLang = targets[pos]
-                }
-                override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-            }
-            isEnabled = !running
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (6 * resources.displayMetrics.density).toInt()
-        })
-        box.addView(TextView(this).apply {
-            text = "语音识别模型只认日语和英语，选哪个都不改变识别本身，只告诉翻译（和 Jev）原文是什么语言；「自动」让翻译模型自己判断。场景里的术语对照只在译成中文时使用。"
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-            setPadding(0, (6 * resources.displayMetrics.density).toInt(), 0, 0)
-        })
-        box.addView(label("翻译引擎"))
-        box.addView(engine)
-        if (prefs.mtOnline) {
-            val models = android.widget.Spinner(this).apply {
-                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                    OnlineModel.entries.map { it.label })
-                setSelection(prefs.onlineModel.ordinal, false)
-                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                        if (prefs.onlineModel.ordinal != pos) prefs.onlineModel = OnlineModel.entries[pos]
-                    }
-                    override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-                }
-                isEnabled = !running
-            }
-            box.addView(models, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (6 * resources.displayMetrics.density).toInt()
-            })
-        }
-        box.addView(TextView(this).apply {
-            text = (if (prefs.mtOnline)
-                "B站免费公网接口：识别出的原文和场景说明会发到 index-translate.bilibili.com（声音不上传），需联网，断网或接口出错时这句显示「翻译失败」，不会自动换本地。推荐 35B；9B/2B 是备选。"
-            else "在手机上翻译，需要先下载约 1.3 GB 模型；比在线慢很多，长句可能积压。") +
-                if (running) "\n运行中不能切换，停止后再改。" else ""
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-            setPadding(0, (6 * resources.displayMetrics.density).toInt(), 0, 0)
-        })
         if (running) for (i in 0 until engine.childCount) engine.getChildAt(i).isEnabled = false
-        box.addView(label("场景（下次开始时生效）"))
-        box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
-        box.addView(label("显示方式（运行中也可在悬浮窗工具栏切换）"))
-        modeGroup = choice(listOf(false to "边出边改", true to "只看定稿"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
-        box.addView(modeGroup)
+        box.addView(engine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (12 * dpx).toInt()
+        })
+        if (prefs.mtOnline) {
+            box.addView(label("翻译模型"))
+            box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, !running) {
+                if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            box.addView(hint("用 B 站提供的免费 Index 翻译服务，速度快、译得好，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。模型越大译得越好，越小越快。"))
+        } else {
+            box.addView(hint("翻译也在手机上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。"))
+        }
 
-        box.addView(MaterialSwitch(this).apply {
-            text = "去掉识别拼接处的重复词（实验）"; textSize = 15f; setTextColor(getColor(R.color.text))
-            isChecked = prefs.dedupeJoin
-            setOnCheckedChangeListener { _, on -> prefs.dedupeJoin = on }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (10 * resources.displayMetrics.density).toInt()
-        })
-        box.addView(TextView(this).apply {
-            text = "长句被识别吞掉前半句时，App 会把前半句补回来再接上后半句，接口处有时会出现同一段话连着两遍（如「お疲れさまでしたお疲れさまでした」，可能是重复识别，也可能主播真说了两遍）。开启后：接口两边重复至少 3 个字、且整句重新识别里没有显示这段内容重复时，去掉一遍。在一小时直播记录里这个规则会命中 5 处，是否都是重复识别没有核实。风险：主播真的连说两遍时可能被去掉一遍。默认关闭，下次开始时生效。"
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-        })
+        box.addView(label("内容类型"))
+        box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
+        box.addView(hint("选「VTuber 直播」时，翻译会按直播闲聊的口吻来译，并认得直播里的常用词。"))
 
         // translation context: on/off and how many finished sentences (applies to the next start)
-        val ctxCount = TextView(this).apply { textSize = 15f; setTextColor(getColor(R.color.text)) }
+        val ctxCount = label("")
         val ctxSlider = com.google.android.material.slider.Slider(this).apply {
             valueFrom = 1f; valueTo = Pipeline.MAX_PREVIOUS_SENTENCES.toFloat(); stepSize = 1f; isTickVisible = false
             value = prefs.contextSentences.toFloat()
@@ -364,39 +438,27 @@ class MainActivity : Activity() {
             ctxCount.visibility = if (prefs.contextOn) View.VISIBLE else View.GONE
             ctxSlider.visibility = ctxCount.visibility
         }
-        box.addView(MaterialSwitch(this).apply {
-            text = "翻译时参考前面说过的话"; textSize = 15f; setTextColor(getColor(R.color.text))
-            isChecked = prefs.contextOn
-            setOnCheckedChangeListener { _, on -> prefs.contextOn = on; showCtx() }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (10 * resources.displayMetrics.density).toInt()
-        })
+        switchRow(box, "结合上文来翻译", "翻译每句话时，把前面刚说过的几句一起交给翻译参考，人称、指代和省略的内容会译得更连贯。参考的句子越多，翻译越慢。",
+            prefs.contextOn) { prefs.contextOn = it; showCtx() }
         box.addView(ctxCount)
         box.addView(ctxSlider)
         ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
-        box.addView(TextView(this).apply {
-            text = "把刚说完的几句原文一起交给翻译，帮它理解「他、那个」指的是什么、省略了什么；这几句本身不会再翻译一遍。" +
-                "句数越多，每句翻译要读的字越多、会慢一点。默认开启、参考 2 句，下次开始时生效。"
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-        })
         showCtx()
 
-        val jev = MaterialSwitch(this).apply {
-            text = "用 Jev 判断断句（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
-            isChecked = prefs.jevOn
-        }
-        box.addView(jev, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (10 * resources.displayMetrics.density).toInt()
+        // -- how captions appear
+        box.addView(heading("字幕怎么出现"))
+        modeGroup = choice(listOf(false to "边听边出", true to "说完再出"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
+        box.addView(modeGroup, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (8 * dpx).toInt()
         })
-        val jevCheck = MaterialSwitch(this).apply {
-            text = "用 Jev 检查每句译文（云端，需联网）"; textSize = 15f; setTextColor(getColor(R.color.text))
-            isChecked = prefs.jevCheck
-        }
-        box.addView(jevCheck, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        box.addView(TextView(this).apply {
-            text = "默认关闭：在一小时直播记录里收益不明显（451 句只改了 5 句，且不确定改得更好），开启后每句定稿多等约 0.3 秒。和上面的断句判断互相独立。下次开始时生效。"
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-        })
+        box.addView(hint("「边听边出」：一边说一边显示，灰色的字还会修改，说完一句后变成正式字幕。「说完再出」：每句话说完才显示，画面更干净，但会晚一点。字幕上的工具栏也能随时切换。"))
+        switchRow(box, "去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
+            prefs.dedupeJoin) { prefs.dedupeJoin = it }
+
+        // -- Jev (optional cloud judge)
+        box.addView(heading("AI 辅助（可选，需要联网）"))
+        val jev = switchRow(box, "智能断句", "由 Jev 判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) {}
+        val jevCheck = switchRow(box, "检查译文", "由 Jev 检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
         val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(jevBox)
         fun renderJev() {
@@ -405,57 +467,43 @@ class MainActivity : Activity() {
             jevBox.visibility = if (used) View.VISIBLE else View.GONE
             if (!used) return
             val p = prefs.jevProvider
-            jevBox.addView(label("接口"))
+            jevBox.addView(label("Jev 服务"))
             // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names
-            jevBox.addView(android.widget.Spinner(this).apply {
-                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                    JevProvider.entries.map { "${it.label}（${it.note}）" })
-                setSelection(p.ordinal, false)
-                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(a: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                        if (prefs.jevProvider.ordinal != pos) { prefs.jevProvider = JevProvider.entries[pos]; main.post { renderJev() } }
-                    }
-                    override fun onNothingSelected(a: android.widget.AdapterView<*>?) {}
-                }
+            jevBox.addView(dropdown(JevProvider.entries.map { "${it.label}（${it.note}）" }, p.ordinal, true) {
+                if (prefs.jevProvider.ordinal != it) { prefs.jevProvider = JevProvider.entries[it]; main.post { renderJev() } }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             if (!p.needsKey) {
-                jevBox.addView(TextView(this).apply {
-                    text = "不用填 key。只把识别出的原文和译文发给 OpenCode Zen，不发送声音。这是非公开的免费接口，随时可能限速或停用；不可用时这句按没开 Jev 处理，可以在上面换成另外两个需要 key 的接口。"
-                    textSize = 12.5f; setTextColor(getColor(R.color.text2))
-                })
+                jevBox.addView(hint("不用填 key，打开就能用。这是免费的公共服务，可能随时限速或停用；服务不可用时，字幕照常显示，只是不做辅助。只发送识别出的文字和译文，不发送声音。"))
                 return
             }
             val saved = prefs.jevKey(p)
-            jevBox.addView(label(if (saved != null) "${p.label} API key：已保存（…${saved.takeLast(4)}）" else "${p.label} API key：未填写"))
+            jevBox.addView(label(if (saved != null) "${p.label} 的 key：已保存（…${saved.takeLast(4)}）" else "${p.label} 的 key：还没填"))
             val input = android.widget.EditText(this).apply {
-                hint = if (saved != null) "输入新 key 以替换" else "粘贴 API key"
+                hint = if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key"
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                isSingleLine = true; textSize = 14f; setTextColor(getColor(R.color.text))
+                isSingleLine = true; textSize = 16f; setTextColor(getColor(R.color.text))
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
             jevBox.addView(input)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-                text = "清除"; isEnabled = saved != null
+                text = "清除"; textSize = 16f; isEnabled = saved != null
                 setOnClickListener { prefs.setJevKey(p, null); renderJev() }
             })
             row.addView(MaterialButton(this).apply {
-                text = "保存"
+                text = "保存"; textSize = 16f
                 setOnClickListener {
                     val k = input.text.toString().trim()
                     when {
                         k.isEmpty() -> {}
                         // a key with spaces/newlines/non-ASCII would be rejected by HTTP (and echoed in its error)
-                        !Jev.validKey(k) -> Toast.makeText(this@MainActivity, "key 里有空格、换行或非 ASCII 字符，请重新复制", Toast.LENGTH_LONG).show()
+                        !Jev.validKey(k) -> Toast.makeText(this@MainActivity, "key 里有空格、换行或特殊字符，请重新复制", Toast.LENGTH_LONG).show()
                         else -> { prefs.setJevKey(p, k); input.setText(""); renderJev() }
                     }
                 }
             })
             jevBox.addView(row)
-            jevBox.addView(TextView(this).apply {
-                text = "只把识别出的原文和译文发给 ${p.label}，不发送声音。key 用 Android Keystore 加密保存在本机，不会写进使用记录。"
-                textSize = 12.5f; setTextColor(getColor(R.color.text2))
-            })
+            jevBox.addView(hint("只发送识别出的文字和译文，不发送声音。key 加密保存在这台手机上，不会写进使用记录。"))
         }
         jev.setOnCheckedChangeListener { _, on -> prefs.jevOn = on; renderJev() }
         jevCheck.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderJev() }
@@ -472,7 +520,7 @@ class MainActivity : Activity() {
         listedLogs = files.map { it.name } to active
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
-                text = "还没有记录。每次开始字幕都会生成一个文件。"; textSize = 13.5f; setTextColor(getColor(R.color.text2))
+                text = "还没有记录。每次开始字幕都会留下一份文字记录，出问题时可以分享出去帮助排查。"; textSize = 15f; setTextColor(getColor(R.color.text2))
                 setPadding(0, (8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt())
             })
             return
@@ -489,16 +537,16 @@ class MainActivity : Activity() {
             // session-20261010-151200[-1].jsonl[.part] → 2026-10-10 15:12:00
             val n = f.name.removePrefix("session-").substringBefore(".jsonl")
             val title = if (n.length >= 15) "${n.substring(0, 4)}-${n.substring(4, 6)}-${n.substring(6, 8)} ${n.substring(9, 11)}:${n.substring(11, 13)}:${n.substring(13, 15)}${n.substring(15)}" else f.name
-            texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
+            texts.addView(TextView(this).apply { text = title; textSize = 16f; setTextColor(getColor(R.color.text)) })
             val complete = SessionLog.complete(f)
             texts.addView(TextView(this).apply {
                 // .part: still running, or the session failed / was killed before the log was finished
                 text = "%.1f KB".format(f.length() / 1024.0) + when {
                     complete -> ""
-                    f in active -> " · 正在记录，结束后可分享"
-                    else -> " · 未完成（中断）"
+                    f in active -> " · 正在记录，结束后可以分享"
+                    else -> " · 没有正常结束"
                 }
-                textSize = 12.5f; setTextColor(getColor(R.color.text2))
+                textSize = 13.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
@@ -568,7 +616,7 @@ class MainActivity : Activity() {
         listedModels = files to busy
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
-                text = "还没有模型文件。"; textSize = 13.5f; setTextColor(getColor(R.color.text2))
+                text = "还没有下载文件。"; textSize = 15f; setTextColor(getColor(R.color.text2))
                 setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt())
             })
             return
@@ -579,14 +627,14 @@ class MainActivity : Activity() {
                 setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
             }
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            texts.addView(TextView(this).apply { text = f.path; textSize = 14.5f; setTextColor(getColor(R.color.text)) })
+            texts.addView(TextView(this).apply { text = f.path; textSize = 15f; setTextColor(getColor(R.color.text)) })
             texts.addView(TextView(this).apply {
                 text = sizeText(f.bytes) + " · " + when (f.kind) {
-                    ModelStore.Kind.CURRENT -> if (f.path.startsWith("mt/")) "本地翻译用，在线翻译不需要" else "在用，删了需重新下载"
-                    ModelStore.Kind.OLD -> "旧版本留下的，现在不用"
-                    ModelStore.Kind.PARTIAL -> "没下载完的残留"
+                    ModelStore.Kind.CURRENT -> if (f.path.startsWith("mt/")) "手机上翻译时用，在线翻译用不到" else "正在使用，删除后要重新下载"
+                    ModelStore.Kind.OLD -> "旧版本留下的，可以删除"
+                    ModelStore.Kind.PARTIAL -> "没下载完的文件，可以删除"
                 }
-                textSize = 12.5f
+                textSize = 13.5f
                 setTextColor(getColor(if (f.kind == ModelStore.Kind.CURRENT) R.color.text2 else R.color.warn))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -709,13 +757,13 @@ class MainActivity : Activity() {
             loading = false
         }
         fun apply() {
-            lSize.text = "字号  ${size.value.toInt()}"
-            lAlpha.text = "背景不透明度  ${alpha.value.toInt()}%"
+            lSize.text = "文字大小  ${size.value.toInt()}"
+            lAlpha.text = "背景深浅  ${alpha.value.toInt()}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
-            lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（随内容）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"
-            lKeepS.text = "至少保留  ${keepS.value.toInt()} 句"
-            lKeepC.text = "超过  ${keepC.value.toInt()} 字后移除旧句"
-            keepHint.text = "已说完的句子超过 ${keepS.value.toInt()} 句，并且总字数超过 ${keepC.value.toInt()} 字时，才移走最早的一句（正在说的那句不算）。窗口放不下时只显示最新的部分。"
+            lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（跟着内容变）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"
+            lKeepS.text = "屏幕上至少留  ${keepS.value.toInt()} 句"
+            lKeepC.text = "字数超过  ${keepC.value.toInt()} 字后，收起最早的句子"
+            keepHint.text = "屏幕上会留着刚说完的几句话，方便回看；句数和字数都超过上面的数字时，最早的一句才会收起。字幕框放不下时，只显示最新的内容。"
             preview.setColors(CaptionOverlayView.palette(prefs.palette))
             preview.applyStyle(size.value, alpha.value / 100f)
             // same caption height as the overlay will get (the stage grows with it)
@@ -771,7 +819,7 @@ class MainActivity : Activity() {
         renderPermissions()
         render()
         if (requestCode == REQ_START && hasAudio()) start()
-        else if (requestCode == REQ_START) status(R.color.err, "需要录音权限", "只用于捕获被共享 App 的声音，不会使用麦克风。")
+        else if (requestCode == REQ_START) status(R.color.err, "需要允许「听 App 的声音」", "只用来听你选的那个 App 播放的声音，不会用麦克风。请再点一次开始，并选择「允许」。")
     }
 
     @Deprecated("Deprecated in Java")
@@ -795,5 +843,7 @@ class MainActivity : Activity() {
         val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "heightFrac", "showJa", "showStats", "keepSentences", "keepChars", "palette")
         const val REQ_PERM_ONLY = 3  // "去开启" in the permission list: grant only, never start
         const val LOGS_BEFORE_SCROLL = 5
+        /** where the project lives (set by the author; the repository may not be public yet) */
+        const val REPO_URL = "https://github.com/KorenKrita/simul-subtitle"
     }
 }

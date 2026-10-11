@@ -15,6 +15,13 @@
         android:paddingTop="20dp"
         android:paddingBottom="32dp">
 
+        <!-- ===== home page: what it does, one big button, the two language choices ===== -->
+        <LinearLayout
+            android:id="@+id/homePage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
         <!-- header -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -40,15 +47,15 @@
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
                     android:textColor="@color/text"
-                    android:textSize="24sp"
+                    android:textSize="26sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="手机本地识别日语/英语 · 实时翻译字幕"
+                    android:text="把视频、直播里的日语和英语，实时变成字幕"
                     android:textColor="@color/text2"
-                    android:textSize="13sp" />
+                    android:textSize="15sp" />
             </LinearLayout>
         </LinearLayout>
 
@@ -74,8 +81,8 @@
 
                     <View
                         android:id="@+id/statusDot"
-                        android:layout_width="10dp"
-                        android:layout_height="10dp" />
+                        android:layout_width="14dp"
+                        android:layout_height="14dp" />
 
                     <TextView
                         android:id="@+id/statusTitle"
@@ -84,7 +91,7 @@
                         android:layout_marginStart="10dp"
                         android:layout_weight="1"
                         android:textColor="@color/text"
-                        android:textSize="17sp"
+                        android:textSize="22sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
@@ -92,10 +99,10 @@
                     android:id="@+id/statusBody"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:lineSpacingExtra="3dp"
+                    android:layout_marginTop="8dp"
+                    android:lineSpacingExtra="4dp"
                     android:textColor="@color/text2"
-                    android:textSize="14sp" />
+                    android:textSize="17sp" />
 
                 <com.google.android.material.progressindicator.LinearProgressIndicator
                     android:id="@+id/progress"
@@ -111,9 +118,12 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/primary"
                     android:layout_width="match_parent"
-                    android:layout_height="60dp"
-                    android:layout_marginTop="18dp"
-                    android:textSize="17sp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="76dp"
+                    android:layout_marginTop="20dp"
+                    android:textSize="22sp"
+                    android:textStyle="bold"
+                    app:iconSize="28dp"
                     app:cornerRadius="18dp"
                     app:iconGravity="textStart"
                     app:iconPadding="10dp" />
@@ -123,93 +133,120 @@
                     style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:minHeight="56dp"
                     android:layout_marginTop="4dp"
+                    android:textSize="18sp"
                     android:visibility="gone" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- permissions -->
-        <TextView
-            style="@style/SectionTitle"
-            android:text="权限" />
-
+        <!-- permissions: shown on the home page only while a required one is missing -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/permCard"
             style="@style/Widget.Material3.CardView.Filled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             app:cardBackgroundColor="@color/card"
             app:cardCornerRadius="24dp">
 
             <LinearLayout
-                android:id="@+id/permList"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingVertical="6dp" />
+                android:paddingVertical="6dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="20dp"
+                    android:paddingTop="12dp"
+                    android:text="开始前，需要你允许这两件事"
+                    android:textColor="@color/text"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/permList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- translation, display mode, Jev -->
-        <TextView
-            style="@style/SectionTitle"
-            android:text="翻译" />
-
+        <!-- the two language choices -->
         <com.google.android.material.card.MaterialCardView
             style="@style/Widget.Material3.CardView.Filled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             app:cardBackgroundColor="@color/card"
             app:cardCornerRadius="24dp">
 
             <LinearLayout
-                android:id="@+id/translateList"
+                android:id="@+id/langBox"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:padding="20dp" />
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- session logs -->
-        <TextView
-            style="@style/SectionTitle"
-            android:text="使用记录" />
-
-        <com.google.android.material.card.MaterialCardView
-            style="@style/Widget.Material3.CardView.Filled"
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/openSettings"
+            style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardBackgroundColor="@color/card"
-            app:cardCornerRadius="24dp">
+            android:minHeight="64dp"
+            android:layout_marginTop="16dp"
+            android:text="字幕大小、颜色和更多设置"
+            android:textSize="18sp"
+            app:cornerRadius="18dp" />
 
-            <LinearLayout
-                android:id="@+id/logList"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingHorizontal="20dp"
-                android:paddingVertical="12dp" />
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- model files on disk -->
         <TextView
-            style="@style/SectionTitle"
-            android:text="模型文件" />
-
-        <com.google.android.material.card.MaterialCardView
-            style="@style/Widget.Material3.CardView.Filled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardBackgroundColor="@color/card"
-            app:cardCornerRadius="24dp">
+            android:layout_marginTop="16dp"
+            android:gravity="center_horizontal"
+            android:lineSpacingExtra="3dp"
+            android:paddingHorizontal="8dp"
+            android:text="声音只在手机上识别，不会上传；用在线翻译时，会把识别出的文字发给翻译接口。"
+            android:textColor="@color/text2"
+            android:textSize="14sp" />
+        </LinearLayout>
 
-            <LinearLayout
-                android:id="@+id/modelFileList"
-                android:layout_width="match_parent"
+        <!-- ===== settings page ===== -->
+        <LinearLayout
+            android:id="@+id/settingsPage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/closeSettings"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingHorizontal="20dp"
-                android:paddingVertical="12dp" />
-        </com.google.android.material.card.MaterialCardView>
+                android:minHeight="56dp"
+                android:text="‹ 返回"
+                android:textSize="18sp" />
 
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="设置"
+                android:textColor="@color/text"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+        </LinearLayout>
         <!-- subtitle style -->
         <TextView
             style="@style/SectionTitle"
@@ -336,24 +373,24 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:textColor="@color/text2"
-                    android:textSize="12.5sp" />
+                    android:textSize="14sp" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchJa"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="同时显示识别原文"
+                    android:text="同时显示原文"
                     android:textColor="@color/text"
-                    android:textSize="15sp" />
+                    android:textSize="17sp" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchStats"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="显示识别/翻译耗时"
+                    android:text="显示识别和翻译用时"
                     android:textColor="@color/text"
-                    android:textSize="15sp" />
+                    android:textSize="17sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/resetStyle"
@@ -368,7 +405,7 @@
         <!-- day / night -->
         <TextView
             style="@style/SectionTitle"
-            android:text="外观" />
+            android:text="页面颜色" />
 
         <com.google.android.material.card.MaterialCardView
             style="@style/Widget.Material3.CardView.Filled"
@@ -385,6 +422,69 @@
                 android:padding="20dp" />
         </com.google.android.material.card.MaterialCardView>
 
+
+        <!-- translation, display mode, Jev -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="翻译" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:id="@+id/translateList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- session logs -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="使用记录" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:id="@+id/logList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="12dp" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- model files on disk -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="已下载的文件" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:id="@+id/modelFileList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="12dp" />
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- tips -->
         <TextView
             style="@style/SectionTitle"
@@ -396,8 +496,64 @@
             android:background="@drawable/tips_bg"
             android:lineSpacingExtra="5dp"
             android:padding="18dp"
-            android:text="1. 点「开始字幕」，在系统弹窗里选择要翻译的 App（或整个屏幕）。\n2. 字幕悬浮在屏幕上：拖动移动位置，拖右下角圆点同时调整宽度和高度（左右改宽、上下改高），点一下字幕展开工具栏（字号、透明度、显示模式、锁定、停止）。\n3. 「边出边改」：灰色字是识别中的草稿，说完一句后变白定稿；「只看定稿」：只显示说完的句子。\n4. 部分 App（例如开启了版权保护的视频）不允许捕获声音，这时不会出字幕。\n5. 每次使用的识别、翻译和 Jev 原始记录保存在「使用记录」里，可以分享出去分析（不含声音和 key）。"
+            android:text="1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置，拖右下角的小圆点可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、锁定位置，或者停止。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。\n5. 每次使用都会留下一份文字记录（不含声音和 key），可以在「使用记录」里分享出去，帮助反馈问题。"
             android:textColor="@color/text2"
-            android:textSize="13.5sp" />
+            android:textSize="15sp" />
+
+        <!-- about -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="关于" />
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Material3.CardView.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:id="@+id/aboutVersion"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text"
+                    android:textSize="16sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/openRepo"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="56dp"
+                    android:layout_marginTop="12dp"
+                    android:text="GitHub 项目主页"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="https://github.com/KorenKrita/simul-subtitle"
+                    android:textColor="@color/text2"
+                    android:textIsSelectable="true"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="翻译用的是 B 站开源的 Index-Translate 模型（github.com/bilibili/Index-Translate），语音识别用的是 ReazonSpeech 模型（通过 sherpa-onnx 在手机上运行）。感谢这些项目。"
+                    android:textColor="@color/text2"
+                    android:textSize="14sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

@@ -55,15 +55,15 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** Mode button tapped: the host flips "only finished sentences" in prefs and calls [setFinalOnly]. */
     var onToggleMode: () -> Unit = {}
     private val modeBtn = TextView(ctx).apply {
-        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
         setPadding(dp(10f).toInt(), dp(8f).toInt(), dp(10f).toInt(), dp(8f).toInt())
         setOnClickListener { onToggleMode(); bumpToolbarTimer() }
     }
     /** Shows the current mode on the toolbar button; the label is what is on screen now. */
     fun setFinalOnly(v: Boolean) {
-        modeBtn.text = if (v) "只看定稿" else "边出边改"
-        modeBtn.contentDescription = if (v) "当前只显示说完的句子，点一下改为边出边改" else "当前边出边改，点一下改为只显示说完的句子"
+        modeBtn.text = if (v) "说完再出" else "边听边出"
+        modeBtn.contentDescription = if (v) "现在每句说完才显示，点一下改为边听边出" else "现在边听边出，点一下改为每句说完再显示"
     }
     /** Toolbar opened/closed: the host widens the window while it is open so the toolbar is never clipped. */
     var onToolbarShown: (Boolean) -> Unit = {}
@@ -140,11 +140,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             shape = GradientDrawable.OVAL; setColor(0xE6FFFFFF.toInt()); setStroke(dp(2f).toInt(), 0xFF6D5DF6.toInt())
         }
         handle.visibility = GONE
-        card.addView(handle, FrameLayout.LayoutParams(dp(18f).toInt(), dp(18f).toInt(), Gravity.BOTTOM or Gravity.END).apply {
+        card.addView(handle, FrameLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt(), Gravity.BOTTOM or Gravity.END).apply {
             setMargins(0, 0, dp(4f).toInt(), dp(4f).toInt())
         })
         lockBadge.apply {
-            text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); visibility = GONE
+            text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); visibility = GONE
         }
         card.addView(lockBadge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
             setMargins(0, dp(4f).toInt(), dp(8f).toInt(), 0)
@@ -223,7 +223,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun tag(t: String) = TextView(context).apply {
-            text = t; setTextColor(0xFFB4ACFA.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            text = t; setTextColor(0xFFC9C3FF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setPadding(dp(2f).toInt(), 0, dp(2f).toInt(), 0)
         }
         fun sep() = View(context).apply { setBackgroundColor(0x33FFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(22f).toInt()).apply { marginStart = dp(4f).toInt(); marginEnd = dp(4f).toInt() } }

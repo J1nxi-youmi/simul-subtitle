@@ -6,7 +6,7 @@ package io.github.korenkrita.simulsub
 enum class Scene(val label: String, val background: String?, val terms: List<Pair<String, String>>) {
     GENERAL("通用", null, emptyList()),
     VTUBER(
-        "B站 VTuber 直播",
+        "VTuber 直播",
         "这是日本虚拟主播（VTuber）在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。",
         listOf(
             "ビリビリ" to "B站", "スパチャ" to "SC", "スーパーチャット" to "SC", "館長" to "舰长", "艦長" to "舰长",

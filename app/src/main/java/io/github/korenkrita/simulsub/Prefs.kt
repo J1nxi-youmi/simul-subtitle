@@ -80,10 +80,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("finalOnly", false)
         set(v) = sp.edit().putBoolean("finalOnly", v).apply()
 
-    /** Translate with bilibili's public API (default) or the local Index-Translate-2B; read when a session starts. */
-    var mtOnline: Boolean
-        get() = sp.getBoolean("mtOnline", true)
-        set(v) = sp.edit().putBoolean("mtOnline", v).apply()
+    /**
+     * How captions are translated; read when a session starts. Before BYOK this was the mtOnline switch, so a phone
+     * that never chose keeps what it had (online = Index, off = local).
+     */
+    var mtMode: MtMode
+        get() = sp.getString("mtMode", null)?.let { runCatching { MtMode.valueOf(it) }.getOrNull() }
+            ?: if (sp.getBoolean("mtOnline", true)) MtMode.INDEX else MtMode.LOCAL
+        set(v) = sp.edit().putString("mtMode", v.name).apply()
+    /** Translation needs the network (Index or BYOK), not the local model file. */
+    val mtOnline: Boolean get() = mtMode != MtMode.LOCAL
     var onlineModel: OnlineModel
         get() = runCatching { OnlineModel.valueOf(sp.getString("onlineModel", null) ?: "") }.getOrDefault(OnlineModel.B35)
         set(v) = sp.edit().putString("onlineModel", v.name).apply()
@@ -129,6 +135,26 @@ class Prefs(ctx: Context) {
     fun jevKey(p: JevProvider): String? = sp.getString("jevKey:${p.name}", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
     fun setJevKey(p: JevProvider, key: String?) =
         sp.edit().apply { if (key.isNullOrBlank()) remove("jevKey:${p.name}") else putString("jevKey:${p.name}", KeyBox.seal(key.trim())) }.apply()
+
+    /** BYOK: the user's OpenAI-compatible service. The key is sealed like the Jev keys. */
+    var byokUrl: String
+        get() = sp.getString("byokUrl", "") ?: ""
+        set(v) = sp.edit().putString("byokUrl", v.trim()).apply()
+    var byokModel: String
+        get() = sp.getString("byokModel", "") ?: ""
+        set(v) = sp.edit().putString("byokModel", v.trim()).apply()
+    var byokKey: String?
+        get() = sp.getString("byokKey", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+        set(v) = sp.edit().apply { if (v.isNullOrBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(v.trim())) }.apply()
+    /**
+     * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and
+     * model; null = not found yet. Kept per URL + model, so switching back and forth does not probe again.
+     */
+    fun byokVariant(url: String, model: String): String? = sp.getString("byokVariant:$url|$model", null)
+    fun setByokVariant(url: String, model: String, name: String?) =
+        sp.edit().apply { if (name == null) remove("byokVariant:$url|$model") else putString("byokVariant:$url|$model", name) }.apply()
+    /** URL, model and key are all there and valid: BYOK can start. */
+    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty() && byokKey != null
 
 
     fun listen(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(l)

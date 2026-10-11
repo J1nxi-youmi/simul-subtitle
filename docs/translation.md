@@ -1,18 +1,35 @@
 # 翻译
 
-翻译使用 B 站开源的 **[Index-Translate](https://github.com/bilibili/Index-Translate)**。
+默认使用 B 站开源的 **[Index-Translate](https://github.com/bilibili/Index-Translate)**，也可以填自己的 OpenAI 兼容服务（实验性）。
 
-## 两种方式
+## 三种方式
 
-| | 在线翻译（默认） | 手机上翻译 |
-|---|---|---|
-| 模型 | Index-Translate-35B-A3B（默认）/ 9B / 2B | Index-Translate-2B Q4_K_M（llama.cpp，CPU 4 线程） |
-| 地址 | B 站开放的免费接口 `index-translate.bilibili.com`，不需要 key | 本机 |
-| 需要下载 | 无 | 约 1.3 GB |
-| 断网时 | 这句显示「翻译失败」，不会自动换成本地 | 正常 |
-| 速度 | 快 | 慢很多，句子密时会积压 |
+| | 在线翻译（默认） | 手机上翻译 | 自己的模型（实验性，BYOK） |
+|---|---|---|---|
+| 模型 | Index-Translate-35B-A3B（默认）/ 9B / 2B | Index-Translate-2B Q4_K_M（llama.cpp，CPU 4 线程） | 用户填的模型 ID |
+| 地址 | B 站开放的免费接口 `index-translate.bilibili.com`，不需要 key | 本机 | 用户填的 https 地址 + API Key |
+| 需要下载 | 无 | 约 1.3 GB | 无 |
+| 断网时 | 这句显示「翻译失败」，不会自动换成本地 | 正常 | 这句显示「翻译失败」 |
+| 速度 | 快 | 慢很多，句子密时会积压 | 无法预测 |
 
 在线方式发送的只有识别出的文字和提示词，不发送声音。
+
+两种在线方式都用流式请求（`stream: true`），规则相同：发出后 1 秒内没收到译文，这句判为失败；收到后整句最多等到发出后 8 秒；字幕整句显示；不重试。
+
+## 自己的模型（BYOK）
+
+- 协议：OpenAI 兼容的 `POST {地址}/v1/chat/completions`，`Authorization: Bearer {key}`。地址结尾有没有 `/v1` 都可以；只接受 `https://`，不带用户名、`?` 参数和 `#`；不跟随重定向，免得把 key 发到别的地方。
+- **关闭思考**：没有统一的参数。第一次使用某个「地址 + 模型」时（点「测试连接」或第一次开始字幕），用一句固定的日语依次尝试下面的参数，第一种**完整回答且没有思考内容**的就记下来，以后都用它：
+  1. `thinking: {type: disabled}`（DeepSeek 等）
+  2. `chat_template_kwargs: {enable_thinking: false, thinking: false}`（vLLM / SGLang 部署的 Qwen3、DeepSeek 等）
+  3. `enable_thinking: false`（SiliconFlow、阿里云百炼等）
+  4. `reasoning: {enabled: false}`（OpenRouter）
+  5. `reasoning_effort: none`（OpenAI 推理模型、Gemini 的 OpenAI 兼容接口）
+  6. 不加参数（本来就不思考的模型）
+
+  判断「有思考」：回复里有 `reasoning_content` / `reasoning`、`<think>`，或 `usage.completion_tokens_details.reasoning_tokens > 0`。参数不被接受（例如 HTTP 400）就试下一种；key 错（401/403）、地址或模型错（404）、限流（429）、连不上时直接停止。全部失败才提示「关不掉思考，可能很慢」，但仍允许使用。思考内容不会显示成字幕。
+- 测试时每种参数最多等 8 秒，不受 1 秒首字限制；正式翻译仍是 1 秒 / 8 秒。
+- key 用 Android Keystore 加密保存，不写进使用记录；服务端回复里如果带了 key 也会替换成 `***`。
 
 ## 提示词
 
@@ -26,6 +43,25 @@
   - **修正提示**（注意）：Jev 检查出问题后重译时附带的说明（见 [jev.md](jev.md)）。
 - 原文语言选「不确定」时，提示词里不写原文语言，由模型自己判断。
 - 贪心解码、不加重复惩罚；一句输出上限：中文 160 token，其他语言 256 token（本地模型上下文 2048）。
+
+BYOK 不用 Index 的训练格式，而是按前缀缓存排序（见下节）：
+
+- `system`：翻译要求、原文/译文语言、场景背景、**整份**术语表（只在译成中文时给），整次字幕都不变；
+- `user`：`【前文】`（如果开启）→ `【当前句】` → `【注意】`（Jev 修正提示，只在重译时有）。
+
+## 前缀缓存
+
+服务端的前缀缓存只在**从第一个字开始完全相同**的部分生效：DeepSeek 按 64 token 为单位缓存；OpenAI 要 1024 token 以上才缓存。不同服务规则不同，有的根本没有。
+
+| | 不同句子之间能复用的前缀 | 原因 |
+|---|---|---|
+| Index（在线 / 手机） | 只有开头一行指令（约 20 token） | 官方训练格式是「指令 → 【源文】当前句 → 【约束要求】」，当前句在前面，后面的背景、术语、前文都排在不同的当前句之后。术语表只放这句出现的词，也会让约束变化。为了不偏离训练格式，没有改 |
+| BYOK | 整个 `system`（约 200 token：要求 + 背景 + 术语表） | 固定内容全放 `system`，变化的前文和当前句放最后 |
+| 同一句的草稿 → 定稿 → 重译 | App 自己复用：提示词完全相同时直接用上次的译文，不再请求 | 与服务端缓存无关 |
+
+- 前文是滑动的（每句都会变），所以 `user` 部分基本不能跨句复用；为了缓存无限累积对话没有意义，也会变慢。
+- `system` 约 200 token，达到 DeepSeek 的 64 token 门槛，达不到 OpenAI 的 1024 token 门槛；不会为了凑门槛填充文字。
+- 使用记录的 `mt` 事件记录服务回报的 `cached_tokens`（`prompt_tokens_details.cached_tokens` 或 DeepSeek 的 `prompt_cache_hit_tokens`），没有回报就是 `null`，不代表没命中。
 
 ## 结合上文
 

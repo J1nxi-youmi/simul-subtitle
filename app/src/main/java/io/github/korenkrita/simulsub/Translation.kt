@@ -87,6 +87,10 @@ class MtResult(
     /** online, streamed: ms from sending until the first translated text arrived */
     val firstContentMs: Long? = null,
     val request: String? = null, val response: String? = null, val http: Int? = null, val error: String? = null,
+    /** online: the answer carried reasoning (thinking was not off); never shown */
+    val thinking: Boolean = false,
+    /** online: prompt tokens the service reports as served from its prefix cache (null: not reported) */
+    val cachedTokens: Int? = null,
 ) {
     val text: String get() = stripThink(raw)
 
@@ -137,29 +141,45 @@ class OnlineTranslator(
             "chat_template_kwargs" to mapOf("enable_thinking" to false),
         ))
         val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"),
-            firstContentMs = firstContentMs, isContent = ::hasText, isEnd = { it.trim() == "data: [DONE]" })
-        // a stopped call is still logged with what was sent; the pipeline checks running before showing anything
-        if (r.error == "cancelled") return MtResult("", 'f', null, null, firstContentMs = r.firstContentMs, request = body, http = r.status, error = "cancelled")
-        val s = if (r.status == 200) r.body?.let { parseStream(it) } else null
-        val stop = when {
-            r.status != 200 || s == null -> 'f'
-            s.finish == "stop" -> 'e'
-            s.finish == "length" -> 'l'
-            else -> 'f' // missing or unknown: not a translation we can trust; the raw response is kept
-        }
-        val error = r.error ?: when {
-            r.status != 200 -> "HTTP ${r.status}"; s == null -> "bad response"; stop == 'f' -> "finish_reason"; else -> null
-        }
-        return MtResult(s?.content ?: "", stop, s?.promptTokens, s?.outputTokens, firstContentMs = r.firstContentMs,
-            request = body, response = r.body, http = r.status, error = error)
+            firstContentMs = firstContentMs, isContent = ::hasText, isEnd = ::isDone)
+        return streamResult(r, body, r.body)
     }
 
     override fun cancel() = calls.cancel()
 
-    class Streamed(val content: String, val finish: String?, val promptTokens: Int?, val outputTokens: Int?)
+    class Streamed(val content: String, val finish: String?, val promptTokens: Int?, val outputTokens: Int?,
+                   /** reasoning text, a <think> block or reasoning tokens were seen: thinking was not off */
+                   val thinking: Boolean = false,
+                   /** prompt tokens the service says it served from its prefix cache (null: not reported) */
+                   val cachedTokens: Int? = null)
 
     companion object {
+        /** The end marker of an OpenAI-style stream ("data: [DONE]", with or without the space). */
+        fun isDone(line: String) = line.startsWith("data:") && line.removePrefix("data:").trim() == "[DONE]"
+
+        /**
+         * A streamed call as an [MtResult]: [request] is what was sent, [response] the body for the log (BYOK: with the
+         * key removed). A stopped call keeps what was sent; the pipeline checks running before showing anything.
+         */
+        fun streamResult(r: HttpResult, request: String, response: String?): MtResult {
+            if (r.error == "cancelled") return MtResult("", 'f', null, null, firstContentMs = r.firstContentMs, request = request, http = r.status, error = "cancelled")
+            val s = if (r.status == 200) r.body?.let { parseStream(it) } else null
+            val stop = when {
+                r.status != 200 || s == null -> 'f'
+                s.finish == "stop" -> 'e'
+                s.finish == "length" -> 'l'
+                else -> 'f' // missing or unknown: not a translation we can trust; the raw response is kept
+            }
+            val error = r.error ?: when {
+                r.status != 200 -> "HTTP ${r.status}"; s == null -> "bad response"; stop == 'f' -> "finish_reason"; else -> null
+            }
+            return MtResult(s?.content ?: "", stop, s?.promptTokens, s?.outputTokens, firstContentMs = r.firstContentMs,
+                request = request, response = response, http = r.status, error = error,
+                thinking = s?.thinking ?: false, cachedTokens = s?.cachedTokens)
+        }
+
         const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
+        private val REASONING_FIELDS = listOf("reasoning_content", "reasoning")
 
         /** One SSE line carrying translated text (not a role-only, empty, usage or keep-alive event). */
         fun hasText(line: String): Boolean {
@@ -176,8 +196,8 @@ class OnlineTranslator(
          * be missing. Role-only and usage-only chunks are fine.
          */
         fun parseStream(body: String): Streamed? {
-            val text = StringBuilder(); var finish: String? = null; var done = false
-            var promptTokens: Int? = null; var outputTokens: Int? = null
+            val text = StringBuilder(); var finish: String? = null; var done = false; var thinking = false
+            var promptTokens: Int? = null; var outputTokens: Int? = null; var cached: Int? = null
             for (line in body.lineSequence()) {
                 if (line.startsWith("event:") && line.removePrefix("event:").trim() == "error") return null
                 if (!line.startsWith("data:")) continue
@@ -192,12 +212,20 @@ class OnlineTranslator(
                     if (delta != null && delta !is Map<*, *>) return null
                     when (val c = (delta as? Map<*, *>)?.get("content")) { null -> {}; is String -> text.append(c); else -> return null }
                     when (val f = choice["finish_reason"]) { null -> {}; is String -> finish = f; else -> return null }
+                    // DeepSeek / vLLM / SGLang: reasoning_content; OpenRouter and others: reasoning
+                    if (REASONING_FIELDS.any { ((delta as? Map<*, *>)?.get(it) as? String).orEmpty().isNotEmpty() }) thinking = true
                 }
                 (j["usage"] as? Map<*, *>)?.let { u ->
                     promptTokens = (u["prompt_tokens"] as? Number)?.toInt(); outputTokens = (u["completion_tokens"] as? Number)?.toInt()
+                    // OpenAI-style prompt_tokens_details.cached_tokens, DeepSeek prompt_cache_hit_tokens
+                    cached = ((u["prompt_tokens_details"] as? Map<*, *>)?.get("cached_tokens") as? Number)?.toInt()
+                        ?: (u["prompt_cache_hit_tokens"] as? Number)?.toInt() ?: cached
+                    val reasoningTokens = ((u["completion_tokens_details"] as? Map<*, *>)?.get("reasoning_tokens") as? Number)?.toInt()
+                    if ((reasoningTokens ?: 0) > 0) thinking = true
                 }
             }
-            return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens)
+            if (text.contains("<think>")) thinking = true
+            return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens, thinking, cached)
         }
     }
 }
@@ -221,3 +249,153 @@ val FIX_NOTES_GENERAL = mapOf(
 fun fixNote(choice: String, source: Lang?, target: Lang) =
     (if (source == Lang.JA && target == Lang.ZH) FIX_NOTES else FIX_NOTES_GENERAL)[choice]
 
+
+/** Where captions are translated. LOCAL needs the model file; INDEX and BYOK need the network. */
+enum class MtMode { INDEX, LOCAL, BYOK }
+
+/**
+ * BYOK system message: everything that is the same for every sentence of a session (instructions, languages, scene
+ * background, the scene's whole term list), so that every request starts with the same bytes and a service with prefix
+ * caching can reuse it. The Chinese-only term list is given only for a Chinese target, as in [indexPrompt].
+ */
+fun byokSystem(scene: Scene, source: Lang?, target: Lang): String = buildString {
+    val src = source?.zh ?: "外语"
+    append("你是直播字幕翻译。把【当前句】的${src}翻译成自然、口语化的${target.zh}，准确保留原意、肯定否定和人物关系；")
+    append("保留人名，不凭空补充内容。字幕要简短，可以省略无意义的口头重复。")
+    append("【前文】只用于理解当前句的指代和省略，不要翻译、不要输出。【注意】是这一句的额外要求。")
+    append("只输出当前句的译文，不要解释、注释或其他文字。")
+    scene.background?.let { append("\n\n背景：" + if (source == Lang.JA) it else it.replace("日本虚拟主播", "虚拟主播")) }
+    if (target == Lang.ZH && scene.terms.isNotEmpty())
+        append("\n\n术语（原文出现时必须这样译）：" + scene.terms.joinToString("、") { "${it.first}→${it.second}" })
+}
+
+/** BYOK user message: the parts that change, oldest first, the current sentence and its one-off notes last. */
+fun byokUser(text: String, notes: List<String> = emptyList(), previous: List<String> = emptyList()): String = buildString {
+    if (previous.isNotEmpty()) append("【前文】\n" + previous.joinToString("\n") + "\n\n")
+    append("【当前句】\n$text")
+    notes.forEach { append("\n\n【注意】$it") }
+}
+
+/**
+ * The user's own OpenAI-compatible service (BYOK, experimental): streamed, same rules as [OnlineTranslator] (no text
+ * within [firstContentMs] fails the caption, the call ends [deadlineMs] after sending, whole sentence at once, no
+ * retry). [system] is fixed for the session; [translate] takes the [byokUser] text.
+ *
+ * Thinking must be off, but there is no standard switch: [THINKING_OFF] lists the ones we know. [variant] is the one
+ * [probe] found for this URL + model (null: none worked, the request carries no switch and may think and be slow).
+ * Reasoning in an answer is never shown; it is only flagged ([MtResult.thinking]).
+ */
+class ByokTranslator(
+    private val url: String,
+    private val model: String,
+    private val apiKey: String,
+    private val system: String,
+    private val variant: ThinkingOff?,
+    private val deadlineMs: Long = 8_000,
+    private val maxTokens: Int = mtMaxTokens(Lang.ZH),
+    private val firstContentMs: Long = 1_000,
+) : Mt {
+    private val calls = Calls(deadlineMs)
+
+    override fun translate(prompt: String): MtResult? = call(prompt, variant, firstContentMs)
+
+    private fun call(user: String, v: ThinkingOff?, firstMs: Long): MtResult {
+        val body = Json.encode(mapOf(
+            "model" to model,
+            "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
+            "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
+            "stream_options" to mapOf("include_usage" to true),
+        ) + (v?.params ?: emptyMap()))
+        val r = calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
+            firstContentMs = firstMs, isContent = OnlineTranslator::hasText, isEnd = OnlineTranslator::isDone)
+        // the key is in a header, not the body; a service may still echo it in an error
+        return OnlineTranslator.streamResult(r, body, r.body?.let { Jev.redact(it, apiKey) })
+    }
+
+    override fun cancel() = calls.cancel()
+
+    /** One way to ask for no thinking; [params] are added to the request body. */
+    class ThinkingOff(val name: String, val label: String, val params: Map<String, Any>)
+
+    /** One probe step: which variant, what came back. */
+    class Step(val variant: ThinkingOff, val result: MtResult)
+
+    /**
+     * Tries [THINKING_OFF] in order with a short test sentence until one answers in full and without reasoning; that
+     * one is returned (the caller keeps it for this URL + model). Null = none did, see [steps]. Waits up to the whole
+     * deadline for each (no 1 s first-text cutoff: a slow first answer is not a wrong switch). Stops early when the
+     * service clearly fails for a reason no switch changes (wrong key, unknown model, not reachable).
+     */
+    fun probe(steps: MutableList<Step>): ThinkingOff? {
+        for (v in THINKING_OFF) {
+            val r = call(byokUser(PROBE_TEXT), v, deadlineMs)
+            steps += Step(v, r)
+            if (r.error == "cancelled") return null
+            if (r.usable && !r.thinking) return v
+            // wrong key / no access / unknown model or path / rate limited / not reachable: no switch changes that
+            // (a timeout is not among them: thinking can make an answer slow)
+            if (r.http in listOf(401, 403, 404, 429) || (r.http == 0 && r.error?.startsWith("deadline") != true)) return null
+        }
+        return null
+    }
+
+    companion object {
+        const val PROBE_TEXT = "こんにちは、今日もよろしくお願いします。"
+        /** Stored instead of a variant when the service answered but every switch still thought: do not probe again. */
+        const val NONE_WORKED = "-"
+
+        /** A failed call in words for the user (no response text: it may hold anything). */
+        fun why(r: MtResult): String = when {
+            r.http == 401 || r.http == 403 -> "key 不对或没有权限（HTTP ${r.http}）"
+            r.http == 404 -> "地址或模型 ID 不对（HTTP 404）"
+            r.http == 429 -> "请求太频繁或额度用完（HTTP 429）"
+            r.http != null && r.http != 0 && r.http != 200 -> "服务返回错误（HTTP ${r.http}）"
+            r.error?.startsWith("deadline") == true -> "8 秒内没有翻完"
+            r.error?.startsWith("no content") == true -> "1 秒内没有收到译文"
+            r.error == "bad response" || r.error == "finish_reason" -> "回复的格式不对，可能不是 OpenAI 兼容的流式接口"
+            r.error == null -> "没有收到译文"
+            r.error!!.contains("UnknownHost") -> "找不到这个域名"
+            r.error!!.contains("SSL") || r.error!!.contains("Certificate") -> "安全连接失败（证书问题）"
+            else -> "连不上（${r.error!!.substringAfterLast('.')}）"
+        }
+
+        /**
+         * Known ways to turn thinking off, most specific first. A service that does not know a field usually ignores
+         * it, but some reject unknown fields (HTTP 400); then the next one is tried.
+         */
+        val THINKING_OFF = listOf(
+            // DeepSeek API and services copying it (also GLM / Kimi style "thinking")
+            ThinkingOff("thinking", "thinking: disabled", mapOf("thinking" to mapOf("type" to "disabled"))),
+            // vLLM / SGLang / many Qwen3 hosts: the chat template switch
+            ThinkingOff("template", "chat_template_kwargs", mapOf("chat_template_kwargs" to mapOf("enable_thinking" to false, "thinking" to false))),
+            // SiliconFlow, DashScope (Qwen) and others: a top-level flag
+            ThinkingOff("enable", "enable_thinking: false", mapOf("enable_thinking" to false)),
+            // OpenRouter: the unified reasoning object
+            ThinkingOff("reasoning", "reasoning: enabled false", mapOf("reasoning" to mapOf("enabled" to false))),
+            // OpenAI-style reasoning models and Gemini's OpenAI endpoint
+            ThinkingOff("effort", "reasoning_effort: none", mapOf("reasoning_effort" to "none")),
+            // the model may not think at all: nothing extra
+            ThinkingOff("none", "不加参数", emptyMap()),
+        )
+        fun variant(name: String?) = THINKING_OFF.firstOrNull { it.name == name }
+
+        /**
+         * The chat completions URL for what the user typed: https only (the key must not travel in clear text), no
+         * user info, query or fragment; a path ending in /v1 (or /v1/chat/completions) is used as is, otherwise /v1 is
+         * added. Returns (error text, null) or (null, url).
+         */
+        fun chatUrl(input: String): Pair<String?, String?> {
+            val s = input.trim()
+            if (s.isEmpty()) return "还没填地址" to null
+            val u = runCatching { java.net.URI(s) }.getOrNull() ?: return "地址格式不对" to null
+            if (u.scheme?.lowercase() != "https") return "地址要以 https:// 开头" to null
+            if (u.host.isNullOrEmpty()) return "地址里没有域名" to null
+            if (u.rawUserInfo != null || u.rawQuery != null || u.rawFragment != null) return "地址里不要带用户名、?参数 或 #" to null
+            var path = (u.rawPath ?: "").trimEnd('/')
+            path = path.removeSuffix("/chat/completions")
+            if (!path.endsWith("/v1")) path += "/v1"
+            val port = if (u.port > 0) ":${u.port}" else ""
+            return null to "https://${u.host.lowercase()}$port$path/chat/completions"
+        }
+    }
+}

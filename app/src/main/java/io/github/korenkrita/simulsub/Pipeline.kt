@@ -84,6 +84,8 @@ class Pipeline(
     /** null = auto (Japanese or English); only the translator and the join of kept drafts use it */
     private val source: Lang? = Lang.JA,
     private val target: Lang = Lang.ZH,
+    /** The translator's prompt format: false = Index ([indexPrompt]), true = BYOK ([byokUser]; its system message is fixed). */
+    private val byokPrompt: Boolean = false,
     /**
      * Optional cloud judge (Jev). With it: endOfSpeech drafts are asked "unfinished?" on a separate thread and the
      * answer is offered to the segmenter through [holdHint]; every final translation is checked once and, for the
@@ -336,7 +338,7 @@ class Pipeline(
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>,
                           previous: List<String> = previousFor(job.segmentId)): MtResult? {
-        val prompt = indexPrompt(ja, scene, notes, previous, source, target)
+        val prompt = if (byokPrompt) byokUser(ja, notes, previous) else indexPrompt(ja, scene, notes, previous, source, target)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
@@ -347,7 +349,7 @@ class Pipeline(
             "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
             "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
             "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs,
-            "first_content_ms" to r?.firstContentMs, "ms" to clock() - t0,
+            "first_content_ms" to r?.firstContentMs, "cached_tokens" to r?.cachedTokens, "thinking" to r?.thinking, "ms" to clock() - t0,
             // reused: everything but ms is that of the earlier call (rev reused_from)
             "reused" to (hit != null), "reused_from" to hit?.rev))
         if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r)

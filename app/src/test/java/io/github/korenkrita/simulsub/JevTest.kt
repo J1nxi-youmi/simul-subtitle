@@ -439,4 +439,77 @@ class JevTest {
             assertTrue(bad, runCatching { Json.parse(bad) }.exceptionOrNull() is java.io.IOException)
         }
     }
+
+    // ---- BYOK
+
+    private fun byok(variant: ByokTranslator.ThinkingOff? = null, deadline: Long = 2_000) =
+        ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", variant, deadlineMs = deadline)
+    private val plain = sse("""{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""")
+    private val thought = sse("""{"choices":[{"delta":{"reasoning_content":"嗯…"}}]}""",
+        """{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""")
+
+    @Test
+    fun byokSendsAFixedSystemMessageTheKeyAndTheFoundSwitch() {
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""",
+            """{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":64}}}""") }
+        val r = byok(ByokTranslator.variant("thinking")).translate(byokUser("こんにちは"))!!
+        assertTrue(r.error, r.usable); assertEquals("你好", r.text); assertEquals(64, r.cachedTokens); assertFalse(r.thinking)
+        assertEquals("Bearer sk-test", lastAuth.get())
+        val req = Json.parse(lastBody.get()!!) as Map<*, *>
+        val msgs = req["messages"] as List<*>
+        assertEquals("SYS", (msgs[0] as Map<*, *>)["content"]); assertEquals("system", (msgs[0] as Map<*, *>)["role"])
+        assertEquals(mapOf("type" to "disabled"), req["thinking"]); assertEquals(true, req["stream"])
+        // the key never reaches the log, even when the service echoes it
+        reply = { 401 to """{"error":"bad key sk-test"}""" }
+        val bad = byok().translate("x")!!
+        assertFalse(bad.usable); assertFalse(bad.response!!, bad.response!!.contains("sk-test"))
+    }
+
+    @Test
+    fun theProbeTakesTheFirstSwitchThatAnswersWithoutThinking() {
+        // rejects the DeepSeek field, thinks with the template switch, is quiet with enable_thinking
+        reply = { _ ->
+            val b = lastBody.get()!!
+            when {
+                b.contains("\"thinking\":{") -> 400 to """{"error":"unknown field thinking"}"""
+                b.contains("chat_template_kwargs") -> 200 to thought
+                else -> 200 to plain
+            }
+        }
+        val steps = mutableListOf<ByokTranslator.Step>()
+        val v = byok().probe(steps)
+        assertEquals("enable", v?.name); assertEquals(listOf("thinking", "template", "enable"), steps.map { it.variant.name })
+        assertTrue(steps[1].result.thinking)
+    }
+
+    @Test
+    fun theProbeStopsAtAWrongKeyAndReportsWhenNothingTurnsThinkingOff() {
+        reply = { 401 to "{}" }
+        val steps = mutableListOf<ByokTranslator.Step>()
+        assertNull(byok().probe(steps)); assertEquals(1, steps.size)
+        reply = { 200 to thought }
+        steps.clear()
+        assertNull(byok().probe(steps)); assertEquals(ByokTranslator.THINKING_OFF.size, steps.size)
+        assertTrue(steps.all { it.result.usable && it.result.thinking })
+    }
+
+    @Test
+    fun byokUrlsGetV1OnceAndOnlyHttps() {
+        val ok = "https://api.example.com/v1/chat/completions"
+        for (u in listOf("https://api.example.com", "https://api.example.com/", "https://api.example.com/v1", "https://API.example.com/v1/",
+            "https://api.example.com/v1/chat/completions")) assertEquals(u, ok, ByokTranslator.chatUrl(u).second)
+        assertEquals("https://h.io:8443/api/openai/v1/chat/completions", ByokTranslator.chatUrl("https://h.io:8443/api/openai").second)
+        for (u in listOf("", "http://api.example.com", "https://u:p@h.io", "https://h.io/v1?x=1", "https://h.io/#a", "api.example.com"))
+            assertNull(u, ByokTranslator.chatUrl(u).second)
+    }
+
+    @Test
+    fun byokPromptKeepsTheFixedPartFirstAndTheSentenceLast() {
+        val a = byokSystem(Scene.VTUBER, Lang.JA, Lang.ZH)
+        assertTrue(a.contains("スパチャ→SC")); assertTrue(a.contains("背景"))
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Lang.EN).contains("→SC")) // the term list is Chinese-only
+        val u = byokUser("今", listOf("note"), listOf("前1", "前2"))
+        assertTrue(u.indexOf("前1") < u.indexOf("今")); assertTrue(u.indexOf("今") < u.indexOf("note"))
+        assertEquals("【当前句】\n今", byokUser("今"))
+    }
 }

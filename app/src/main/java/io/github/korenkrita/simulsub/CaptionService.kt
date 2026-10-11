@@ -99,20 +99,28 @@ class CaptionService : Service() {
         var keepOverlay = false
         try {
             // fixed for the whole session: the home screen disables these switches while running
-            val online = if (prefs.mtOnline) prefs.onlineModel else null
+            val mode = prefs.mtMode
+            val online = if (mode == MtMode.INDEX) prefs.onlineModel else null
             val source = prefs.sourceLang; val target = prefs.targetLang
+            val byokUrl = if (mode == MtMode.BYOK) ByokTranslator.chatUrl(prefs.byokUrl).second else null
+            val byokModel = prefs.byokModel; val byokKey = prefs.byokKey
+            if (mode == MtMode.BYOK && (byokUrl == null || byokModel.isEmpty() || byokKey == null)) {
+                setStatus("⚠ 自己的模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
+            }
             // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stopSelf)
-            if (!ModelStore(root, needsMt = { online == null }).ready()) { Log.w(TAG, "models missing, not starting"); return }
+            if (!ModelStore(root, needsMt = { mode == MtMode.LOCAL }).ready()) { Log.w(TAG, "models missing, not starting"); return }
             val t0 = monoMs()
             vad = SileroProb(files)
             asr = SherpaAsr(files, ASR_THREADS)
             val t1 = monoMs()
             if (stopping) return
-            val mt: Mt = if (online != null) OnlineTranslator(online, maxTokens = mtMaxTokens(target)) else {
+            // BYOK is made below, once the session log can show its first-use probe
+            var mt: Mt? = if (online != null) OnlineTranslator(online, maxTokens = mtMaxTokens(target))
+            else if (mode == MtMode.LOCAL) {
                 setStatus("正在准备翻译…")
                 LlamaTranslator(files, MT_THREADS, mtMaxTokens(target)).also { local = it }
-            }
-            synchronized(cancelLock) { translator = mt }
+            } else null
+            mt?.let { synchronized(cancelLock) { translator = it } }
             val t2 = monoMs()
             // Warm-up so the first real sentence does not pay page-in / first-run costs. Online: nothing to warm up,
             // and no request is sent that the session log would not show.
@@ -138,12 +146,42 @@ class CaptionService : Service() {
                 "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
                 "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "context_sentences" to contextN, "final_only" to prefs.finalOnly,
-                "mt_engine" to (if (online != null) "online" else "local"),
-                "mt_model" to (online?.id ?: files.mt.name), "mt_url" to online?.let { OnlineTranslator.URL },
+                "mt_engine" to (when (mode) { MtMode.INDEX -> "online"; MtMode.LOCAL -> "local"; MtMode.BYOK -> "byok" }),
+                "mt_model" to (online?.id ?: if (mode == MtMode.BYOK) byokModel else files.mt.name),
+                "mt_url" to (online?.let { OnlineTranslator.URL } ?: byokUrl),
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
             if (wantJev && judge == null) setStatus("⚠ AI 辅助需要 ${provider.label} 的 key，这次先不用")
+            if (mode == MtMode.BYOK) {
+                val system = byokSystem(scene, source, target)
+                var variant = ByokTranslator.variant(prefs.byokVariant(byokUrl!!, byokModel))
+                if (variant == null && prefs.byokVariant(byokUrl, byokModel) != ByokTranslator.NONE_WORKED) {
+                    // first use of this URL + model: find the switch that turns thinking off, logged like any MT call
+                    setStatus("第一次用这个模型，正在试怎样关闭思考…")
+                    val probe = ByokTranslator(byokUrl, byokModel, byokKey!!, system, null, maxTokens = mtMaxTokens(target))
+                    synchronized(cancelLock) { translator = probe }
+                    if (stopping) return
+                    val steps = mutableListOf<ByokTranslator.Step>()
+                    variant = probe.probe(steps)
+                    steps.forEach { s -> sl.write(mapOf("ev" to "byok_probe", "variant" to s.variant.name, "request" to s.result.request,
+                        "http" to s.result.http, "response" to s.result.response, "error" to s.result.error, "usable" to s.result.usable,
+                        "thinking" to s.result.thinking, "first_content_ms" to s.result.firstContentMs)) }
+                    if (stopping) return
+                    val anyAnswer = steps.any { it.result.usable }
+                    when {
+                        variant != null -> prefs.setByokVariant(byokUrl, byokModel, variant.name)
+                        anyAnswer -> prefs.setByokVariant(byokUrl, byokModel, ByokTranslator.NONE_WORKED)
+                    }
+                    if (variant == null) setStatus(if (anyAnswer) "⚠ 试过的参数都关不掉这个模型的思考，翻译可能很慢；先照常翻译"
+                        else "⚠ 连不上你的翻译服务：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}")
+                    else setStatus("准备好了，开始播放就会出字幕")
+                }
+                sl.write(mapOf("ev" to "byok", "variant" to variant?.name, "system" to system))
+                mt = ByokTranslator(byokUrl, byokModel, byokKey!!, system, variant, maxTokens = mtMaxTokens(target))
+                synchronized(cancelLock) { translator = mt }
+                if (stopping) return
+            }
             val pl = Pipeline(
-                asr, mt,
+                asr, mt!!,
                 onCaption = { onCaption(it, sl) },
                 onBacklog = { backlog = it; refresh() },
                 onOverload = {
@@ -158,6 +196,7 @@ class CaptionService : Service() {
                 scene = scene,
                 source = source,
                 target = target,
+                byokPrompt = mode == MtMode.BYOK,
                 judge = judge,
                 judgeEnds = judgeEnds,
                 checkTranslations = checkMt,

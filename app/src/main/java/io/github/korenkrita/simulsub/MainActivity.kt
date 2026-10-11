@@ -199,6 +199,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         updater.destroy()
+        byokTest?.cancel(); byokTest = null
         super.onDestroy()
     }
 
@@ -422,21 +423,23 @@ class MainActivity : Activity() {
         // -- how it translates
         box.addView(heading("怎么翻译", top = 0))
         box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
-        val engine = choice(listOf(true to "在线翻译", false to "手机上翻译"), prefs.mtOnline) {
-            if (prefs.mtOnline != it) { prefs.mtOnline = it; renderTranslate(); render() } // local needs its model file
+        val engine = choice(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "手机上翻译", MtMode.BYOK to "自己的模型\n（实验性）"), prefs.mtMode) {
+            if (prefs.mtMode != it) { prefs.mtMode = it; renderTranslate(); render() } // local needs its model file
         }
         if (running) for (i in 0 until engine.childCount) engine.getChildAt(i).isEnabled = false
         box.addView(engine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = (12 * dpx).toInt()
         })
-        if (prefs.mtOnline) {
-            box.addView(label("翻译模型"))
-            box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, !running) {
-                if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            box.addView(hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。"))
-        } else {
-            box.addView(hint("翻译也在手机上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。"))
+        when (prefs.mtMode) {
+            MtMode.INDEX -> {
+                box.addView(label("翻译模型"))
+                box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, !running) {
+                    if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+                box.addView(hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。"))
+            }
+            MtMode.LOCAL -> box.addView(hint("翻译也在手机上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。"))
+            MtMode.BYOK -> renderByok(box, running)
         }
 
         box.addView(label("内容类型"))
@@ -525,6 +528,104 @@ class MainActivity : Activity() {
         jevCheck.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderJev() }
         renderJev()
     }
+
+    /** The running BYOK test, so a second tap, a new render or leaving the screen does not show a stale result. */
+    @Volatile private var byokTest: ByokTranslator? = null
+
+    /** BYOK: the user's OpenAI-compatible service; URL, key, model id and a test that also finds the thinking switch. */
+    private fun renderByok(box: LinearLayout, running: Boolean) {
+        box.addView(TextView(this).apply {
+            text = "⚠ 实验性功能：翻译效果和速度都无法预测，取决于你填的服务和模型。开启后风险由你自己承担，包括费用、额度和服务商对内容的处理。"
+            textSize = 15f; setTextColor(getColor(R.color.warn)); setPadding(0, (10 * dpx).toInt(), 0, 0)
+        })
+        fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
+            box.addView(label(title))
+            return android.widget.EditText(this).apply {
+                setText(value); hint = hintText; isSingleLine = true; textSize = 16f; setTextColor(getColor(R.color.text))
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    if (password) android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else android.text.InputType.TYPE_TEXT_VARIATION_URI
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                isEnabled = !running
+                box.addView(this)
+            }
+        }
+        val url = field("服务地址（OpenAI 兼容）", prefs.byokUrl, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以")
+        val model = field("模型 ID", prefs.byokModel, "例如 deepseek-chat")
+        val saved = prefs.byokKey
+        val key = field(if (saved != null) "API Key：已保存（…${saved.takeLast(4)}）" else "API Key：还没填", "",
+            if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true)
+        val result = hint("")
+        // save what is in the boxes; null when something is wrong (and says what)
+        fun save(): String? {
+            val u = url.text.toString().trim(); val m = model.text.toString().trim(); val k = key.text.toString().trim()
+            val (bad, _) = ByokTranslator.chatUrl(u)
+            when {
+                bad != null -> { result.text = "⚠ $bad"; return null }
+                m.isEmpty() -> { result.text = "⚠ 还没填模型 ID"; return null }
+                m.any { it.isWhitespace() } -> { result.text = "⚠ 模型 ID 里不要有空格"; return null }
+                k.isNotEmpty() && !Jev.validKey(k) -> { result.text = "⚠ key 里有空格、换行或特殊字符，请重新复制"; return null }
+                k.isEmpty() && saved == null -> { result.text = "⚠ 还没填 API Key"; return null }
+            }
+            prefs.byokUrl = u; prefs.byokModel = m
+            if (k.isNotEmpty()) { prefs.byokKey = k; key.setText("") }
+            return ByokTranslator.chatUrl(u).second
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "清除 key"; textSize = 16f; isEnabled = saved != null && !running
+            setOnClickListener { prefs.byokKey = null; renderTranslate() }
+        })
+        row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "保存"; textSize = 16f; isEnabled = !running
+            setOnClickListener { if (save() != null) renderTranslate() }
+        })
+        val testing = byokTest != null
+        val test = MaterialButton(this).apply { text = if (testing) "测试中…" else "测试连接"; textSize = 16f; isEnabled = !running && !testing }
+        row.addView(test)
+        box.addView(row)
+        box.addView(result)
+        val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
+        val known = chat?.let { prefs.byokVariant(it, prefs.byokModel) }
+        result.text = byokResult?.also { byokResult = null } ?: when {
+            testing -> "正在依次尝试关闭思考的参数，最多要几十秒…"
+            chat == null || prefs.byokModel.isEmpty() || prefs.byokKey == null -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试几种关闭思考的参数，找到能用的就记住。"
+            known == ByokTranslator.NONE_WORKED -> "⚠ 上次测试：已知的参数都关不掉这个模型的思考，翻译可能很慢。仍然可以使用。"
+            known != null -> "上次测试可用（关闭思考：${ByokTranslator.variant(known)?.label}）。实际请求地址：$chat"
+            else -> "还没测试，第一次开始字幕时会自动测。实际请求地址：$chat"
+        }
+        test.setOnClickListener {
+            val chatUrl = save() ?: return@setOnClickListener
+            val m = prefs.byokModel; val k = prefs.byokKey ?: return@setOnClickListener
+            val t = ByokTranslator(chatUrl, m, k, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
+                maxTokens = mtMaxTokens(prefs.targetLang))
+            byokTest?.cancel(); byokTest = t
+            renderTranslate() // shows "testing" and disables the button
+            Thread {
+                val steps = mutableListOf<ByokTranslator.Step>()
+                val v = t.probe(steps)
+                main.post {
+                    if (byokTest !== t || isDestroyed) return@post // a newer test, or the screen is gone
+                    byokTest = null
+                    val ok = steps.firstOrNull { it.variant === v }?.result
+                    val answered = steps.any { it.result.usable }
+                    when {
+                        v != null -> prefs.setByokVariant(chatUrl, m, v.name)
+                        answered -> prefs.setByokVariant(chatUrl, m, ByokTranslator.NONE_WORKED)
+                    }
+                    // shown once by the next render
+                    byokResult = when {
+                        ok != null -> "✓ 可以用。关闭思考：${v!!.label}；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
+                            (if ((ok.firstContentMs ?: 0) > 1000) "（超过 1 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
+                        answered -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
+                        else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
+                    }
+                    renderTranslate()
+                }
+            }.start()
+        }
+    }
+    /** The finished test's outcome, shown once by the next render. */
+    private var byokResult: String? = null
 
     // ---- session logs --------------------------------------------------------------------------------------
 
@@ -817,6 +918,10 @@ class MainActivity : Activity() {
     private fun start() {
         startRefused = false
         if (!store.ready()) { render(); return } // never start without verified models
+        if (prefs.mtMode == MtMode.BYOK && !prefs.byokReady) {
+            status(R.color.err, "自己的模型还没填完整", "请在下面「怎么翻译」里填好服务地址、模型 ID 和 API Key 并保存，或者换回在线翻译。")
+            return
+        }
         if (!hasAudio()) {
             val ask = mutableListOf(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) ask += Manifest.permission.POST_NOTIFICATIONS // optional

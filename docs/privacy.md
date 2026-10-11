@@ -4,7 +4,7 @@
 
 - **声音**：只在手机上识别，任何情况下都不会上传，也不会保存。
 - **使用记录**：每次使用的识别、翻译和 Jev 文字记录保存在 App 自己的目录里（`Android/data/io.github.korenkrita.simulsub/files/`），不含声音和 key。只有你主动在「使用记录」里点「分享」时才会离开手机。
-- **Jev key**：用 Android Keystore 加密保存在本机。
+- **Jev key、自己的模型（BYOK）的 key**：用 Android Keystore 加密保存在本机。
 
 ## 会发到网络的
 
@@ -13,6 +13,7 @@
 | 下载模型 | huggingface.co、github.com；连不上时还会用 gh-proxy.com、gh.llkk.cc（GitHub 下载代理）、modelscope.cn | 普通的文件下载请求 |
 | 打开 App 自动检查更新（可关闭），或手动检查 / 下载更新 | github.com、release-assets.githubusercontent.com；连不上时依次使用 gh-proxy.com、gh.llkk.cc | 获取公开的版本清单或 APK；不附带使用记录、声音、文字、key 或设备标识。服务端会看到普通网络请求信息（例如 IP 地址） |
 | 在线翻译（默认） | index-translate.bilibili.com | 识别出的文字、场景说明、前文（如果开启）、修正提示 |
+| 自己的模型（实验性） | 你填的服务地址 | 同上，加上你的 key；第一次使用时还会发一句固定的测试日语。服务商如何处理这些内容由你自己判断 |
 | 打开 Jev 辅助 | 你选择的 Jev 服务 | 识别出的文字、译文 |
 
 选「手机上翻译」并且不开 Jev 时，下载完模型之后，字幕全程不需要联网。
@@ -26,7 +27,7 @@
 | 屏幕共享（MediaProjection） | 系统要求的授权弹窗；授权后听的是手机里正在播放的媒体、游戏声音 |
 | 悬浮窗 | 在其他 App 上方显示字幕 |
 | 通知（可选） | 显示运行状态和下载进度 |
-| 网络 | 下载模型、在线翻译、Jev、检查和下载更新 |
+| 网络 | 下载模型、在线翻译、自己的模型、Jev、检查和下载更新 |
 | 安装未知应用（REQUEST_INSTALL_PACKAGES，可选） | 点「立即更新」后打开系统安装页面；需要你在系统设置允许，并亲自确认安装，不会静默安装 |
 
 注意：App 采集的是所有允许被录制的媒体 / 游戏 / 未分类声音（`USAGE_MEDIA`、`USAGE_GAME`、`USAGE_UNKNOWN`），没有按 App 过滤。在弹窗里选了某个 App 后，如果另一个 App 同时在播放，它的声音也可能被识别成字幕（用在线翻译时，识别出的文字也会被发送）。不想被听到的声音，请在使用字幕时暂停播放。

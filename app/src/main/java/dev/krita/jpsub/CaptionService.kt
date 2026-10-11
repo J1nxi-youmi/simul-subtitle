@@ -214,7 +214,10 @@ class CaptionService : Service() {
             rec.startRecording()
             check(rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "无法开始录音（可能被其他 App 占用）" }
             setStatus("")
+            // with Jev the forced cut asks first and an "unfinished" head may grow to twice this (10 s); without Jev it
+            // cuts at the default 7 s. The live log showed long waits were utterances that reached the forced cut.
             val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500,
+                maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else 7_000,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint)
             val frame = FloatArray(seg.frameSize)
             val ts = AudioTimestamp()
@@ -454,6 +457,7 @@ class CaptionService : Service() {
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
+        private const val JEV_MAX_UTTERANCE_MS = 5_000
         /** captions never take more than this part of the usable height, so the toolbar always fits */
         const val MAX_CAPTION_FRAC = 0.4f
 

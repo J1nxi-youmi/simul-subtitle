@@ -59,13 +59,13 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
-    // The sherpa-onnx AAR also ships its C and C++ API libraries; the Kotlin API only loads libsherpa-onnx-jni.so,
+    // The sherpa-onnx AAR (shared-onnxruntime build) also ships its C and C++ API libraries; the Kotlin API only loads libsherpa-onnx-jni.so,
     // which links libonnxruntime.so and none of their symbols.
     packaging { jniLibs { excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so") } }
 }
 
 dependencies {
-    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
     // Jev and online MT: a Call can be cancelled before it runs, so stop never lets a request go out afterwards
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.material:material:1.12.0")

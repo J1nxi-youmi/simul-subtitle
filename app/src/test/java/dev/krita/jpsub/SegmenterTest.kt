@@ -290,6 +290,17 @@ class SegmenterTest {
     }
 
     @Test
+    fun aNewerForcedCutQuestionDropsAnOlderPauseCandidateTheSpeakerTalkedPast() {
+        // 4 s speech, a pause (candidate), speech again; the forced-cut question at 5 s is newer. The pause's late
+        // "finished" (1.3 s after it) must not cut while the forced-cut question is still open.
+        val jobs = timedJudge(answer = false, latencyMs = 1300, maxUtteranceMs = 5000,
+            pattern = listOf(true to 4000, false to 512, true to 1504, false to 3000))
+        val firstFinal = jobs.first { it.isFinal }
+        val pause = jobs.first { it.endOfSpeech }
+        assertTrue(frameIds(firstFinal) != frameIds(pause))
+    }
+
+    @Test
     fun judgeSlowerThanTheBudgetFinalizesAtTheBudget() {
         val jobs = timedJudge(answer = true, latencyMs = 5000, pattern = listOf(true to 1504, false to 1700, true to 1504, false to 3000))
         assertEquals(listOf(1L, 2L), jobs.filter { it.isFinal }.map { it.segmentId })

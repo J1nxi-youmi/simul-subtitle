@@ -258,6 +258,37 @@ class SegmenterTest {
         assertTrue(jobs.indexOf(f) > jobs.indexOf(tail))
     }
 
+    // A pause candidate whose "finished" answer arrives after the speaker went on: the sentence before the pause is
+    // still done, so it is finalized there and the speech after the pause becomes the next segment.
+    private val resumedBeforeAnswer = listOf(true to 1504, false to 512, true to 2496, false to 3000)
+
+    @Test
+    fun finishedAnswerAfterSpeechResumedStillCutsAtThatPause() {
+        val jobs = timedJudge(answer = false, latencyMs = 650, pattern = resumedBeforeAnswer)
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(listOf(1L, 2L), finals.map { it.segmentId })
+        val tail = jobs.first { it.endOfSpeech && it.segmentId == 1L }
+        assertEquals(frameIds(tail), frameIds(finals[0]))
+        // the final comes before the speaker stopped again: right after the answer, while segment 2 is being spoken
+        assertTrue(jobs.indexOf(finals[0]) < jobs.indexOfFirst { it.endOfSpeech && it.segmentId == 2L })
+        // nothing lost or doubled: the second final starts right after the first
+        assertEquals(frameIds(finals[0]).last() + 1, frameIds(finals[1]).first())
+    }
+
+    @Test
+    fun unfinishedAnswerAfterSpeechResumedKeepsOneSegment() {
+        val jobs = timedJudge(answer = true, latencyMs = 650, pattern = resumedBeforeAnswer)
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+    }
+
+    @Test
+    fun aFinishedAnswerTooLateAfterSpeechResumedIsNotUsed() {
+        // the answer comes 2.5 s after the candidate, past its validity (2 x hintWaitMs): the old boundary is dropped
+        val jobs = timedJudge(answer = false, latencyMs = 2500, pattern = listOf(true to 1504, false to 512, true to 2496, false to 400))
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(1, finals.size)
+    }
+
     @Test
     fun judgeSlowerThanTheBudgetFinalizesAtTheBudget() {
         val jobs = timedJudge(answer = true, latencyMs = 5000, pattern = listOf(true to 1504, false to 1700, true to 1504, false to 3000))

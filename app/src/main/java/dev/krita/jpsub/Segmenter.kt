@@ -51,9 +51,18 @@ class Segmenter(
     private var framesSinceDraft = 0
     private var segmentId = 0L
     private var revision = 0
-    /** end-of-speech candidate for the current pause: its revision (-1 = none) and frames.size when it was emitted */
+    /** end-of-speech candidate for the current pause: its revision (-1 = none), cut and frames.size when it was emitted */
     private var tailRevision = -1
+    private var tailCut = 0
     private var tailAtFrames = 0
+    /**
+     * A pause candidate the speaker talked past before its answer came: its answer is still waited for, within
+     * 2 x [hintWaitMs] of the candidate. "Finished" = the sentence before the pause is done, cut there and carry the
+     * speech after it into the next segment; "unfinished", a newer candidate or the time limit drop it.
+     */
+    private var resumedRevision = -1
+    private var resumedCut = 0
+    private var resumedAtFrames = 0
     /** forced-cut candidate: revision (-1 = none), where it cuts, and frames.size when it was emitted */
     private var cutRevision = -1
     private var cutIndex = 0
@@ -86,7 +95,15 @@ class Segmenter(
         frames.add(f)
         framesSinceDraft++
         silentFrames = if (f.speech) 0 else silentFrames + 1
-        if (f.speech) tailRevision = -1
+        if (f.speech && tailRevision >= 0) {
+            resumedRevision = tailRevision; resumedCut = tailCut; resumedAtFrames = tailAtFrames
+            tailRevision = -1
+        }
+        if (resumedRevision >= 0) {
+            val answer = if ((frames.size - resumedAtFrames) * frameMs > 2 * hintWaitMs) true else holdHint(segmentId, resumedRevision)
+            if (answer == false) { finalize(resumedCut, continueSpeech = true); return }
+            if (answer == true) resumedRevision = -1
+        }
 
         val durMs = frames.size * frameMs
         val silMs = silentFrames * frameMs
@@ -99,7 +116,9 @@ class Segmenter(
             inPause -> if (hintWaitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
                 // a newer candidate end replaces an open forced-cut question, and closes it for this utterance
                 if (cutRevision >= 0) { cutRevision = -1; cutClosed = true }
+                resumedRevision = -1 // this newer candidate supersedes one the speaker talked past
                 tailRevision = ++revision
+                tailCut = speechEnd
                 tailAtFrames = frames.size
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
@@ -173,6 +192,7 @@ class Segmenter(
     private fun finalize(count: Int, continueSpeech: Boolean) {
         emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
         tailRevision = -1
+        resumedRevision = -1
         cutRevision = -1
         cutClosed = false
         val tail = frames.subList(count, frames.size).toList()

@@ -69,10 +69,11 @@ fun qwenChat(user: String) = "<|im_start|>user\n$user<|im_end|>\n<|im_start|>ass
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
 /**
- * Output cap of one translation, local and online. Live speech segments are ≤ 7 s; 160 tokens covered the longest
- * Chinese output measured. Other targets (Thai, Hindi, Arabic…) take more tokens per sentence, hence room (unmeasured).
+ * Output cap of one translation, local and online. 160 tokens covered the longest Chinese output measured (segments are
+ * up to ~10 s with Jev), and the local model rejects a prompt when prompt + cap exceeds its 2048-token context, so
+ * Chinese keeps 160. Other targets (Thai, Hindi, Arabic…) take more tokens per sentence: 256, not tuned or measured.
  */
-const val MT_MAX_TOKENS = 256
+fun mtMaxTokens(target: Lang) = if (target == Lang.ZH) 160 else 256
 
 /**
  * One translation call. stop: e=end, l=hit max tokens, p=prompt too long, f=failure.
@@ -114,6 +115,7 @@ enum class OnlineModel(val id: String, val label: String) {
 class OnlineTranslator(
     private val model: OnlineModel,
     deadlineMs: Long = 8_000,
+    private val maxTokens: Int = mtMaxTokens(Lang.ZH),
     /** tests point this at a local server */
     private val url: String = URL,
 ) : Mt {
@@ -123,7 +125,7 @@ class OnlineTranslator(
         val body = Json.encode(mapOf(
             "model" to model.id,
             "messages" to listOf(mapOf("role" to "user", "content" to prompt)),
-            "temperature" to 0, "max_tokens" to MAX_TOKENS,
+            "temperature" to 0, "max_tokens" to maxTokens,
             "chat_template_kwargs" to mapOf("enable_thinking" to false),
         ))
         val r = calls.post(url, body, mapOf("User-Agent" to "Index-Translate-Client/1.0"))
@@ -150,8 +152,6 @@ class OnlineTranslator(
 
     companion object {
         const val URL = "https://index-translate.bilibili.com/v1/chat/completions"
-        /** same cap as the local model */
-        const val MAX_TOKENS = MT_MAX_TOKENS
     }
 }
 

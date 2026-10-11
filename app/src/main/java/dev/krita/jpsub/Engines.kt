@@ -78,7 +78,7 @@ class SileroProb(m: ModelFiles) {
     fun release() = vad.release()
 }
 
-class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
+class LlamaTranslator(m: ModelFiles, threads: Int, private val maxTokens: Int = mtMaxTokens(Lang.ZH)) : Mt {
     @Volatile private var handle: Long = nativeLoad(m.mt.path, threads)
 
     init {
@@ -87,7 +87,7 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
 
     /** Every sentence stands alone: cross-sentence context made finals worse with HY-MT and is untested with Index. */
     override fun translate(prompt: String): MtResult? =
-        qwenChat(prompt).let { full -> nativeTranslate(handle, full, MAX_TOKENS)?.let { MtResult.parse(it, request = full) } }
+        qwenChat(prompt).let { full -> nativeTranslate(handle, full, maxTokens)?.let { MtResult.parse(it, request = full) } }
 
     /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
     override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }
@@ -99,7 +99,6 @@ class LlamaTranslator(m: ModelFiles, threads: Int) : Mt {
     }
 
     companion object {
-        const val MAX_TOKENS = MT_MAX_TOKENS
         init { System.loadLibrary("jpsub") }
         @JvmStatic private external fun nativeLoad(path: String, threads: Int): Long
         @JvmStatic private external fun nativeTranslate(h: Long, prompt: String, maxTokens: Int): ByteArray?

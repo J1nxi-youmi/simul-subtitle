@@ -100,6 +100,7 @@ class CaptionService : Service() {
         try {
             // fixed for the whole session: the home screen disables these switches while running
             val online = if (prefs.mtOnline) prefs.onlineModel else null
+            val source = prefs.sourceLang; val target = prefs.targetLang
             // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stopSelf)
             if (!ModelStore(root, needsMt = { online == null }).ready()) { Log.w(TAG, "models missing, not starting"); return }
             val t0 = monoMs()
@@ -107,9 +108,9 @@ class CaptionService : Service() {
             asr = SherpaAsr(files, ASR_THREADS)
             val t1 = monoMs()
             if (stopping) return
-            val mt: Mt = if (online != null) OnlineTranslator(online) else {
+            val mt: Mt = if (online != null) OnlineTranslator(online, maxTokens = mtMaxTokens(target)) else {
                 setStatus("加载翻译模型…")
-                LlamaTranslator(files, MT_THREADS).also { local = it }
+                LlamaTranslator(files, MT_THREADS, mtMaxTokens(target)).also { local = it }
             }
             synchronized(cancelLock) { translator = mt }
             val t2 = monoMs()
@@ -123,7 +124,6 @@ class CaptionService : Service() {
             setStatus("就绪（加载 ${(t3 - t0) / 1000.0}s）")
 
             val scene = prefs.scene
-            val source = prefs.sourceLang; val target = prefs.targetLang
             val provider = prefs.jevProvider
             // one Jev client for both features; sentence ends (jevOn) and translation checks (jevCheck) are separate
             val wantJev = prefs.jevOn || prefs.jevCheck

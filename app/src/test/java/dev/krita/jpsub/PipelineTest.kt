@@ -535,6 +535,9 @@ class PipelineTest {
         assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "YOUR YOUTH"))
         assertEquals("THANK YOU. SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU.", "YOU. SO MUCH", "SO MUCH"))
         assertEquals("THANK YOU. SO MUCH", Pipeline.join("THANK YOU.", "SO MUCH"))
+        // CAN is part of CAN'T: no repeat; a whole DON'T repeated is one
+        assertEquals("WE CAN CAN'T GO", Pipeline.joinWithoutRepeat("WE CAN", "CAN'T GO", "GO"))
+        assertEquals("I DON'T KNOW", Pipeline.joinWithoutRepeat("I DON'T", "DON'T KNOW", "KNOW"))
         // Japanese with a Latin word stays unspaced, as before
         assertEquals("SCありがとう", Pipeline.join("SC", "ありがとう"))
         assertEquals("今日も一日お疲れさまでしたいただきます",

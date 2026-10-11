@@ -532,7 +532,10 @@ class Pipeline(
         /** contains a letter below the CJK ranges (Latin, also Cyrillic etc.); Japanese text has none or few */
         private fun latin(s: String) = s.any { it.isLetter() && it.code < 0x2E80 }
         /** no letter/digit on both sides of position [i] */
-        private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !s[i - 1].isLetterOrDigit() || !s[i].isLetterOrDigit()
+        private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !word(s, i - 1) || !word(s, i)
+        /** a word character; an apostrophe between letters (CAN'T, DON’T) is part of the word */
+        private fun word(s: String, i: Int) = s[i].isLetterOrDigit() ||
+            (s[i] == '\'' || s[i] == '’') && i > 0 && i < s.length - 1 && s[i - 1].isLetter() && s[i + 1].isLetter()
         /**
          * Latin-script text is joined with a space when neither side of the join is CJK (or already whitespace), so
          * "THANK YOU." + "SO" gets one; Japanese, also with a Latin word in it ("SC" + "です"), is joined directly.

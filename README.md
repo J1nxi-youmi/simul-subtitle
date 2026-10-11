@@ -1,4 +1,4 @@
-# jp-subtitle
+# 同传字幕 (simul-subtitle)
 
 Minimal Android app: captures another app's Japanese audio (screen-share / MediaProjection),
 recognises and translates it **fully on the phone**, and shows Chinese subtitles in a floating window.
@@ -39,7 +39,7 @@ No adb needed: copy `app/build/outputs/apk/release/app-release.apk` to the phone
 chat app) and open it; allow "install unknown apps" for the app you opened it from. Updates install over
 the old version (same signing key).
 
-Models (~1.21 GB) are downloaded **by the app**: open "日语字幕" → 下载模型. The system DownloadManager
+Models (~1.21 GB) are downloaded **by the app**: open "同传字幕" → 下载模型. The system DownloadManager
 fetches them from pinned Hugging Face revisions / the sherpa-onnx GitHub release (keeps going in the
 background); each file is checked for exact size and SHA-256 before it is used, so a partial or corrupt
 download is never loaded. Needs access to huggingface.co and github.com. Files copied by an older version

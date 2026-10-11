@@ -56,7 +56,7 @@ class ModelDownloader private constructor(ctx: Context) {
             store.partFile(s).parentFile?.mkdirs()
             store.partFile(s).delete()
             val req = DownloadManager.Request(Uri.parse(s.url))
-                .setTitle("日语字幕 · 模型 ${s.path.substringAfterLast('/')}")
+                .setTitle("同传字幕 · 模型 ${s.path.substringAfterLast('/')}")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationUri(Uri.fromFile(store.partFile(s)))
                 .setAllowedOverMetered(true)

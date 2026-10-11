@@ -443,7 +443,7 @@ class CaptionService : Service() {
         return Notification.Builder(this, "cap")
             .setSmallIcon(R.drawable.ic_stat_caption)
             .setColor(getColor(R.color.brand))
-            .setContentTitle("日语字幕运行中")
+            .setContentTitle("同传字幕运行中")
             .setContentText("点字幕可调整样式；点这里的「停止」结束")
             .setContentIntent(PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .addAction(Notification.Action.Builder(null, "停止", stop).build())

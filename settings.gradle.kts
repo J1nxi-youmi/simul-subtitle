@@ -4,5 +4,5 @@ pluginManagement {
 dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
-rootProject.name = "jp-subtitle"
+rootProject.name = "simul-subtitle"
 include(":app")

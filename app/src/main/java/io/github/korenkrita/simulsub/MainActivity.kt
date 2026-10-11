@@ -403,7 +403,7 @@ class MainActivity : Activity() {
                     id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
                     // narrow phones: the label shrinks (down to 10 sp) until the laid-out text is uncut, instead of
                     // being cut to "在…"; judged on the real layout, so the button's paddings and stroke count. Still
-                    // cut at 10 sp (very large system font): it may wrap to a second line.
+                    // cut at 10 sp (very large system font): it wraps over as many lines as it needs, never cut.
                     isAllCaps = false
                     setPadding((4 * dpx).toInt(), paddingTop, (4 * dpx).toInt(), paddingBottom)
                     val min = 10 * resources.displayMetrics.scaledDensity
@@ -414,7 +414,7 @@ class MainActivity : Activity() {
                         if (!cut) return@addOnLayoutChangeListener
                         if (b.textSize > min) b.post {
                             b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, maxOf(min, b.textSize - resources.displayMetrics.scaledDensity / 2))
-                        } else if (b.maxLines < 2) b.post { b.maxLines = 2 }
+                        } else b.post { b.maxLines = Int.MAX_VALUE; b.ellipsize = null }
                     }
                 }
                 addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))

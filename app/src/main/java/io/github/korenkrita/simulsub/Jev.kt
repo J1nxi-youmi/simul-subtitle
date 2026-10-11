@@ -228,11 +228,15 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                         }
                     } catch (e: IOException) { r = HttpResult(response.code, null, monoMs() - t0, why(e, t0), firstOrNull()) }
                     finally {
-                        // publish before closing: closing an unfinished chunked body may first try to drain it
-                        result.set(r); done.countDown(); started.countDown()
-                        if (firstContentMs != null) call.cancel() // the stream's end marker was read: drop the rest
-                        response.close()
-                        PENDING.release()
+                        if (firstContentMs != null) {
+                            // a stream: publish first, then drop the rest, as closing an unfinished chunked body may
+                            // first try to drain it
+                            result.set(r); done.countDown(); started.countDown()
+                            call.cancel(); response.close(); PENDING.release()
+                        } else {
+                            response.close(); PENDING.release()
+                            result.set(r); done.countDown(); started.countDown()
+                        }
                     }
                 }
             })
@@ -242,9 +246,10 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
             if (firstContentMs != null && firstContentMs < deadlineMs) {
                 started.await(maxOf(0, t0 + firstContentMs - monoMs()), TimeUnit.MILLISECONDS)
                 if (!cancelled) {
+                    val finished = done.count == 0L // read before [first]: text recorded after this read is seen too
                     val f = first.get()
                     // finished without text (an HTTP error, a failure, an empty answer): reported as what it is
-                    val late = if (f >= 0) f > firstContentMs else done.count > 0
+                    val late = if (f >= 0) f > firstContentMs else !finished
                     if (late) { call.cancel(); return HttpResult(0, null, monoMs() - t0, "no content in ${firstContentMs}ms", firstOrNull()) }
                 }
             }

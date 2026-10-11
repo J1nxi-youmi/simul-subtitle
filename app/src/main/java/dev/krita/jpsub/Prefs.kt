@@ -90,7 +90,7 @@ class Prefs(ctx: Context) {
     var jevOn: Boolean
         get() = sp.getBoolean("jevOn", false)
         set(v) = sp.edit().putBoolean("jevOn", v).apply()
-    /** With [jevOn]: also check every final translation. Off by default, its own key so an old jevOn does not turn it on. */
+    /** Check every final translation with Jev; independent of [jevOn]. Off by default, its own key so an old jevOn does not turn it on. */
     var jevCheck: Boolean
         get() = sp.getBoolean("jevCheck", false)
         set(v) = sp.edit().putBoolean("jevCheck", v).apply()

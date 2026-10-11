@@ -538,22 +538,29 @@ class PipelineTest {
 
     @Test
     fun onlyTheLastTwoSentencesAreContextAndALateRetryKeepsItsOwn() {
-        // segment 1's check is held while 2..4 are translated; its retry must still have no context (it had none)
+        // segment 1's check is held while 2..11 are translated (far enough to have evicted an old per-segment
+        // context store); its retry must still have no context, as its first translation had none
         val judge = GateJudge(choice = "negation")
-        val mt = FakeMt(1); val done = CountDownLatch(4)
+        val mt = FakeMt(1); val done = CountDownLatch(11)
         val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true)
         p.start()
-        p.submit(job(1, 1, true, 10))
-        assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
-        for ((s, n) in listOf(2L to 20, 3L to 30, 4L to 40)) p.submit(job(s, 1, true, n))
-        val t0 = System.nanoTime()
-        while (mt.calls.size < 4 && System.nanoTime() - t0 < 2_000_000_000L) Thread.sleep(5)
-        judge.gate.countDown()
-        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        try {
+            p.submit(job(1, 1, true, 10))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            for (s in 2L..11L) p.submit(job(s, 1, true, s.toInt() * 10))
+            val t0 = System.nanoTime()
+            while (mt.calls.size < 11 && System.nanoTime() - t0 < 2_000_000_000L) Thread.sleep(5)
+            assertEquals("segments 2..11 translated while 1 waits for its check", 11, mt.calls.size)
+            judge.gate.countDown()
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
         val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
         assertTrue(mt.calls[3], mt.calls[3].contains(ctx + "ja20 / ja30")) // segment 4: the last two only
         val retry1 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja10" }
         assertTrue(retry1, !retry1.contains(ctx))
+        val retry2 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja20" }
+        // its own context (just segment 1), not the newest sentences
+        assertEquals(retry2, "ja10", retry2.substringAfter(ctx).lineSequence().first().trim())
     }
 
     @Test
@@ -768,6 +775,42 @@ class PipelineTest {
         while (out.none { !it.isFinal } && monoMs() < deadline + 2000) Thread.sleep(5)
         p.stop(); p.awaitStopped()
         assertTrue(out.any { !it.isFinal && it.ja == "ja13" })
+    }
+
+    @Test
+    fun finalOnlyWithChecksPublishesNoDraftAndOnlyTheCheckedFinal() {
+        val mt = FakeMt(1); val judge = FakeJudge(unfinishedP = 0.9, choice = "negation")
+        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge,
+            checkTranslations = true, drafts = { false })
+        p.start()
+        try {
+            p.submit(job(1, 1, false, 11))
+            p.submit(job(1, 2, true, 10))
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { p.stop(); p.awaitStopped() }
+        assertTrue(out.toString(), out.none { !it.isFinal })
+        assertEquals(1, out.size)
+        assertTrue(judge.asked.toString(), judge.asked.any { it.startsWith("m:ja10|") }) // checked before it was published
+        assertEquals(2, mt.calls.size) // the first translation and its retry, nothing for the draft
+    }
+
+    @Test
+    fun checksWithoutSentenceEndJudgingNeverAskUnfinished() {
+        val judge = FakeJudge(unfinishedP = 0.9, choice = "ok")
+        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, judge = judge,
+            judgeEnds = false, checkTranslations = true)
+        p.start()
+        try {
+            p.submit(AsrJob(1, 1, false, FloatArray(12), monoMs(), endOfSpeech = true)) // a sentence-end candidate
+            p.submit(job(1, 2, true, 10))
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+            Thread.sleep(50)
+            assertEquals(null, p.holdHint(1, 1))
+        } finally { p.stop(); p.awaitStopped() }
+        assertTrue(judge.asked.toString(), judge.asked.none { it.startsWith("u:") })
+        assertTrue(judge.asked.toString(), judge.asked.any { it.startsWith("m:ja10|") })
     }
 
     /** Real-log repro (session-20261010-195346 seg 2): the longer recognition lost the thanks for a superchat. */

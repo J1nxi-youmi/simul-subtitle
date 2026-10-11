@@ -31,6 +31,8 @@ fun main() {
         "zen" -> Jev(JevProvider.ZEN, "")
         else -> Jev(JevProvider.OFFICIAL, System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY"))
     }
+    // -DjevEnds=0: with -Djev, only check translations (as the app's check switch without sentence-end judging)
+    val judgeEnds = judge != null && System.getProperty("jevEnds") != "0"
     val jsonl = System.getProperty("log")?.let { File(it).bufferedWriter() }
     val board = CaptionBoard(10)
     val t0 = System.currentTimeMillis()
@@ -48,7 +50,8 @@ fun main() {
             "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
             "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs))); w.write("\n") } }
         board.accept(c)
-    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge, checkTranslations = System.getProperty("jevCheck") == "1", // -DjevCheck=1: also check translations
+    }, onOverload = { System.err.println("OVERLOAD") }, onFailure = { failure.set(it) }, scene = scene, judge = judge,
+       judgeEnds = judgeEnds, checkTranslations = System.getProperty("jevCheck") == "1", // -DjevCheck=1: also check translations
        log = { e -> jsonl?.let { w -> synchronized(w) { w.write(Json.encode(mapOf("t" to monoMs()) + e)); w.write("\n") } } })
     p.start()
     try {
@@ -62,10 +65,10 @@ fun main() {
             val ok = p.submit(job)
             if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
         }, endSilenceMs = (System.getProperty("endSilenceMs") ?: "400").toInt(),
-           maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: if (judge != null) "5000" else "7000").toInt(), // as the app
+           maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: if (judgeEnds) "5000" else "7000").toInt(), // as the app
            minFinalMs = (System.getProperty("minFinalMs") ?: "1200").toInt(),
            maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
-           hintWaitMs = if (judge != null) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
+           hintWaitMs = if (judgeEnds) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
            holdHint = p::holdHint)
         // stream the wav in real time
         val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))

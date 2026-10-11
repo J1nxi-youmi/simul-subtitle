@@ -396,6 +396,8 @@ class MainActivity : Activity() {
     private fun <T> choice(options: List<Pair<T, String>>, current: T, onPick: (T) -> Unit) =
         com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
             isSingleSelection = true; isSelectionRequired = true
+            // a LinearLayout lines its children up on the text baseline: a button whose label shrank would sit lower
+            isBaselineAligned = false
             options.forEach { (v, t) ->
                 val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                     id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
@@ -437,7 +439,8 @@ class MainActivity : Activity() {
         // -- how it translates
         box.addView(heading("怎么翻译", top = 0))
         box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
-        val engine = choice(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "手机上翻译", MtMode.BYOK to "自己的模型\n（实验性）"), prefs.mtMode) {
+        // one line each, like the other two: the "experimental" warning is shown right below when it is picked
+        val engine = choice(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "手机上翻译", MtMode.BYOK to "自己的模型"), prefs.mtMode) {
             if (prefs.mtMode != it) { prefs.mtMode = it; renderTranslate(); render() } // local needs its model file
         }
         if (running) for (i in 0 until engine.childCount) engine.getChildAt(i).isEnabled = false

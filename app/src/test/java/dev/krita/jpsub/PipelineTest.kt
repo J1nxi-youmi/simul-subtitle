@@ -805,7 +805,7 @@ class PipelineTest {
         assertEquals(listOf("checked"), shown())
     }
 
-    /** A sentence-end candidate fully through ASR, then its final; returns what the judge was asked. */
+    /** A sentence-end candidate taken off the ASR queue (so its final cannot evict it), then its final; returns what the judge was asked. */
     private fun candidateThenFinal(judgeEnds: Boolean): List<String> {
         val judge = FakeJudge(unfinishedP = 0.9, choice = "ok")
         val recognized = CountDownLatch(1); val done = CountDownLatch(1)
@@ -817,11 +817,11 @@ class PipelineTest {
         p.start()
         try {
             p.submit(AsrJob(1, 1, false, FloatArray(12), monoMs(), endOfSpeech = true))
-            assertTrue(recognized.await(2, TimeUnit.SECONDS)) // the final cannot evict it any more
+            assertTrue(recognized.await(2, TimeUnit.SECONDS)) // taken off the queue: the final cannot evict it any more
             if (judgeEnds) {
                 val deadline = monoMs() + 2000
                 while (p.holdHint(1, 1) == null && monoMs() < deadline) Thread.sleep(5)
-            } else Thread.sleep(50) // time in which a wrongly started question would be asked
+            } else Thread.sleep(50) // a time window, not proof: a wrongly started question would usually be asked by then
             p.submit(job(1, 2, true, 10))
             assertTrue(done.await(3, TimeUnit.SECONDS))
         } finally { p.stop(); p.awaitStopped() }

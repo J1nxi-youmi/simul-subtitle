@@ -2,7 +2,7 @@
 
 ## 使用记录（JSONL）
 
-每次开始字幕都会生成一个文件：`Android/data/io.github.korenkrita.simulsub/files/logs/session-YYYYMMDD-HHMMSS.jsonl`。
+默认不记录。在「设置 → 使用记录」打开「记录每次使用」后，从下次开始字幕起，每次生成一个文件：`Android/data/io.github.korenkrita.simulsub/files/logs/session-YYYYMMDD-HHMMSS.jsonl`。关闭后不再生成新记录，已有的记录保留，可以手动删除。
 
 - 每行一个 JSON 对象，`ev` 是事件类型，`t` 是单调时钟毫秒。
 - 内容包括：会话设置（`session_start`：场景、语言、翻译方式、Jev、上下文句数等）、每次识别结果、每次翻译的完整提示词和原始输出、每次 Jev 请求和原始回答、每条显示出来的字幕。

@@ -3,7 +3,7 @@
 ## 留在手机上的
 
 - **声音**：只在手机上识别，任何情况下都不会上传，也不会保存。
-- **使用记录**：每次使用的识别、翻译和 Jev 文字记录保存在 App 自己的目录里（`Android/data/io.github.korenkrita.simulsub/files/`），不含声音和 key。只有你主动在「使用记录」里点「分享」时才会离开手机。
+- **使用记录**：默认关闭；在「设置 → 使用记录」打开后，每次使用的识别、翻译和 Jev 文字记录保存在 App 自己的目录里（`Android/data/io.github.korenkrita.simulsub/files/`），不含声音和 key。只有你主动在「使用记录」里点「分享」时才会离开手机。
 - **Jev key、自己的模型（BYOK）的 key**：用 Android Keystore 加密保存在本机。
 
 ## 会发到网络的

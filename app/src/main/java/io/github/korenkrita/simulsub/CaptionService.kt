@@ -140,9 +140,11 @@ class CaptionService : Service() {
             val judge = key?.let { Jev(provider, it, source = source, target = target) }
             val judgeEnds = judge != null && prefs.jevOn
             val checkMt = judge != null && prefs.jevCheck
-            val sl = SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
+            // off by default: a log is written only after the user turned it on in settings
+            val sl = if (!prefs.keepLogs) null
+                else SessionLog(SessionLog.dir(root), onFail = { Log.w(TAG, "session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
-            sl.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
+            sl?.write(mapOf("ev" to "session_start", "app" to BuildConfig.VERSION_NAME, "scene" to scene.name,
                 "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
                 "jev" to (if (judge != null) provider.name else null), "jev_model" to judge?.let { provider.model },
                 "jev_requested" to prefs.jevOn, "jev_ends" to judgeEnds, "jev_check" to checkMt, "dedupe_join" to prefs.dedupeJoin, "context_sentences" to contextN, "final_only" to prefs.finalOnly,
@@ -163,7 +165,7 @@ class CaptionService : Service() {
                     if (stopping) return
                     val steps = mutableListOf<ByokTranslator.Step>()
                     variant = probe.probe(steps)
-                    steps.forEach { s -> sl.write(mapOf("ev" to "byok_probe", "variant" to s.variant.name, "request" to s.result.request,
+                    steps.forEach { s -> sl?.write(mapOf("ev" to "byok_probe", "variant" to s.variant.name, "request" to s.result.request,
                         "http" to s.result.http, "response" to s.result.response, "error" to s.result.error, "usable" to s.result.usable,
                         "thinking" to s.result.thinking, "first_content_ms" to s.result.firstContentMs)) }
                     if (stopping) return
@@ -178,7 +180,7 @@ class CaptionService : Service() {
                 }
                 if (variant == null && (stored == ByokTranslator.NONE_WORKED || prefs.byokVariant(byokUrl, byokModel) == ByokTranslator.NONE_WORKED))
                     notice = "⚠ 关不掉这个模型的思考，翻译可能很慢或经常失败"
-                sl.write(mapOf("ev" to "byok", "variant" to variant?.name, "system" to system))
+                sl?.write(mapOf("ev" to "byok", "variant" to variant?.name, "system" to system))
                 mt = ByokTranslator(byokUrl, byokModel, byokKey!!, system, variant, maxTokens = mtMaxTokens(target))
                 synchronized(cancelLock) { translator = mt }
                 if (stopping) return
@@ -205,7 +207,7 @@ class CaptionService : Service() {
                 checkTranslations = checkMt,
                 dedupeJoin = prefs.dedupeJoin,
                 previousSentences = contextN,
-                log = sl::write,
+                log = { e -> sl?.write(e) },
                 drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
             )
             jevActive = judgeEnds // the segmenter's judged hold and its timings follow sentence-end judging only
@@ -244,7 +246,7 @@ class CaptionService : Service() {
 
     /** Blocking capture loop on the session thread; returns when stopping or on a read error. */
     @SuppressLint("MissingPermission") // checked in MainActivity
-    private fun capture(p: MediaProjection, pl: Pipeline, vad: SileroProb, log: SessionLog) {
+    private fun capture(p: MediaProjection, pl: Pipeline, vad: SileroProb, log: SessionLog?) {
         val cfg = AudioPlaybackCaptureConfiguration.Builder(p)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -303,7 +305,7 @@ class CaptionService : Service() {
                 if (framesRead % (16_000 * 5) < frame.size) {
                     val rms = Math.sqrt(statSq / statN.coerceAtLeast(1))
                     Log.i(TAG, "capture: frames=$framesRead rms=${"%.4f".format(rms)} vadMax=${"%.2f".format(statMaxP)} hal=$hal")
-                    log.write(mapOf("ev" to "capture", "samples" to framesRead, "rms" to rms, "vad_max" to statMaxP.toDouble(), "hal" to hal))
+                    log?.write(mapOf("ev" to "capture", "samples" to framesRead, "rms" to rms, "vad_max" to statMaxP.toDouble(), "hal" to hal))
                     statSq = 0.0; statN = 0; statMaxP = 0f
                 }
             }
@@ -314,11 +316,11 @@ class CaptionService : Service() {
         }
     }
 
-    private fun onCaption(c: Caption, log: SessionLog) {
+    private fun onCaption(c: Caption, log: SessionLog?) {
         val t = c.timing
         Log.i(TAG, "seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} audio=${t.audioMs} wait=${t.segmentWaitMs} " +
             "asrQ=${t.asrQueueMs} asr=${t.asrMs} mtQ=${t.mtQueueMs} mt=${t.mtMs} mtDone=${t.mtDoneMs} | ${c.ja} → ${c.zh}")
-        log.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "source_rev" to c.sourceRevision,
+        log?.write(mapOf("ev" to "caption", "seg" to c.segmentId, "rev" to c.revision, "source_rev" to c.sourceRevision,
             "final" to c.isFinal, "ja" to c.ja,
             "zh" to c.zh, "audio_ms" to t.audioMs, "wait_ms" to t.segmentWaitMs, "asr_q_ms" to t.asrQueueMs, "asr_ms" to t.asrMs,
             "mt_q_ms" to t.mtQueueMs, "mt_ms" to t.mtMs, "check_ms" to t.checkMs, "done_ms" to t.mtDoneMs, "hal" to !c.timeEstimated))

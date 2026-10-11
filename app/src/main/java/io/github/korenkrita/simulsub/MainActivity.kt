@@ -656,9 +656,13 @@ class MainActivity : Activity() {
         val files = SessionLog.list(getExternalFilesDir(null)!!)
         val active = SessionLog.activeFiles()
         listedLogs = files.map { it.name } to active
+        // off by default; the switch takes effect from the next start (a running session keeps what it began with)
+        switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、AI 辅助的请求和回答，不含声音和 key。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
+            prefs.keepLogs) { prefs.keepLogs = it; renderLogs() }
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
-                text = "还没有记录。每次开始字幕都会留下一份文字记录，出问题时可以分享出去帮助排查。"; textSize = 15f; setTextColor(getColor(R.color.text2))
+                text = if (prefs.keepLogs) "还没有记录。" else "还没有记录。现在不记录，打开上面的开关后才会记录。"
+                textSize = 15f; setTextColor(getColor(R.color.text2))
                 setPadding(0, (8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt())
             })
             return

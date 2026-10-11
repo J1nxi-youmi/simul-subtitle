@@ -119,6 +119,10 @@ class Prefs(ctx: Context) {
     var dedupeJoin: Boolean
         get() = sp.getBoolean("dedupeJoin", false)
         set(v) = sp.edit().putBoolean("dedupeJoin", v).apply()
+    /** Write a session log (Settings → 使用记录). Off by default: nothing is recorded until the user turns it on. */
+    var keepLogs: Boolean
+        get() = sp.getBoolean("keepLogs", false)
+        set(v) = sp.edit().putBoolean("keepLogs", v).apply()
     /** Give the translator the last finished sentences as context (on by default, as before the switch). */
     var contextOn: Boolean
         get() = sp.getBoolean("contextOn", true)

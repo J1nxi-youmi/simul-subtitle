@@ -190,6 +190,7 @@ class Segmenter(
         if (cutRevision < 0) {
             cutIndex = forcedCut()
             resumedRevision = -1 // a newer question about this utterance supersedes an older pause one
+            heldRevision = -1 // and a pause hold taken before: this newer candidate decides now
             cutRevision = ++revision
             cutAtFrames = frames.size
             emit(AsrJob(segmentId, cutRevision, false, concat(cutIndex), frames[cutIndex - 1].endAt, frames[cutIndex - 1].estimated, endOfSpeech = true))

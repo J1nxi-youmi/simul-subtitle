@@ -71,7 +71,8 @@ class CaptionService : Service() {
         set(j) {
             if (j === field) return
             jevWatch?.close()
-            jevWatch = j?.watch { refresh() }
+            // an activation queued before onDestroy and run after it must not watch again (the service would be kept)
+            jevWatch = if (stopping) null else j?.watch { refresh() }
             field = j
         }
     private var jevWatch: AutoCloseable? = null

@@ -31,9 +31,10 @@ enum class JevProvider(val label: String, val url: String, val model: String, va
 /**
  * One request with everything the session log needs. [answer] is the parsed `answers.x`, null on any failure.
  * [limit]: the service limited requests (HTTP 429), now or before (then nothing was sent, [error] "paused").
+ * [gen]: the service's limit generation when the request was let out (see [Judge.limitedAfter]); -1 = not sent.
  */
 class JevCall(val request: String, val status: Int, val response: String?, val ms: Long, val error: String?, val answer: Map<*, *>?,
-              val limit: JevLimit? = null) {
+              val limit: JevLimit? = null, val gen: Int = -1) {
     val noul: Double? get() = (answer?.get("noul") as? Number)?.toDouble()
     val choice: String? get() = answer?.get("choice") as? String
     val confidence: Double? get() = (answer?.get("confidence") as? Number)?.toDouble()
@@ -42,9 +43,9 @@ class JevCall(val request: String, val status: Int, val response: String?, val m
 /**
  * A 429 from a Jev service: no request is sent to it before [untilMs] (monotonic). [resumeAt] is the wall time
  * its Retry-After named, null when it named none (then a short backoff, retried by the next request). [free]:
- * OpenCode Zen's free usage limit (FreeUsageLimitError).
+ * OpenCode Zen's free usage limit (FreeUsageLimitError). [gen]: the generation this 429 started.
  */
-class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean)
+class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean, val gen: Int = 0)
 
 /** What the pipeline asks; an interface so tests can answer without a network. */
 interface Judge {
@@ -56,7 +57,15 @@ interface Judge {
     fun cancel()
     /** The service limited requests and the pause has not ended: a question now is not sent. */
     fun paused(): JevLimit? = null
+    /**
+     * The service sent a 429 after a request of generation [gen] was let out: that request's answer is from before
+     * the limit and is not acted on, also once a short pause is over.
+     */
+    fun limitedAfter(gen: Int): Boolean = false
 }
+
+/** A request held back at the moment it would be sent (see [Calls.post] admit). */
+class PausedException : IOException("paused")
 
 class Jev(
     private val provider: JevProvider,
@@ -77,13 +86,14 @@ class Jev(
     private val unfinishedQ = unfinishedQuestion(source)
     private val mistranslationQ = mistranslationQuestion(source, target)
     /** the pause is per service and credentials, so a rebuilt setup (new client) does not end it */
-    private val limitKey = "$url\n$apiKey"
+    private val svc = SERVICES.computeIfAbsent("$url\n$apiKey") { Service() }
 
     override fun unfinished(text: String) = ask(mapOf("current" to text), unfinishedQ)
     override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), mistranslationQ)
 
     override fun cancel() = calls.cancel()
-    override fun paused(): JevLimit? = LIMITS[limitKey]?.takeIf { clock() < it.untilMs }
+    override fun paused(): JevLimit? = synchronized(svc) { svc.limit?.takeIf { clock() < it.untilMs } }
+    override fun limitedAfter(gen: Int): Boolean = synchronized(svc) { gen >= 0 && svc.gen > gen }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
         val body = Json.encode(mapOf("model" to provider.model, "state" to state, "questions" to mapOf("x" to question)))
@@ -91,24 +101,33 @@ class Jev(
         if (provider.needsKey && !validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
         paused()?.let { return JevCall(body, 0, null, 0, "paused", null, it) }
         val auth = if (provider.needsKey) mapOf("Authorization" to "Bearer $apiKey") else emptyMap()
-        // the pause starts when the 429's headers arrive (the other question waits no longer than that); its body
-        // only tells whether it is Zen's free limit
-        fun pause(retryAfter: String?, free: Boolean): JevLimit {
-            // only a value that would overflow is bounded: a long wait the service asks for is kept
-            val secs = retrySeconds(retryAfter, wall())?.coerceAtMost(1_000_000_000_000L)
-            val l = JevLimit(clock() + (secs ?: BACKOFF_S) * 1000, secs?.let { wall() + it * 1000 }, free)
-            // a later end wins: an older request's answer arriving now never shortens (or ends) a pause
-            return LIMITS.merge(limitKey, l) { a, b -> if (b.untilMs > a.untilMs) b else JevLimit(a.untilMs, a.resumeAt, a.free || b.free) }!!
+        // let out only when not paused, checked again when the request really goes out (it may have waited in
+        // OkHttp's queue); the generation it went out with tells a later 429 apart
+        val sentGen = java.util.concurrent.atomic.AtomicInteger(-1)
+        val admit = { synchronized(svc) { if (svc.limit?.let { clock() < it.untilMs } == true) false else { sentGen.set(svc.gen); true } } }
+        // the pause starts when the 429's headers arrive (the other question waits no longer than that): a new
+        // generation; a later end wins, an older request's answer never shortens (or ends) a pause
+        val myGen = java.util.concurrent.atomic.AtomicInteger(-1)
+        val on429 = { retryAfter: String? ->
+            val secs = retrySeconds(retryAfter, wall())?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
+            synchronized(svc) {
+                svc.gen++; myGen.set(svc.gen)
+                val until = clock() + (secs ?: BACKOFF_S) * 1000
+                val old = svc.limit
+                svc.limit = if (old != null && old.untilMs >= until) JevLimit(old.untilMs, old.resumeAt, old.free, svc.gen)
+                    else JevLimit(until, secs?.let { wall() + it * 1000 }, false, svc.gen)
+            }
         }
-        val r = calls.post(url, body, auth, beforeSend, on429 = { pause(it, false) })
+        val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit)
+        if (r.error == "paused") return JevCall(body, 0, null, r.ms, "paused", null, paused())
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null
-        // the end was fixed by the headers; the body only adds whether it is the free limit
-        val limit = if (r.status != 429) null else {
+        // the end was fixed by the headers; the body only adds whether it is the free limit, to its own generation
+        val limit = if (r.status != 429) null else synchronized(svc) {
+            if (myGen.get() < 0) on429(r.retryAfter) // headers seen without the callback (cannot happen; kept safe)
             val free = isZenFreeLimit(provider, r.body)
-            LIMITS.computeIfPresent(limitKey) { _, a -> if (free && !a.free) JevLimit(a.untilMs, a.resumeAt, true) else a }
-                ?: pause(r.retryAfter, free)
+            svc.limit?.let { l -> if (free && l.gen == myGen.get() && !l.free) JevLimit(l.untilMs, l.resumeAt, true, l.gen).also { svc.limit = it } else l }
         }
         // a 200 is a success only when it answers the question asked (a number for noul, a known class for choice)
         val usable = answer?.takeIf { a ->
@@ -121,14 +140,16 @@ class Jev(
         }
         // a server may echo the key back (also JSON-escaped); the session log is shareable
         return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms,
-            r.error ?: if (usable == null) "HTTP ${r.status}" else null, usable, limit)
+            r.error ?: if (usable == null) "HTTP ${r.status}" else null, usable, limit, sentGen.get())
     }
 
     companion object {
         /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
-        /** pauses after a 429, by service and credentials, for the whole process (a new session still waits) */
-        private val LIMITS = java.util.concurrent.ConcurrentHashMap<String, JevLimit>()
+        /** one Jev service with its credentials: its pause and its limit generation (guarded by itself) */
+        private class Service { var gen = 0; var limit: JevLimit? = null }
+        /** by service and credentials, for the whole process (a new session still waits) */
+        private val SERVICES = java.util.concurrent.ConcurrentHashMap<String, Service>()
         /** a 429 without a usable Retry-After: tried again after this */
         const val BACKOFF_S = 60L
 
@@ -260,11 +281,13 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
              firstContentMs: Long? = null, isContent: (String) -> Boolean = { false },
              isEnd: (String) -> Boolean = { false },
              /** a 429's headers arrived (its Retry-After, as sent): called at once, before its body is read */
-             on429: (String?) -> Unit = {}): HttpResult {
+             on429: (String?) -> Unit = {},
+             /** asked right before the request goes out (after any wait in OkHttp's queue): false = not sent, "paused" */
+             admit: () -> Boolean = { true }): HttpResult {
         val t0 = monoMs()
         if (cancelled) return HttpResult(0, null, 0, "cancelled")
         val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
-            .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+            .apply { headers.forEach { (k, v) -> header(k, v) } }.tag(Admit::class.java, Admit(admit)).build()
         val call = client.newCall(req)
         // counted down by the end of the call, by cancel(), and (streamed) by the first content line
         val done = CountDownLatch(1)
@@ -358,6 +381,7 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
 
     private fun why(e: IOException, t0: Long) = when {
         cancelled -> "cancelled"
+        e is PausedException -> "paused"
         // callTimeout cancels the call itself, so it is told apart by elapsed time, not isCanceled()
         monoMs() - t0 >= deadlineMs - 50 -> "deadline ${deadlineMs}ms"
         e.message == "Canceled" -> "cancelled"
@@ -397,7 +421,13 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         private val BASE = OkHttpClient.Builder()
             .followRedirects(false).followSslRedirects(false) // never resend a key to another host
             .retryOnConnectionFailure(false)
+            // the last check before a request goes out, on the thread that sends it (after OkHttp's queue)
+            .addInterceptor { chain ->
+                if (chain.request().tag(Admit::class.java)?.ok?.invoke() == false) throw PausedException()
+                chain.proceed(chain.request())
+            }
             .build()
+        private class Admit(val ok: () -> Boolean)
         /** tests */
         fun pendingNow() = MAX_PENDING - PENDING.availablePermits()
     }

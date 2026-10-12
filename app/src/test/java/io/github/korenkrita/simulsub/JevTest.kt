@@ -26,6 +26,10 @@ class JevTest {
     @Volatile private var redirectTo: String? = null
     /** extra header lines for the plain reply, e.g. "Retry-After: 30" */
     @Volatile private var extraHeaders = ""
+    /** when set, the reply to request number [holdHit] waits on [holdGate] after it is received (truly in flight) */
+    @Volatile private var holdHit = -1
+    private val holdGate = java.util.concurrent.CountDownLatch(1)
+    private val held = java.util.concurrent.CountDownLatch(1)
     /** streamed reply: (text, pause before it) pieces written one by one after the headers, no Content-Length */
     @Volatile private var pieces: List<Pair<String, Long>>? = null
 
@@ -44,6 +48,8 @@ class JevTest {
                         val body = ByteArray(len).also { var o = 0; while (o < len) o += inp.read(it, o, len - o) }
                         hits.incrementAndGet()
                         lastAuth.set(headers["authorization"]); lastBody.set(String(body))
+                        val n = hits.get()
+                        if (n == holdHit) { held.countDown(); holdGate.await() }
                         Thread.sleep(delayMs)
                         val out = sock.getOutputStream()
                         val r = redirectTo
@@ -53,7 +59,7 @@ class JevTest {
                             for ((p, pause) in ps) { Thread.sleep(pause); out.write(p.toByteArray()); out.flush() }
                             return@use
                         }
-                        val (code, text) = reply(hits.get())
+                        val (code, text) = reply(n)
                         val b = text.toByteArray()
                         out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\n${extraHeaders}Connection: close\r\n\r\n".toByteArray())
                         out.flush()
@@ -670,21 +676,63 @@ class JevTest {
     }
 
     @Test
-    fun aLateAnswerOfAnOlderRequestDoesNotEndOrShortenThePause() {
-        // first request: 600 s; the second, sent before that pause began, comes back later with 5 s / or with 200
+    fun aRequestHeldBeforeSendingIsNotSentOnceAPauseBegan() {
         val gate = java.util.concurrent.CountDownLatch(1)
-        reply = { 429 to zenLimit }
-        val slow = Jev(JevProvider.OFFICIAL, "sk-secret", 5_000, url = "http://127.0.0.1:$port/v1/systemone",
-            beforeSend = { gate.await() }, clock = { now }, wall = { wallNow })
+        val entered = java.util.concurrent.CountDownLatch(1)
+        reply = { 429 to zenLimit }; extraHeaders = "Retry-After: 600\r\n"
+        // passed the first check, then waits before it is sent (as in OkHttp's queue)
+        val slow = Jev(JevProvider.ZEN, "sk-secret", 5_000, url = "http://127.0.0.1:$port/v1/systemone",
+            beforeSend = { entered.countDown(); gate.await() }, clock = { now }, wall = { wallNow })
         val late = AtomicReference<JevCall>()
         val t = Thread { late.set(slow.unfinished("old")) }.apply { start() }
-        Thread.sleep(100) // the slow one has passed the pause check and waits to be sent
-        extraHeaders = "Retry-After: 600\r\n"
-        val j = timedJev(); j.unfinished("a")
-        extraHeaders = "Retry-After: 5\r\n"
+        assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        timedJev().unfinished("a") // 429: paused
+        assertEquals(1, hits.get())
         gate.countDown(); t.join(5_000)
-        assertEquals(429, late.get().status)
+        assertEquals("paused", late.get().error)
+        assertEquals(1, hits.get()) // held back at the last check, nothing sent
+    }
+
+    @Test
+    fun aLateAnswerOfARequestInFlightDoesNotEndOrShortenThePauseAndIsMarkedStale() {
+        // request 1 is received by the server and its reply held; request 2 gets a 429 meanwhile
+        holdHit = 1
+        reply = { if (it == 1) 200 to """{"answers":{"x":{"noul":0.9}}}""" else 429 to zenLimit }
+        extraHeaders = "Retry-After: 600\r\n"
+        val j = timedJev()
+        val late = AtomicReference<JevCall>()
+        val t = Thread { late.set(j.unfinished("old")) }.apply { start() }
+        assertTrue(held.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val limited = timedJev().unfinished("a")
+        assertEquals(429, limited.status)
+        holdGate.countDown(); t.join(5_000)
+        // the old answer arrives fine, but it is from before the limit
+        assertEquals(0.9, late.get().noul!!, 1e-9)
+        assertTrue(j.limitedAfter(late.get().gen))
         assertEquals(1_000_000L + 600_000, j.paused()!!.untilMs)
+        // also once a short pause is over: still stale (the generation stays)
+        now += 600_000
+        assertNull(j.paused())
+        assertTrue(j.limitedAfter(late.get().gen))
+        // a request after the pause is current again
+        reply = { 200 to """{"answers":{"x":{"noul":0.2}}}""" }
+        val fresh = j.unfinished("new")
+        assertFalse(j.limitedAfter(fresh.gen))
+    }
+
+    @Test
+    fun aRetryAfterOfZeroStillMakesOlderAnswersStale() {
+        holdHit = 1
+        reply = { if (it == 1) 200 to """{"answers":{"x":{"noul":0.9}}}""" else 429 to zenLimit }
+        extraHeaders = "Retry-After: 0\r\n"
+        val j = timedJev()
+        val late = AtomicReference<JevCall>()
+        val t = Thread { late.set(j.unfinished("old")) }.apply { start() }
+        assertTrue(held.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        timedJev().unfinished("a")
+        assertNull(j.paused()) // no pause at all
+        holdGate.countDown(); t.join(5_000)
+        assertTrue(j.limitedAfter(late.get().gen))
     }
 
     @Test

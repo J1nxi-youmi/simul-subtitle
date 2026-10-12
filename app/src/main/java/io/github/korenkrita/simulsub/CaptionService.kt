@@ -65,10 +65,13 @@ class CaptionService : Service() {
     @Volatile private var overloaded = false
     /** the Jev client of the setup published last; its pause shows without a new request. Main thread only. */
     private var activeJudge: Judge? = null
-    /** Jev's light state: its last result, or the pause the current client is in (also from before this session). */
+    /**
+     * Jev's light state: a pause the current client is in wins (also one from before this session, or newer than the
+     * last result's); otherwise the last real result.
+     */
     private fun jevNow(): ServiceCall? {
         val p = activeJudge?.paused() ?: return jevState
-        return jevState?.takeIf { it.limit != null } ?: ServiceCall(false, 429, "paused", p, jevFrom)
+        return ServiceCall(false, 429, "paused", p, jevFrom)
     }
     /** the translator in use: BYOK by the service its probe accepted, others by model */
     private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
@@ -370,22 +373,22 @@ class CaptionService : Service() {
                     val b = make(s, v, wait = false) ?: return@Runnable
                     // the version check and the publication under the lock every change bumps the version under: a newer
                     // change or the session end either comes before (this setup is dropped) or after (it rebuilds again)
-                    if (!order.publish(v) { pl.setSetup(b.setup) }) return@Runnable
+                    // another translator or Jev service: its light starts unknown (grey), never the old one's. The
+                    // switch is queued on the main thread before the new setup can produce any result
+                    val m = mtService(s, b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
+                    val mtNew = m != mtId; val jevNew = j != jevId
+                    val judge = b.setup.judge
+                    val activate = Runnable {
+                        activeJudge = judge
+                        if (mtNew) { mtFrom = v; mtState = null }
+                        if (jevNew) { jevFrom = v; jevState = null }
+                        refresh()
+                    }
+                    if (!order.publish(v) { pl.setSetup(b.setup) { main.post(activate) } }) return@Runnable
+                    mtId = m; jevId = j
                     published = v
                     inUse = b.byok
                     notice = b.notice
-                    // another translator or Jev service: its light starts unknown (grey), never the old one's. Only
-                    // results of older setups are dropped: one of this setup may already have arrived
-                    val m = mtService(s, b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
-                    val mtNew = m != mtId; val jevNew = j != jevId
-                    mtId = m; jevId = j
-                    val judge = b.setup.judge
-                    main.post {
-                        activeJudge = judge
-                        if (mtNew) { mtFrom = v; if ((mtState?.setup ?: v) < v) mtState = null }
-                        if (jevNew) { jevFrom = v; if ((jevState?.setup ?: v) < v) jevState = null }
-                        refresh()
-                    }
                     logUsed(b, s, change = true)
                     refresh()
                 } catch (t: Throwable) {

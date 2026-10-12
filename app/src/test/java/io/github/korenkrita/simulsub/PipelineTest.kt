@@ -751,17 +751,20 @@ class PipelineTest {
         val gate = CountDownLatch(1)
         val entered = CountDownLatch(1)
         @Volatile var limit: JevLimit? = null
+        /** a 429 came after the questions went out (generation 0); with [limit] null too: a pause already over */
+        @Volatile var gen = 0
         val asked = Collections.synchronizedList(ArrayList<String>())
         override fun unfinished(text: String): JevCall {
             asked.add("u"); entered.countDown(); gate.await()
-            return JevCall("{req}", 200, "{}", 1, null, mapOf("noul" to 0.95))
+            return JevCall("{req}", 200, "{}", 1, null, mapOf("noul" to 0.95), gen = 0)
         }
         override fun mistranslation(ja: String, zh: String): JevCall {
             asked.add("m"); entered.countDown(); gate.await()
-            return JevCall("{req}", 200, "{}", 1, null, mapOf("choice" to "negation", "confidence" to 0.99))
+            return JevCall("{req}", 200, "{}", 1, null, mapOf("choice" to "negation", "confidence" to 0.99), gen = 0)
         }
         override fun cancel() { gate.countDown() }
         override fun paused(): JevLimit? = limit
+        override fun limitedAfter(gen: Int) = gen >= 0 && this.gen > gen
     }
 
     @Test
@@ -804,6 +807,65 @@ class PipelineTest {
         } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
         assertEquals(1, mt.calls.size)
         assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
+    }
+
+    @Test
+    fun aLateAnswerAfterAShortPauseEndedStillDoesNotHoldOrRetranslate() {
+        // a 429 with Retry-After 0 (or a short pause already over) while the questions were out: no pause now, but
+        // their answers are from before it
+        val judge = LateJudge()
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge)
+        p.start()
+        try {
+            assertTrue(p.judged(1))
+            p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            judge.gen = 1
+            judge.gate.countDown()
+            val deadline = monoMs() + 2000
+            while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(false, p.holdHint(1, 2))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+
+        val judge2 = LateJudge()
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p2 = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge2, judgeEnds = false,
+            checkTranslations = true)
+        p2.start()
+        try {
+            p2.submit(job(1, 3, true, 10))
+            assertTrue(judge2.entered.await(2, TimeUnit.SECONDS))
+            judge2.gen = 1
+            judge2.gate.countDown()
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { judge2.gate.countDown(); p2.stop(); p2.awaitStopped() }
+        assertEquals(1, mt.calls.size)
+    }
+
+    @Test
+    fun aCachedHoldIsDroppedByALaterLimit() {
+        val judge = FakeJudgeWithGen()
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge)
+        p.start()
+        try {
+            assertTrue(p.judged(1))
+            p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            val deadline = monoMs() + 2000
+            while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(true, p.holdHint(1, 2))
+            judge.gen = 1 // a 429 elsewhere, its pause already over
+            assertEquals(false, p.holdHint(1, 2))
+        } finally { p.stop(); p.awaitStopped() }
+    }
+
+    private class FakeJudgeWithGen : Judge {
+        @Volatile var gen = 0
+        override fun unfinished(text: String) = JevCall("{req}", 200, "{}", 1, null, mapOf("noul" to 0.95), gen = 0)
+        override fun mistranslation(ja: String, zh: String) = JevCall("{req}", 200, "{}", 1, null, mapOf("choice" to "ok", "confidence" to 0.9), gen = 0)
+        override fun cancel() {}
+        override fun limitedAfter(gen: Int) = gen >= 0 && this.gen > gen
     }
 
     @Test

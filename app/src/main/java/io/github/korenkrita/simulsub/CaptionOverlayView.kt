@@ -96,7 +96,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     }
     /** Grey = off or not asked yet, green = the last request worked, yellow = limited (paused), red = failed. */
     enum class Light(val color: Int, val word: String) {
-        GREY(0xFF8B8B94.toInt(), "未使用"), GREEN(0xFF81C995.toInt(), "正常"),
+        GREY(0xFF8B8B94.toInt(), "未用到"), GREEN(0xFF81C995.toInt(), "正常"),
         YELLOW(0xFFFDD663.toInt(), "受限"), RED(0xFFF28B82.toInt(), "出错"),
     }
     private fun lightView() = TextView(context).apply {
@@ -110,9 +110,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private fun showLight(t: TextView, name: String, l: Light, why: String?) {
         val dot = GradientDrawable().apply { shape = GradientDrawable.OVAL; setSize(dp(7f).toInt(), dp(7f).toInt()); setColor(l.color) }
         t.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null)
-        // a word says it too (a light is never told by its colour alone); the full reason is in the warning line
-        t.text = if (l == Light.GREEN || l == Light.GREY) name else "$name ${l.word}"
-        t.contentDescription = "$name ${l.word}${why?.let { "，$it" } ?: ""}"
+        // every state has a word (a light is never told by its colour alone); grey says "未开启" for a switched-off
+        // service; the full reason of a fault is in the warning line
+        val word = if (l == Light.GREY && why == "未开启") why else l.word
+        t.text = "$name $word"
+        t.contentDescription = "$name $word${why?.takeIf { it != word }?.let { "，$it" } ?: ""}"
     }
     /** The toolbar's service row: the translator and Jev, each with a light and, when not fine, why. */
     fun setServices(mt: Light, jev: Light, mtWhy: String?, jevWhy: String?) {

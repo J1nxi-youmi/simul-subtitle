@@ -154,11 +154,13 @@ class Pipeline(
     /**
      * New segments use [s] from now on; a segment already started keeps its own. Settings fixed for the session
      * ([judgeEnds], [checkTranslations], the drafts switch) are not part of a setup. Thread-safe; returns false
-     * once the pipeline is stopped (the caller then releases [s] itself).
+     * once the pipeline is stopped (the caller then releases [s] itself). [beforeVisible] runs once it is sure to be
+     * taken, before any worker can use it (so anything it queues comes before the results of [s]).
      */
-    fun setSetup(s: Setup): Boolean {
+    fun setSetup(s: Setup, beforeVisible: () -> Unit = {}): Boolean {
         synchronized(lock) {
             if (!running) return false
+            beforeVisible()
             live.add(s)
             current = s
         }
@@ -189,15 +191,18 @@ class Pipeline(
         return j != null && judgeEnds && j.paused() == null
     }
 
-    /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished. */
-    private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Boolean>()
+    /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished, with the answer's limit generation. */
+    private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Pair<Boolean, Int>>()
     /** The newest endOfSpeech draft waiting for Jev; an older one that has not started is replaced. */
     private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Setup>?>(null)
 
     /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
-        // the segment's own judge limited meanwhile (e.g. by a check): finished now, over an earlier "hold"
-        val h = if (segSetup[segmentId]?.judge?.paused() != null) false else hints[segmentId to revision] ?: return null
+        // the segment's own judge limited since this answer's request went out (also a pause already over), or now:
+        // finished, over an earlier "hold"
+        val (hold, gen) = hints[segmentId to revision] ?: (null to -1)
+        val j = segSetup[segmentId]?.judge
+        val h = if (j != null && (j.paused() != null || j.limitedAfter(gen))) false else hold ?: return null
         // the segmenter asks on every frame: log only the first read, which is when the answer took effect
         if (hintsUsed.add(segmentId to revision)) log(mapOf("ev" to "hint_used", "seg" to segmentId, "rev" to revision, "hold" to h))
         return h
@@ -362,7 +367,7 @@ class Pipeline(
                 // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent.
                 // No judge in this segment's setup (key missing for now) or one the service limited: no question,
                 // the segmenter cuts at once as without Jev instead of waiting for an answer that never comes
-                if (ja.isEmpty() || setup.judge == null || setup.judge.paused() != null) hints[job.segmentId to job.revision] = false
+                if (ja.isEmpty() || setup.judge == null || setup.judge.paused() != null) hints[job.segmentId to job.revision] = false to -1
                 else pendingJudge.set(Triple(job, ja, setup))
             }
             synchronized(lock) {
@@ -389,9 +394,11 @@ class Pipeline(
             reportJev(call, judge, setup)
             val p = call.noul
             // limited (now or already paused): finished, so the segmenter cuts at the pause instead of waiting
-            val unfinished = if (call.limit != null || judge.paused() != null) false else p?.let { it >= UNFINISHED_THRESHOLD }
+            // an answer to a request that a 429 overtook is from before the limit: finished too
+            val unfinished = if (call.limit != null || judge.paused() != null || judge.limitedAfter(call.gen)) false
+                else p?.let { it >= UNFINISHED_THRESHOLD }
             if (unfinished != null) {
-                hints[job.segmentId to job.revision] = unfinished
+                hints[job.segmentId to job.revision] = unfinished to call.gen
                 hints.keys.removeIf { it.first < job.segmentId - 8 }
                 hintsUsed.removeIf { it.first < job.segmentId - 8 }
             }
@@ -484,7 +491,7 @@ class Pipeline(
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
         reportJev(call, judge, j.setup)
         // limited meanwhile (this answer may be an older request's): the translation is kept, nothing is retried
-        val note = call.choice?.takeIf { call.limit == null && judge.paused() == null }
+        val note = call.choice?.takeIf { call.limit == null && judge.paused() == null && !judge.limitedAfter(call.gen) }
             ?.let { fixNote(it, j.setup.source, j.setup.target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")

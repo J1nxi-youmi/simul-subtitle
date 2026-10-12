@@ -753,7 +753,7 @@ class MainActivity : Activity() {
         val active = SessionLog.activeFiles()
         listedLogs = files.map { it.name } to active
         // off by default; the switch takes effect from the next start (a running session keeps what it began with)
-        switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、AI 辅助的请求和回答，不含声音和 key。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
+        switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含声音和 key。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
             prefs.keepLogs) { prefs.keepLogs = it; renderLogs() }
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {

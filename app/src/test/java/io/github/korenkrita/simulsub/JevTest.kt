@@ -736,6 +736,53 @@ class JevTest {
     }
 
     @Test
+    fun theLastCheckRunsAfterTheConnectionIsMade() {
+        // held in its DNS lookup (after the queue, before the connection); the check it then meets is the last one
+        val dnsGate = java.util.concurrent.CountDownLatch(1)
+        val inDns = java.util.concurrent.CountDownLatch(1)
+        val dns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                inDns.countDown(); dnsGate.await(); return listOf(InetAddress.getByName("127.0.0.1"))
+            }
+        }
+        val open = java.util.concurrent.atomic.AtomicBoolean(true)
+        val r = AtomicReference<HttpResult>()
+        val t = Thread {
+            r.set(Calls(5_000, dns, java.net.Proxy.NO_PROXY).post("http://jev.test:$port/v1/systemone", "{}", emptyMap(), admit = { open.get() }))
+        }.apply { start() }
+        assertTrue(inDns.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        open.set(false) // a pause began while it waited for its connection
+        dnsGate.countDown(); t.join(5_000)
+        assertEquals("paused", r.get().error)
+        assertEquals(0, hits.get())
+    }
+
+    @Test
+    fun one429RaisesTheGenerationOnceAlsoWhenTheDeadlineSeesItFirst() {
+        // the headers' callback is held (in its wall-clock read) until after the caller gave up at its deadline
+        val inCallback = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val callbackThread = AtomicReference<Thread>()
+        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }; extraHeaders = "Retry-After: 0\r\n"
+        val j = Jev(JevProvider.ZEN, "sk-secret", 600, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = {
+            if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
+                inCallback.countDown(); release.await()
+            }
+            wallNow
+        })
+        val first = j.unfinished("a")
+        assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(429, first.status)
+        val fresh = j.unfinished("b")
+        assertEquals(200, fresh.status)
+        assertFalse(j.limitedAfter(fresh.gen))
+        release.countDown()
+        Thread.sleep(200) // the held callback finishes
+        // the same 429 seen twice is still one limit: the fresh answer stays current
+        assertFalse(j.limitedAfter(fresh.gen))
+    }
+
+    @Test
     fun thePauseStartsWhenThe429HeadersArriveAndOutlastsASlowBody() {
         // headers at once, the body never completes before the deadline
         reply = { 429 to zenLimit }; extraHeaders = "Retry-After: 120\r\n"; trickleMs = 1_000

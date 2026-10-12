@@ -81,8 +81,9 @@ class Jev(
     /** tests */
     private val clock: () -> Long = ::monoMs,
     private val wall: () -> Long = System::currentTimeMillis,
+    dns: okhttp3.Dns = okhttp3.Dns.SYSTEM,
 ) : Judge {
-    private val calls = Calls(deadlineMs)
+    private val calls = Calls(deadlineMs, dns)
     private val unfinishedQ = unfinishedQuestion(source)
     private val mistranslationQ = mistranslationQuestion(source, target)
     /** the pause is per service and credentials, so a rebuilt setup (new client) does not end it */
@@ -101,21 +102,25 @@ class Jev(
         if (provider.needsKey && !validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
         paused()?.let { return JevCall(body, 0, null, 0, "paused", null, it) }
         val auth = if (provider.needsKey) mapOf("Authorization" to "Bearer $apiKey") else emptyMap()
-        // let out only when not paused, checked again when the request really goes out (it may have waited in
-        // OkHttp's queue); the generation it went out with tells a later 429 apart
+        // let out only when not paused, checked again right before the request is written (after OkHttp's queue and
+        // the connection); the generation it went out with tells a later 429 apart
         val sentGen = java.util.concurrent.atomic.AtomicInteger(-1)
         val admit = { synchronized(svc) { if (svc.limit?.let { clock() < it.untilMs } == true) false else { sentGen.set(svc.gen); true } } }
-        // the pause starts when the 429's headers arrive (the other question waits no longer than that): a new
-        // generation; a later end wins, an older request's answer never shortens (or ends) a pause
+        // the pause starts when the 429's headers arrive (the other question waits no longer than that): one new
+        // generation per response, installed once whichever path sees it first; a later end wins, an older
+        // request's answer never shortens (or ends) a pause
         val myGen = java.util.concurrent.atomic.AtomicInteger(-1)
         val on429 = { retryAfter: String? ->
-            val secs = retrySeconds(retryAfter, wall())?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
+            val at = clock(); val atWall = wall()
+            val secs = retrySeconds(retryAfter, atWall)?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
             synchronized(svc) {
-                svc.gen++; myGen.set(svc.gen)
-                val until = clock() + (secs ?: BACKOFF_S) * 1000
-                val old = svc.limit
-                svc.limit = if (old != null && old.untilMs >= until) JevLimit(old.untilMs, old.resumeAt, old.free, svc.gen)
-                    else JevLimit(until, secs?.let { wall() + it * 1000 }, false, svc.gen)
+                if (myGen.get() < 0) {
+                    svc.gen++; myGen.set(svc.gen)
+                    val until = at + (secs ?: BACKOFF_S) * 1000
+                    val old = svc.limit
+                    svc.limit = if (old != null && old.untilMs >= until) JevLimit(old.untilMs, old.resumeAt, old.free, svc.gen)
+                        else JevLimit(until, secs?.let { atWall + it * 1000 }, false, svc.gen)
+                }
             }
         }
         val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit)
@@ -125,7 +130,7 @@ class Jev(
         else null
         // the end was fixed by the headers; the body only adds whether it is the free limit, to its own generation
         val limit = if (r.status != 429) null else synchronized(svc) {
-            if (myGen.get() < 0) on429(r.retryAfter) // headers seen without the callback (cannot happen; kept safe)
+            on429(r.retryAfter) // a no-op when the headers already installed it (the usual case)
             val free = isZenFreeLimit(provider, r.body)
             svc.limit?.let { l -> if (free && l.gen == myGen.get() && !l.free) JevLimit(l.untilMs, l.resumeAt, true, l.gen).also { svc.limit = it } else l }
         }
@@ -421,8 +426,9 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         private val BASE = OkHttpClient.Builder()
             .followRedirects(false).followSslRedirects(false) // never resend a key to another host
             .retryOnConnectionFailure(false)
-            // the last check before a request goes out, on the thread that sends it (after OkHttp's queue)
-            .addInterceptor { chain ->
+            // the last check before a request is written: a network interceptor runs once the connection is up (after
+            // OkHttp's queue, DNS, connect and TLS), on the thread that then sends it
+            .addNetworkInterceptor { chain ->
                 if (chain.request().tag(Admit::class.java)?.ok?.invoke() == false) throw PausedException()
                 chain.proceed(chain.request())
             }

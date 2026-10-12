@@ -499,17 +499,22 @@ class Pipeline(
         }
         logJev("mistranslation", job.segmentId, job.revision, call, "retranslate:${call.choice}")
         // only the MT thread translates (one translator, one cache): hand the retry over and wait for it
-        val req = Retry(j, note, previous)
+        val req = Retry(j, note, previous) { judge.paused() != null || judge.limitedAfter(call.gen) }
         synchronized(lock) { retryQueue.addLast(req) }
         while (running && !failed && !req.done.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)) Unit
         // an internal failure of the MT thread fails the pipeline (guarded); never publish on top of it
         if (req.crashed) throw IllegalStateException("retranslation failed on the MT thread")
         retryMs(req.ms)
+        // a 429 since the answer (also while the retry ran): that answer is stale, the first translation stays
+        if (req.stale()) return zh
         return req.result?.takeIf { it.usable }?.text ?: zh
     }
 
-    /** A retranslation the check thread asks the MT thread for; [done] is counted down whatever happened. */
-    private class Retry(val j: MtJob, val note: String, val previous: List<String>) {
+    /**
+     * A retranslation the check thread asks the MT thread for; [done] is counted down whatever happened. [stale]: the
+     * Jev answer that asked for it was overtaken by a 429 (it is then not run, and its result not used).
+     */
+    private class Retry(val j: MtJob, val note: String, val previous: List<String>, val stale: () -> Boolean) {
         val done = java.util.concurrent.CountDownLatch(1)
         @Volatile var result: MtResult? = null
         @Volatile var ms = 0L
@@ -555,7 +560,7 @@ class Pipeline(
             if (req != null) {
                 try {
                     val t0 = clock()
-                    req.result = translate(req.j.q.job, req.j.setup, 2, req.j.ja, listOf(req.note), req.previous)
+                    if (!req.stale()) req.result = translate(req.j.q.job, req.j.setup, 2, req.j.ja, listOf(req.note), req.previous)
                     req.ms = clock() - t0
                 } catch (t: Throwable) {
                     // visible to the waiting check thread before it wakes: it must not publish this final as checked

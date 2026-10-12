@@ -860,6 +860,73 @@ class PipelineTest {
         } finally { p.stop(); p.awaitStopped() }
     }
 
+    /** "negation, 0.99" from generation 0, after [gate]; [gen] raised from outside stands for a later 429. */
+    private class FixJudge : Judge {
+        val gate = CountDownLatch(1); val entered = CountDownLatch(1)
+        @Volatile var gen = 0
+        override fun unfinished(text: String) = JevCall("{req}", 0, null, 0, "unused", null)
+        override fun mistranslation(ja: String, zh: String): JevCall {
+            entered.countDown(); gate.await()
+            return JevCall("{req}", 200, "{}", 1, null, mapOf("choice" to "negation", "confidence" to 0.99), gen = 0)
+        }
+        override fun cancel() { gate.countDown() }
+        override fun limitedAfter(gen: Int) = gen >= 0 && this.gen > gen
+    }
+
+    /** Waits on [gate] in the call [blocks] picks; records every prompt. */
+    private class PickMt(val blocks: (String) -> Boolean) : Mt {
+        val gate = CountDownLatch(1); val entered = CountDownLatch(1)
+        val prompts = Collections.synchronizedList(ArrayList<String>())
+        override fun translate(prompt: String): MtResult? {
+            prompts.add(prompt)
+            if (blocks(prompt)) { entered.countDown(); gate.await() }
+            return MtResult("zh(${source(prompt)})" + if (prompt.contains(FIX_NOTES["negation"]!!)) "-fixed" else "", 'e', 1, 1)
+        }
+        override fun cancel() = gate.countDown()
+    }
+
+    @Test
+    fun aRetranslationQueuedBeforeALimitDoesNotRun() {
+        // segment 2's translation keeps the MT thread busy while segment 1's check asks for a retranslation
+        val judge = FixJudge()
+        val mt = PickMt { source(it) == "ja20" }
+        val finals = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) finals.add(it) }, judge = judge, judgeEnds = false, checkTranslations = true)
+        p.start()
+        try {
+            p.submit(job(1, 3, true, 10))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            p.submit(job(2, 1, true, 20))
+            assertTrue(mt.entered.await(2, TimeUnit.SECONDS))
+            judge.gate.countDown() // the fix is queued behind segment 2
+            Thread.sleep(100)
+            judge.gen = 1 // a 429 before the MT thread gets to it
+            mt.gate.countDown()
+            val deadline = monoMs() + 3000
+            while (finals.none { it.segmentId == 1L } && monoMs() < deadline) Thread.sleep(5)
+        } finally { judge.gate.countDown(); mt.gate.countDown(); p.stop(); p.awaitStopped() }
+        assertTrue(mt.prompts.none { it.contains(FIX_NOTES["negation"]!!) })
+        assertEquals("zh(ja10)", finals.last { it.segmentId == 1L }.zh)
+    }
+
+    @Test
+    fun aRetranslationRunningWhenALimitComesIsNotUsed() {
+        val judge = FixJudge().apply { gate.countDown() }
+        val mt = PickMt { it.contains(FIX_NOTES["negation"]!!) }
+        val finals = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) finals.add(it) }, judge = judge, judgeEnds = false, checkTranslations = true)
+        p.start()
+        try {
+            p.submit(job(1, 3, true, 10))
+            assertTrue(mt.entered.await(2, TimeUnit.SECONDS))
+            judge.gen = 1 // a 429 while the retranslation runs
+            mt.gate.countDown()
+            val deadline = monoMs() + 3000
+            while (finals.isEmpty() && monoMs() < deadline) Thread.sleep(5)
+        } finally { mt.gate.countDown(); p.stop(); p.awaitStopped() }
+        assertEquals("zh(ja10)", finals.last().zh)
+    }
+
     private class FakeJudgeWithGen : Judge {
         @Volatile var gen = 0
         override fun unfinished(text: String) = JevCall("{req}", 200, "{}", 1, null, mapOf("noul" to 0.95), gen = 0)

@@ -14,7 +14,6 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -24,9 +23,9 @@ import kotlin.math.abs
  * The subtitle card. Used twice: as the floating overlay (with [interactive] gestures) and as the live
  * preview in the settings screen, so what the user tunes is exactly what they get.
  *
- * Overlay gestures, unlocked: drag anywhere to move, drag any of the four corner marks to resize width and height,
- * single tap to show the toolbar (font −/+, opacity −/+, mode, lock, stop). Locked: position and size are fixed and a tap
- * only shows an unlock button in the bottom-right corner.
+ * Overlay gestures, unlocked: drag anywhere to move; a single tap shows the toolbar (font −/+, opacity −/+, mode, lock,
+ * stop) together with a faint mark in each corner, and while they are shown a corner drag resizes width and height.
+ * Locked: position and size are fixed and a tap only shows an unlock button in the bottom-right corner.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
 class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : LinearLayout(ctx) {
@@ -59,10 +58,10 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** Mode button tapped: the host flips "only finished sentences" in prefs and calls [setFinalOnly]. */
     var onToggleMode: () -> Unit = {}
     private val modeBtn = TextView(ctx).apply {
-        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
-        setPadding(dp(8f).toInt(), dp(6f).toInt(), dp(8f).toInt(), dp(6f).toInt())
-        minHeight = dp(40f).toInt(); minWidth = dp(40f).toInt()
+        setPadding(dp(8f).toInt(), 0, dp(8f).toInt(), 0)
+        minHeight = dp(36f).toInt(); minWidth = dp(36f).toInt()
         setOnClickListener { onToggleMode(); bumpToolbarTimer() }
     }
     /** Shows the current mode on the toolbar button; the label is what is on screen now. */
@@ -77,6 +76,30 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     fun setCardWidth(px: Int) {
         val lp = card.layoutParams
         if (lp.width != px) { lp.width = px; card.layoutParams = lp }
+    }
+    /**
+     * Places card and toolbar inside a window that covers both (toolbar open): px from the window's left edge. The
+     * card stays where the user put it; only the toolbar shifts to fit the screen. [toolbarAbove] puts the toolbar
+     * over the card when there is no room below it.
+     */
+    fun placeCard(cardOffset: Int, toolbarOffset: Int, toolbarAbove: Boolean) {
+        val clp = card.layoutParams as LayoutParams
+        if (clp.marginStart != cardOffset) { clp.marginStart = cardOffset; card.layoutParams = clp }
+        val gap = dp(TOOLBAR_GAP_DP).toInt()
+        val tlp = toolbar.layoutParams as LayoutParams
+        if ((indexOfChild(toolbar) == 0) != toolbarAbove) {
+            removeView(toolbar)
+            tlp.topMargin = if (toolbarAbove) 0 else gap; tlp.bottomMargin = if (toolbarAbove) gap else 0
+            tlp.marginStart = toolbarOffset
+            addView(toolbar, if (toolbarAbove) 0 else 1, tlp)
+        } else if (tlp.marginStart != toolbarOffset) { tlp.marginStart = toolbarOffset; toolbar.layoutParams = tlp }
+    }
+    /** Caption card height in px as laid out. */
+    fun cardHeightPx() = card.height
+    /** Height the open toolbar adds to the window, gap included. */
+    fun toolbarHeightPx(): Int {
+        toolbar.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        return toolbar.measuredHeight + dp(TOOLBAR_GAP_DP).toInt()
     }
 
     /**
@@ -169,10 +192,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         card.addView(unlockBtn, FrameLayout.LayoutParams(dp(34f).toInt(), dp(34f).toInt(), Gravity.BOTTOM or Gravity.END).apply {
             val m = dp(3f).toInt(); setMargins(m, m, m, m)
         })
-        addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        // the card keeps its own place inside the window (see placeCard), and so does the toolbar
+        addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.START })
 
         buildToolbar()
-        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f).toInt() })
+        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.START; topMargin = dp(TOOLBAR_GAP_DP).toInt() })
         if (interactive) installGestures()
         applyStyle(textSp, bgAlpha)
     }
@@ -231,39 +255,37 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         stats.visibility = if (statsLine.isNullOrEmpty()) GONE else VISIBLE
     }
 
+    /** Two compact rows: font and background −/+ on top; mode, lock and stop below. As small as a finger allows. */
     private fun buildToolbar() {
         toolbar.apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply { cornerRadius = dp(12f); setColor(0xF526262B.toInt()); setStroke(dp(0.5f).toInt().coerceAtLeast(1), 0x1AFFFFFF) }
+            orientation = VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = GradientDrawable().apply { cornerRadius = dp(10f); setColor(0xF526262B.toInt()); setStroke(dp(0.5f).toInt().coerceAtLeast(1), 0x1AFFFFFF) }
             setPadding(dp(4f).toInt(), dp(2f).toInt(), dp(4f).toInt(), dp(2f).toInt())
             elevation = dp(6f)
             visibility = GONE
         }
+        val size = dp(36f).toInt() // smallest comfortable tap target
         fun btn(icon: Int, label: String, onClick: () -> Unit) = ImageButton(context).apply {
             setImageResource(icon); contentDescription = label
-            background = null; setPadding(dp(10f).toInt(), dp(10f).toInt(), dp(10f).toInt(), dp(10f).toInt())
+            background = null; val p = dp(9f).toInt(); setPadding(p, p, p, p)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            layoutParams = LayoutParams(dp(40f).toInt(), dp(40f).toInt())
+            layoutParams = LayoutParams(size, size)
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun tag(t: String) = TextView(context).apply {
-            text = t; setTextColor(0xFF8B8B94.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setPadding(dp(2f).toInt(), 0, dp(2f).toInt(), 0)
+            text = t; setTextColor(0xFF8B8B94.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         }
-        fun sep() = View(context).apply { setBackgroundColor(0x1AFFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(18f).toInt()).apply { marginStart = dp(3f).toInt(); marginEnd = dp(3f).toInt() } }
-
+        fun sep() = View(context).apply { setBackgroundColor(0x1AFFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(16f).toInt()).apply { marginStart = dp(4f).toInt(); marginEnd = dp(4f).toInt() } }
         fun tbtn(label: String, desc: String, onClick: () -> Unit) = TextView(context).apply {
             text = label; contentDescription = desc
-            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER; minWidth = dp(40f).toInt(); minHeight = dp(40f).toInt()
-            setPadding(dp(6f).toInt(), dp(6f).toInt(), dp(6f).toInt(), dp(6f).toInt())
+            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER; minWidth = size; minHeight = size
+            setPadding(0, 0, 0, 0)
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
-        // Size / opacity scroll sideways when the screen is too narrow (small display, big system font);
-        // lock and stop sit outside the scroller, so they always stay visible and tappable.
-        val controls = LinearLayout(context).apply {
-            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        fun row() = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        toolbar.addView(row().apply {
             addView(tbtn("A−", "字号减小") { setSize(textSp - 2) })
             addView(tag("字号"))
             addView(tbtn("A+", "字号增大") { setSize(textSp + 2) })
@@ -271,18 +293,14 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             addView(tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) })
             addView(tag("背景"))
             addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
-            addView(sep())
+        })
+        toolbar.addView(View(context).apply { setBackgroundColor(0x1AFFFFFF) }, LayoutParams(LayoutParams.MATCH_PARENT, dp(0.5f).toInt().coerceAtLeast(1)))
+        toolbar.addView(row().apply {
             addView(modeBtn)
-        }
-        toolbar.addView(HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = false
-            addView(controls)
-            setOnScrollChangeListener { _, _, _, _, _ -> bumpToolbarTimer() }
-        }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 1f))
-        toolbar.addView(sep())
-        toolbar.addView(btn(R.drawable.ic_lock, "锁定位置和大小") { toggleLock() })
-        toolbar.addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF28B82.toInt()) })
+            addView(sep())
+            addView(btn(R.drawable.ic_lock, "锁定位置和大小") { toggleLock() })
+            addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF28B82.toInt()) })
+        })
     }
 
     private fun setSize(v: Float) { applyStyle(v.coerceIn(MIN_SP, MAX_SP), bgAlpha); onStyleChanged() }
@@ -292,20 +310,27 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         locked = v
         lockBadge.visibility = if (v) VISIBLE else GONE
         hideUnlock()
-        if (interactive) corners.forEach { it.visibility = if (v) GONE else VISIBLE }
+        showCorners()
     }
     private fun toggleLock() { setLocked(!locked); if (locked) hideToolbar() }
+    /** the resize marks go with the toolbar: shown (and draggable) only while it is open and the card is unlocked */
+    private fun showCorners() {
+        val on = interactive && !locked && toolbar.visibility == VISIBLE
+        corners.forEach { it.visibility = if (on) VISIBLE else GONE }
+    }
 
     private val hideRunnable = Runnable { hideToolbar() }
     private fun bumpToolbarTimer() { removeCallbacks(hideRunnable); postDelayed(hideRunnable, 4_000) }
     private fun showToolbar() {
         toolbar.visibility = VISIBLE
+        showCorners()
         bumpToolbarTimer()
         onToolbarShown(true)
     }
     private fun hideToolbar() {
         if (toolbar.visibility == GONE) return
         toolbar.visibility = GONE
+        showCorners()
         onToolbarShown(false)
     }
     private val hideUnlockRunnable = Runnable { unlockBtn.visibility = GONE }
@@ -321,10 +346,9 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private fun installGestures() {
         val slop = dp(8f)
         val grab = dp(28f)
-        setLocked(false) // shows the corner marks
         var downX = 0f; var downY = 0f; var lastX = 0f; var lastY = 0f; var moved = false
-        // the corner under the finger at ACTION_DOWN (-1: none). One listener on the card picks it, so the four grab
-        // areas never overlap: on a one-line card each corner gets at most half the height.
+        // the corner under the finger at ACTION_DOWN (-1: none); only while the toolbar (and so the marks) is shown.
+        // One listener on the card picks it, so the four grab areas never overlap: each gets at most half the card.
         var corner = -1
         card.setOnTouchListener { _, e ->
             when (e.actionMasked) {
@@ -332,15 +356,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                     downX = e.rawX; downY = e.rawY; lastX = downX; lastY = downY; moved = false
                     val gx = minOf(grab, card.width / 2f); val gy = minOf(grab, card.height / 2f)
                     val l = e.x < gx; val r = e.x > card.width - gx; val t = e.y < gy; val b = e.y > card.height - gy
-                    corner = if (locked) -1 else when { t && l -> 0; t && r -> 1; b && r -> 2; b && l -> 3; else -> -1 }
+                    corner = if (locked || toolbar.visibility != VISIBLE) -1 else when { t && l -> 0; t && r -> 1; b && r -> 2; b && l -> 3; else -> -1 }
+                    removeCallbacks(hideRunnable) // the toolbar stays while the finger is down
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) {
-                        moved = true
-                        // the open toolbar widens the window around the card; closed, card and window coincide, so
-                        // a move or resize puts the card exactly where the finger takes it
-                        if (!locked) hideToolbar()
-                    }
+                    if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) moved = true
                     if (moved && !locked) {
                         // whole pixels only: keep the fraction for the next move, or slow drags would not move at all
                         val dx = (e.rawX - lastX).toInt(); val dy = (e.rawY - lastY).toInt()
@@ -350,8 +370,14 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                         }
                     }
                 }
-                MotionEvent.ACTION_UP -> if (!moved) tap() else if (!locked) onMoveEnd()
-                MotionEvent.ACTION_CANCEL -> if (moved && !locked) onMoveEnd()
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) tap() else if (!locked) onMoveEnd()
+                    if (toolbar.visibility == VISIBLE) bumpToolbarTimer()
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (moved && !locked) onMoveEnd()
+                    if (toolbar.visibility == VISIBLE) bumpToolbarTimer()
+                }
             }
             true
         }
@@ -364,6 +390,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         const val MAX_SP = 36f
         /** Card opacity when the user has not set one: magpie's ink card at 78%. */
         const val DEFAULT_ALPHA = 0.78f
+        /** Space between the caption card and the toolbar. */
+        const val TOOLBAR_GAP_DP = 6f
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
         val PALETTES = listOf(

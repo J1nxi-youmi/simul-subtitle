@@ -398,24 +398,29 @@ class CaptionService : Service() {
             x = prefs.overlayX.takeIf { it >= 0 } ?: ((area().width() - cardW) / 2)
             y = prefs.overlayY.takeIf { it >= 0 } ?: (area().height() * 2 / 3)
         }
-        // Where the user put the card (its top-left in the usable area); the window is derived from it on every
-        // layout, so opening the toolbar near an edge (window widened and clamped, card pushed aside) leaves the
-        // card back in its place once the toolbar closes, and resizing never accumulates rounding.
+        // Where the user put the card (its top-left in the usable area). The window is derived from it on every
+        // layout: closed, the window is exactly the card, so no invisible area blocks touches to the app underneath;
+        // open, it also covers the toolbar, which is centred under the card but shifted to stay on screen (and put
+        // above the card when there is no room below). The card itself never moves when the toolbar opens.
         var cardX = lp.x; var cardY = lp.y
-        // Keeps the card at the user's width and fully on screen. While the toolbar is open the window is
-        // widened around the card's centre so the toolbar fits; closed, the window is exactly the card, so no
-        // invisible area blocks touches to the app underneath.
         fun layout() {
-            val a = area(); val sw = a.width()
+            val a = area(); val sw = a.width(); val sh = a.height()
             cardW = cardW.coerceIn((sw * Prefs.MIN_WIDTH).toInt(), sw)
-            cardX = cardX.coerceIn(0, sw - cardW)
-            val win = maxOf(cardW, if (toolbarShown) v.toolbarWidthPx() else 0).coerceAtMost(sw)
-            lp.width = win
             v.setCardWidth(cardW)
             // captions ≤ 40 %, status ≤ 20 % of the usable height: card + toolbar always fit on screen
             v.setMaxContentHeight((a.height() * MAX_CAPTION_FRAC).toInt(), (a.height() * 0.2f).toInt())
-            lp.x = (cardX - (win - cardW) / 2).coerceIn(0, (sw - win).coerceAtLeast(0))
-            lp.y = cardY.coerceIn(0, (a.height() - v.height.coerceAtLeast(1)).coerceAtLeast(0))
+            val cardH = v.cardHeightPx().coerceAtLeast(1)
+            cardX = cardX.coerceIn(0, sw - cardW)
+            cardY = cardY.coerceIn(0, (sh - cardH).coerceAtLeast(0))
+            val tbW = if (toolbarShown) v.toolbarWidthPx().coerceAtMost(sw) else 0
+            val tbH = if (toolbarShown) v.toolbarHeightPx() else 0
+            val tbX = (cardX + (cardW - tbW) / 2).coerceIn(0, sw - tbW)
+            val above = toolbarShown && cardY + cardH + tbH > sh && cardY - tbH >= 0
+            val left = if (toolbarShown) minOf(cardX, tbX) else cardX
+            val right = if (toolbarShown) maxOf(cardX + cardW, tbX + tbW) else cardX + cardW
+            v.placeCard(cardX - left, tbX - left, above)
+            lp.x = left; lp.width = right - left
+            lp.y = if (above) cardY - tbH else cardY
             if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)
         }
         // rotation / resize: the caption height may not change, so re-fit explicitly from the saved width fraction
@@ -423,22 +428,20 @@ class CaptionService : Service() {
         fun applyHeight() = v.setCaptionHeight((area().height() * prefs.heightFrac).toInt())
         var captionH = 0 // px while a resize drag runs
         onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); applyHeight(); layout() }
-        // drags start from where the card is on screen (it may sit clamped away from cardX / cardY)
-        fun shownCardX() = lp.x + (lp.width - cardW) / 2
-        v.onMove = { dx, dy -> cardX = shownCardX() + dx; cardY = lp.y + dy; layout() }
+        v.onMove = { dx, dy -> cardX += dx; cardY += dy; layout() }
         // a corner drag moves that corner; the opposite edges stay where they are, so the new size is bounded by the
-        // room between them and the screen edges (the toolbar is closed while dragging: card = window)
+        // room between them and the screen edges
         v.onResize = { dx, dy, left, top ->
             val a = area(); val oldW = cardW
-            cardX = shownCardX(); cardY = lp.y
+            val minW = (a.width() * Prefs.MIN_WIDTH).toInt()
             val roomW = if (left) cardX + oldW else a.width() - cardX
-            cardW = (cardW + if (left) -dx else dx).coerceIn((a.width() * Prefs.MIN_WIDTH).toInt(), roomW.coerceAtLeast((a.width() * Prefs.MIN_WIDTH).toInt()))
+            cardW = (cardW + if (left) -dx else dx).coerceIn(minW, roomW.coerceAtLeast(minW))
             if (left) cardX -= cardW - oldW
             if (dy != 0) {
                 if (captionH == 0) captionH = v.captionHeightPx() // start from what is on screen (also when auto)
                 val oldH = captionH
                 // room above (top corner) or below (bottom corner) the card
-                val room = if (top) cardY else a.height() - (cardY + v.height)
+                val room = if (top) cardY else a.height() - (cardY + v.cardHeightPx())
                 val maxH = minOf((a.height() * MAX_CAPTION_FRAC).toInt(), oldH + room.coerceAtLeast(0))
                 captionH = (captionH + if (top) -dy else dy).coerceIn(v.minCaptionPx(), maxH.coerceAtLeast(v.minCaptionPx()))
                 if (top) cardY -= captionH - oldH
@@ -447,8 +450,7 @@ class CaptionService : Service() {
             layout()
         }
         v.onMoveEnd = {
-            // what is on screen, not the unclamped drag target (a card dragged past the top would save a negative y)
-            cardX = shownCardX(); cardY = lp.y
+            // layout() keeps cardX / cardY on screen, so this is where the card is shown
             prefs.overlayX = cardX; prefs.overlayY = cardY; prefs.widthFrac = cardW.toFloat() / area().width()
             if (captionH > 0) { prefs.heightFrac = captionH.toFloat() / area().height(); captionH = 0 }
         }

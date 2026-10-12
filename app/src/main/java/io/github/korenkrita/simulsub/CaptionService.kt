@@ -420,11 +420,18 @@ class CaptionService : Service() {
         var captionH = 0 // px while a resize drag runs
         onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); applyHeight(); layout() }
         v.onMove = { dx, dy -> lp.x += dx; lp.y += dy; layout() }
-        v.onResize = { dw, dh ->
-            cardW += dw
-            if (dh != 0) {
+        // a corner drag moves that corner; the opposite edges stay where they are. layout() keeps the window centred
+        // on the card when the width changes, so the window is shifted by half the change to pin the far edge.
+        v.onResize = { dx, dy, left, top ->
+            val a = area(); val oldW = cardW
+            cardW = (cardW + if (left) -dx else dx).coerceIn((a.width() * Prefs.MIN_WIDTH).toInt(), a.width())
+            val dw = cardW - oldW
+            lp.x += (if (left) -dw else dw) / 2
+            if (dy != 0) {
                 if (captionH == 0) captionH = v.captionHeightPx() // start from what is on screen (also when auto)
-                captionH = (captionH + dh).coerceIn(v.minCaptionPx(), (area().height() * MAX_CAPTION_FRAC).toInt())
+                val oldH = captionH
+                captionH = (captionH + if (top) -dy else dy).coerceIn(v.minCaptionPx(), (a.height() * MAX_CAPTION_FRAC).toInt())
+                if (top) lp.y -= captionH - oldH
                 v.setCaptionHeight(captionH)
             }
             layout()

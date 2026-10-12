@@ -118,7 +118,8 @@ class MainActivity : Activity() {
         updater = AppUpdater(this)
         // a rotation or theme change is not an entry into the app (unless it cancelled a check that was running)
         configRecreated = savedInstanceState?.getBoolean("configChange") == true
-        manualInterrupted = savedInstanceState?.getBoolean("manualCheck") == true
+        manualInterrupted = savedInstanceState != null && manualCheckStopped
+        manualCheckStopped = false
     }
 
     private var inSettings = false
@@ -169,9 +170,6 @@ class MainActivity : Activity() {
         // recreated right away for a rotation / theme (no check then), unless that stops a check under way; a state
         // saved for a process the system may end is not this, and the restored app checks again
         outState.putBoolean("configChange", isChangingConfigurations && !updater.checking)
-        // a manual check this recreation stops is redone as manual (also with automatic checks off); not for a state
-        // saved while stopped, whose check may still finish in the background
-        outState.putBoolean("manualCheck", isChangingConfigurations && updater.checkingManual)
     }
 
     /** this activity only replaces one a configuration change ended; its first start is not an entry into the app */
@@ -231,6 +229,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        // a manual check this recreation stops is redone as manual (also with automatic checks off). Decided here: a
+        // stopped activity is recreated without saving its state again, and a process that ends forgets it.
+        manualCheckStopped = isChangingConfigurations && updater.checkingManual
         updater.destroy()
         byokTest?.cancel(); byokTest = null
         super.onDestroy()
@@ -1131,6 +1132,8 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        /** set by an activity a configuration change ends during a manual update check, read by its replacement */
+        var manualCheckStopped = false
         const val REQ_START = 1      // runtime permission asked on the way to starting subtitles
         const val REQ_PROJECTION = 2
         val STYLE_KEYS = setOf("textSp", "bgAlpha", "widthFrac", "heightFrac", "showJa", "showStats", "keepSentences", "keepChars", "palette")

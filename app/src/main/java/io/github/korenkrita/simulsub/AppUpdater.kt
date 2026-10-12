@@ -402,8 +402,12 @@ internal class AppUpdater(private val activity: Activity) {
                 }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                prefs.edit().remove("pendingInstall").apply()
-                foreground { error("安装包需要重新下载", "手机清理了安装包，或文件检查没有通过。请重新下载。") { download(release) } }
+                // a download to redo, kept until answered (a rotation or the process ending first brings it back)
+                prefs.edit().remove("pendingInstall").putString("pendingDownload", release.json()).apply()
+                foreground {
+                    error("安装包需要重新下载", "手机清理了安装包，或文件检查没有通过。请重新下载。",
+                        later = { prefs.edit().remove("pendingDownload").apply() }) { download(release) }
+                }
             } finally { checkButton.isEnabled = true }
         }
     }

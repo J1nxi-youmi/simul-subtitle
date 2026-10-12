@@ -27,7 +27,6 @@
     <color name="warn_soft">#FFFBF0DF</color>
     <color name="err">#FFD64545</color>
     <color name="err_soft">#FFFBE9E9</color>
-    <!-- the stop button: a deeper red than magpie's #d64545 so white text on it is 5.5:1 (on #d64545 only 4.4:1) -->
-    <color name="err_fill">#FFC53030</color>
+    <!-- Material's colorOnError (dialogs only); the stop button is err_soft with ink text instead -->
     <color name="on_err">#FFFFFFFF</color>
 </resources>

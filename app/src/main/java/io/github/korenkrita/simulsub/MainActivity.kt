@@ -242,8 +242,9 @@ class MainActivity : Activity() {
         if (CaptionService.running) {
             status(R.color.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止。")
             primary.text = "停止字幕"; primary.setIconResource(R.drawable.ic_stop)
-            primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err_fill))
-            onPrimary(R.color.on_err)
+            // magpie has no strong red fill: its danger look is red-soft with ink text and a red mark
+            primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err_soft))
+            primary.setTextColor(getColor(R.color.text)); primary.iconTint = ColorStateList.valueOf(getColor(R.color.err))
             primary.setOnClickListener { CaptionService.stop(this); main.postDelayed({ render() }, 300) }
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
@@ -387,7 +388,7 @@ class MainActivity : Activity() {
 
     /** A risk / cost / "takes effect later" note: magpie's amber note, never cut short. */
     private fun note(t: String) = TextView(this).apply {
-        text = t; textSize = 13f; setTextColor(getColor(R.color.warn)); setLineSpacing(2 * dpx, 1f)
+        text = t; textSize = 13f; setTextColor(getColor(R.color.text2)); setLineSpacing(2 * dpx, 1f)
         setBackgroundResource(R.drawable.note_warn)
         setPadding((10 * dpx).toInt(), (8 * dpx).toInt(), (10 * dpx).toInt(), (8 * dpx).toInt())
     }
@@ -998,7 +999,7 @@ class MainActivity : Activity() {
             lSize.text = "文字大小  ${size.value.toInt()}"
             // the slider moves in 5% steps; until the user drags it, the label and preview keep the stored value
             // (the 78% default sits between two steps)
-            val shownAlpha = if (Math.abs(prefs.bgAlpha * 100f - alpha.value) < 2.5f) prefs.bgAlpha else alpha.value / 100f
+            val shownAlpha = prefs.bgAlpha // dragging saves first, so this is always what the overlay uses
             lAlpha.text = "背景浓淡  ${Math.round(shownAlpha * 100)}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
             lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（跟着内容变）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"

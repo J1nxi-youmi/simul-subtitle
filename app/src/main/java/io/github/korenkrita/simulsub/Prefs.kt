@@ -13,7 +13,7 @@ class Prefs(ctx: Context) {
 
     /** Background opacity 0..1 */
     var bgAlpha: Float
-        get() = sp.getFloat("bgAlpha", 0.55f)
+        get() = sp.getFloat("bgAlpha", CaptionOverlayView.DEFAULT_ALPHA)
         set(v) = sp.edit().putFloat("bgAlpha", v).apply()
 
     /** Size and opacity in one edit, so a change listener never sees one new and one old value. */
@@ -26,7 +26,7 @@ class Prefs(ctx: Context) {
 
     /** Caption colour scheme id, see CaptionOverlayView.PALETTES */
     var palette: String
-        get() = sp.getString("palette", "white")!!
+        get() = sp.getString("palette", CaptionOverlayView.PALETTES[0].id)!!
         set(v) = sp.edit().putString("palette", v).apply()
 
     /** Overlay width as a fraction of the screen width */

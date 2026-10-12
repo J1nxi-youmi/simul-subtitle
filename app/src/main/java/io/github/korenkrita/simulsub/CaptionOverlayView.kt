@@ -40,7 +40,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private val bg = GradientDrawable().apply { cornerRadius = dp(12f) }
 
     var textSp = 20f; private set
-    var bgAlpha = 0.55f; private set
+    var bgAlpha = DEFAULT_ALPHA; private set
     var colors = PALETTES[0]; private set
     private var lastLines: List<Line> = emptyList()
     private var lastStats: String? = null
@@ -138,9 +138,11 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         card.background = bg
         card.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
 
-        // resize area, bottom-right: an invisible corner the finger can grab (no dot drawn)
+        // resize corner, bottom-right: same grab area as the old dot, just not drawn
         handle.visibility = GONE
-        card.addView(handle, FrameLayout.LayoutParams(dp(36f).toInt(), dp(36f).toInt(), Gravity.BOTTOM or Gravity.END))
+        card.addView(handle, FrameLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt(), Gravity.BOTTOM or Gravity.END).apply {
+            setMargins(0, 0, dp(4f).toInt(), dp(4f).toInt())
+        })
         lockBadge.apply {
             text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); visibility = GONE
         }
@@ -309,7 +311,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         handle.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { hx = e.rawX; hy = e.rawY; removeCallbacks(hideRunnable) }
-                // bottom-right dot: right/left = width, down/up = caption height
+                // bottom-right corner: right/left = width, down/up = caption height
                 MotionEvent.ACTION_MOVE -> { onResize((e.rawX - hx).toInt(), (e.rawY - hy).toInt()); hx = e.rawX; hy = e.rawY }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { onMoveEnd(); bumpToolbarTimer() }
             }
@@ -321,15 +323,19 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         /** Caption size range, shared with the settings slider. */
         const val MIN_SP = 5f
         const val MAX_SP = 36f
+        /** Card opacity when the user has not set one (magpie's ink card at 78%). */
+        const val DEFAULT_ALPHA = 0.78f
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
         val PALETTES = listOf(
-            Palette("white", "经典白", 0xFFFFFFFF.toInt(), 0xCCDCDCE4.toInt(), 0xFFB9B9C1.toInt(), 0xFFA5B4FC.toInt(), 0xFF1A1A1E.toInt()),
+            // magpie's ink card (#1a1a1e) with its quiet greys and indigo; the default since 0.6
+            Palette("ink", "墨色", 0xFFFFFFFF.toInt(), 0xCCDCDCE4.toInt(), 0xFFB9B9C1.toInt(), 0xFFA5B4FC.toInt(), 0xFF1A1A1E.toInt()),
+            Palette("white", "经典白", 0xFFFFFFFF.toInt(), 0xCCDCD8F0.toInt(), 0xFFB9B5C9.toInt(), 0xFFB4ACFA.toInt(), 0xFF100E1A.toInt()),
             Palette("yellow", "影院黄", 0xFFFFE066.toInt(), 0xCCFFF3C4.toInt(), 0xFFCFC48F.toInt(), 0xFFFFC94D.toInt(), 0xFF000000.toInt()),
             Palette("mint", "薄荷绿", 0xFFA7F3D0.toInt(), 0xCCD1FAE5.toInt(), 0xFF8CBBA6.toInt(), 0xFF6EE7B7.toInt(), 0xFF0B1F1A.toInt()),
             Palette("sky", "天空蓝", 0xFFBAE6FD.toInt(), 0xCCE0F2FE.toInt(), 0xFF93B4C9.toInt(), 0xFF7DD3FC.toInt(), 0xFF0B1726.toInt()),
             Palette("sakura", "樱花粉", 0xFFFBCFE8.toInt(), 0xCCFCE7F3.toInt(), 0xFFC9A3B8.toInt(), 0xFFF9A8D4.toInt(), 0xFF24101C.toInt()),
-            Palette("paper", "白底黑字", 0xFF16151C.toInt(), 0xCC3D3B48.toInt(), 0xFF6E6C7A.toInt(), 0xFF4F46E5.toInt(), 0xFFFFFFFF.toInt(), shadow = false),
+            Palette("paper", "白底黑字", 0xFF16151C.toInt(), 0xCC3D3B48.toInt(), 0xFF6E6C7A.toInt(), 0xFF5B4BD6.toInt(), 0xFFFFFFFF.toInt(), shadow = false),
         )
         fun palette(id: String?) = PALETTES.firstOrNull { it.id == id } ?: PALETTES[0]
     }

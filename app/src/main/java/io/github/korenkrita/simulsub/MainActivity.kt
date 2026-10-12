@@ -930,7 +930,7 @@ class MainActivity : Activity() {
         keepS.addOnChangeListener { _, v, user -> if (user) { prefs.keepSentences = v.toInt(); apply() } }
         keepC.addOnChangeListener { _, v, user -> if (user) { prefs.keepChars = v.toInt(); apply() } }
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
-            prefs.setStyle(20f, 0.55f); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
+            prefs.setStyle(20f, CaptionOverlayView.DEFAULT_ALPHA); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
             prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS; prefs.heightFrac = 0f
             prefs.palette = CaptionOverlayView.PALETTES[0].id; renderPalettes()
             prefs.overlayX = -1; prefs.overlayY = -1

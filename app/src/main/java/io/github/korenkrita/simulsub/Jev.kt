@@ -165,10 +165,24 @@ class Jev(
         fun retrySeconds(h: String?, nowWall: Long): Long? {
             val v = h?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             v.toLongOrNull()?.let { return it.takeIf { s -> s >= 0 } }
-            val at = runCatching {
-                java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
-            }.getOrNull() ?: return null
+            val at = httpDate(v, nowWall) ?: return null
             return maxOf(0, (at - nowWall + 999) / 1000)
+        }
+
+        /** The three HTTP-date forms a recipient must read: IMF-fixdate, RFC 850 and asctime (all GMT). */
+        private fun httpDate(v: String, nowWall: Long): Long? {
+            val us = java.util.Locale.US
+            val utc = java.time.ZoneOffset.UTC
+            runCatching { return java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }
+            // RFC 850's two-digit year: the one no more than 50 years ahead
+            val thisYear = java.time.Instant.ofEpochMilli(nowWall).atZone(utc).year
+            val rfc850 = java.time.format.DateTimeFormatterBuilder().parseCaseInsensitive().appendPattern("EEEE, dd-MMM-")
+                .appendValueReduced(java.time.temporal.ChronoField.YEAR, 2, 2, thisYear - 49).appendPattern(" HH:mm:ss 'GMT'")
+                .toFormatter(us)
+            runCatching { return java.time.LocalDateTime.parse(v, rfc850).toInstant(utc).toEpochMilli() }
+            val asctime = java.time.format.DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss yyyy", us)
+            runCatching { return java.time.LocalDateTime.parse(v.replace(Regex("\\s+"), " "), asctime).toInstant(utc).toEpochMilli() }
+            return null
         }
 
         /** OpenCode Zen's own free-usage error (`error.type`), not any body that happens to contain the word */
@@ -322,8 +336,10 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                     val ra = if (response.code == 429) response.header("Retry-After") else null
                     // a 429 counts from its headers: a body still trickling at a deadline must not hide it
                     if (response.code == 429) {
-                        headersOnly.set(HttpResult(429, null, monoMs() - t0, "body unread", retryAfter = ra))
+                        // installed before it is published: a caller that gives up at its deadline either sees it
+                        // installed (at the headers' time) or not at all, never with its own later clock
                         on429(ra)
+                        headersOnly.set(HttpResult(429, null, monoMs() - t0, "body unread", retryAfter = ra))
                     }
                     try {
                         val src = response.body?.source()

@@ -638,6 +638,14 @@ class JevTest {
         assertEquals(0L, Jev.retrySeconds(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(past), wallNow))
         // a wait of more than a day is kept as the service asks
         assertEquals(3 * 86_400L, Jev.retrySeconds("259200", wallNow))
+        // all three HTTP-date forms, a day ahead and past
+        val base = java.time.Instant.parse("2026-10-12T19:00:00Z").toEpochMilli()
+        for (d in listOf("Tue, 13 Oct 2026 19:00:00 GMT", "Tuesday, 13-Oct-26 19:00:00 GMT", "Tue Oct 13 19:00:00 2026"))
+            assertEquals(d, 86_400L, Jev.retrySeconds(d, base))
+        for (d in listOf("Sun, 11 Oct 2026 19:00:00 GMT", "Sunday, 11-Oct-26 19:00:00 GMT", "Sun Oct 11 19:00:00 2026"))
+            assertEquals(d, 0L, Jev.retrySeconds(d, base))
+        assertEquals(86_400L, Jev.retrySeconds("Tue Oct  13 19:00:00 2026", base)) // asctime pads the day with a space
+        assertNull(Jev.retrySeconds("13 Oct 2026", base))
     }
 
     @Test
@@ -758,12 +766,13 @@ class JevTest {
     }
 
     @Test
-    fun one429RaisesTheGenerationOnceAlsoWhenTheDeadlineSeesItFirst() {
-        // the headers' callback is held (in its wall-clock read) until after the caller gave up at its deadline
+    fun one429IsInstalledOnceAtItsHeadersTimeAlsoWhenTheDeadlineComesFirst() {
+        // the headers' callback is held (in its wall-clock read, after its monotonic one) past the caller's deadline
         val inCallback = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
         val callbackThread = AtomicReference<Thread>()
-        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }; extraHeaders = "Retry-After: 0\r\n"
+        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }; extraHeaders = "Retry-After: 60\r\n"
+        val headersAt = now
         val j = Jev(JevProvider.ZEN, "sk-secret", 600, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = {
             if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
                 inCallback.countDown(); release.await()
@@ -772,13 +781,18 @@ class JevTest {
         })
         val first = j.unfinished("a")
         assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
-        assertEquals(429, first.status)
+        // not yet installed, so not published: the caller does not install it with its own, later clock
+        assertTrue(first.status != 429)
+        now += 900
+        release.countDown()
+        val deadline = monoMs() + 2_000
+        while (j.paused() == null && monoMs() < deadline) Thread.sleep(5)
+        assertEquals(headersAt + 60_000, j.paused()!!.untilMs)
+        // once: a request let out after the pause is current
+        now += 61_000
         val fresh = j.unfinished("b")
         assertEquals(200, fresh.status)
-        assertFalse(j.limitedAfter(fresh.gen))
-        release.countDown()
-        Thread.sleep(200) // the held callback finishes
-        // the same 429 seen twice is still one limit: the fresh answer stays current
+        Thread.sleep(100)
         assertFalse(j.limitedAfter(fresh.gen))
     }
 

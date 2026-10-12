@@ -891,7 +891,10 @@ class PipelineTest {
         val judge = FixJudge()
         val mt = PickMt { source(it) == "ja20" }
         val finals = Collections.synchronizedList(ArrayList<Caption>())
-        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) finals.add(it) }, judge = judge, judgeEnds = false, checkTranslations = true)
+        // logged once the answer was accepted, right before the retry is queued
+        val asked = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) finals.add(it) }, judge = judge, judgeEnds = false, checkTranslations = true,
+            log = { if (it["action"] == "retranslate:negation") asked.countDown() })
         p.start()
         try {
             p.submit(job(1, 3, true, 10))
@@ -899,7 +902,7 @@ class PipelineTest {
             p.submit(job(2, 1, true, 20))
             assertTrue(mt.entered.await(2, TimeUnit.SECONDS))
             judge.gate.countDown() // the fix is queued behind segment 2
-            Thread.sleep(100)
+            assertTrue(asked.await(2, TimeUnit.SECONDS))
             judge.gen = 1 // a 429 before the MT thread gets to it
             mt.gate.countDown()
             val deadline = monoMs() + 3000

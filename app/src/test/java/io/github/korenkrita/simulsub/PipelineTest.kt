@@ -1114,6 +1114,22 @@ class PipelineTest {
     }
 
     @Test
+    fun withoutSmartEndsTheUtteranceStartStillFixesItsSetup() {
+        // smart sentence ends off, drafts off ("说完再出"): only the final reaches ASR, after the settings changed
+        val old = FakeMt(1); val new = FakeMt(1)
+        val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), old, { if (it.isFinal) done.countDown() }, judgeEnds = false, drafts = { false })
+        p.start()
+        val seg = Segmenter({ p.submit(it) }, judged = p::judged)
+        fun feed(speech: Boolean, ms: Int) = repeat(ms / 32) { seg.accept(FloatArray(512), if (speech) 0.9f else 0.1f, monoMs()) }
+        feed(true, 1024)
+        assertTrue(p.setSetup(Setup(new, version = 1))) // changed while the sentence is spoken
+        feed(true, 512); feed(false, 608)
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(1, old.calls.size); assertTrue(new.calls.isEmpty())
+    }
+
+    @Test
     fun judgedFollowsTheSetupTheUtteranceStartedWith() {
         val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = null, judgeEnds = true)
         p.start()

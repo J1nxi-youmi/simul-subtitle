@@ -39,8 +39,10 @@ class Segmenter(
     /** Read on the audio thread; must not block. */
     private val holdHint: (segmentId: Long, revision: Int) -> Boolean? = { _, _ -> null },
     /**
-     * Asked once when an utterance starts (audio thread, must not block): false = this one is cut as without a judge
-     * (Jev paused, its key is missing): no candidate questions and [plainMaxUtteranceMs]. null = [hintWaitMs] decides.
+     * Called once when an utterance starts (audio thread, must not block), also without a judged hold: the pipeline
+     * fixes the segment's settings then, so a change while it is spoken applies from the next one. With [hintWaitMs]:
+     * false = this one is cut as without a judge (Jev paused, its key is missing): no candidate questions and
+     * [plainMaxUtteranceMs].
      */
     private val judged: ((segmentId: Long) -> Boolean)? = null,
     /** [maxUtteranceMs] for an utterance [judged] said no to */
@@ -82,9 +84,11 @@ class Segmenter(
     private var hardMaxMs = if (hintWaitMs > 0) 2 * maxUtteranceMs else maxUtteranceMs
 
     private fun beginUtterance() {
-        val on = hintWaitMs > 0 && judged?.invoke(segmentId) != false
+        val answer = judged?.invoke(segmentId) // always asked: it also fixes the segment's settings
+        val on = hintWaitMs > 0 && answer != false
         waitMs = if (on) hintWaitMs else 0
-        maxMs = if (on || judged == null) maxUtteranceMs else plainMaxUtteranceMs
+        // a paused judge cuts at the plain limit; without a judged hold maxUtteranceMs already is the plain one
+        maxMs = if (on || hintWaitMs <= 0) maxUtteranceMs else plainMaxUtteranceMs
         hardMaxMs = if (waitMs > 0) 2 * maxMs else maxMs
     }
 

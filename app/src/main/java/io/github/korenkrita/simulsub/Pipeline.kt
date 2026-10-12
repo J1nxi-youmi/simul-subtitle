@@ -126,6 +126,8 @@ class Pipeline(
     previousSentences: Int = PREVIOUS_SENTENCES,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
     private val checkTranslations: Boolean = false,
+    /** [Setup.version] of the constructor's settings (the first setup) */
+    setupVersion: Int = 0,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
     private val log: (Map<String, Any?>) -> Unit = {},
     /** Read live: false = "only finished sentences", display drafts are not recognized or translated at all. */
@@ -135,7 +137,7 @@ class Pipeline(
     private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long, val setup: Setup)
 
     /** The setup new segments take; see [Setup]. The constructor's settings are the first one. */
-    @Volatile private var current = Setup(mt, scene, source, target, byokPrompt, judge, dedupeJoin, previousSentences)
+    @Volatile private var current = Setup(mt, scene, source, target, byokPrompt, judge, dedupeJoin, previousSentences, setupVersion)
     /** Every setup a pipeline worker may still call (current + those of segments in flight), so [stop] cancels all. */
     private val live: MutableSet<Setup> = java.util.concurrent.ConcurrentHashMap.newKeySet<Setup>().apply { add(current) }
     /** The setup each recent segment took (ASR thread writes, MT / check threads read through their jobs). */
@@ -170,9 +172,10 @@ class Pipeline(
 
     /**
      * For the [Segmenter] when an utterance starts (audio thread, never blocks): true = it may wait for Jev answers.
-     * Fixes the segment's setup now, so its sentence ends and its translation use the same one.
+     * Fixes the segment's setup now (also without smart sentence ends), so its sentence ends and its translation use
+     * the same one and a change while it is spoken, or while ASR is behind, applies from the next utterance.
      */
-    fun judged(segmentId: Long): Boolean = judgeEnds && setupOf(segmentId).judge != null
+    fun judged(segmentId: Long): Boolean = setupOf(segmentId).judge != null && judgeEnds // setup fixed first, always
 
     /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished. */
     private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Boolean>()

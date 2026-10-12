@@ -52,4 +52,13 @@ class ServiceStateTest {
         assertEquals("⚠ 翻译：服务出错（HTTP 502）", warn(ServiceCall(false, 502, "HTTP 502", null, 0), ok))
         assertEquals("⚠ 翻译：响应超时", warn(ServiceCall(false, 0, "deadline 8000ms", null, 0), null))
     }
+
+    @Test
+    fun aLimitedTranslatorIsYellowAndAnUnknownOneIsNotCalledFine() {
+        val mt429 = ServiceCall(false, 429, "HTTP 429", null, 0)
+        assertEquals(Light.YELLOW, CaptionService.light(mt429, true))
+        assertEquals("⚠ 翻译：请求受限", warn(mt429, ok))
+        // the translator not asked yet: nothing claimed about it
+        assertEquals("⚠ Jev 请求受限，稍后重试 · 断句改按停顿", warn(null, limited(false, null)))
+    }
 }

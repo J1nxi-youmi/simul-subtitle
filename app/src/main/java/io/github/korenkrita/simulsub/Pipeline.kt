@@ -196,7 +196,8 @@ class Pipeline(
 
     /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
-        val h = hints[segmentId to revision] ?: return null
+        // the segment's own judge limited meanwhile (e.g. by a check): finished now, over an earlier "hold"
+        val h = if (segSetup[segmentId]?.judge?.paused() != null) false else hints[segmentId to revision] ?: return null
         // the segmenter asks on every frame: log only the first read, which is when the answer took effect
         if (hintsUsed.add(segmentId to revision)) log(mapOf("ev" to "hint_used", "seg" to segmentId, "rev" to revision, "hold" to h))
         return h
@@ -388,7 +389,7 @@ class Pipeline(
             reportJev(call, judge, setup)
             val p = call.noul
             // limited (now or already paused): finished, so the segmenter cuts at the pause instead of waiting
-            val unfinished = if (call.limit != null) false else p?.let { it >= UNFINISHED_THRESHOLD }
+            val unfinished = if (call.limit != null || judge.paused() != null) false else p?.let { it >= UNFINISHED_THRESHOLD }
             if (unfinished != null) {
                 hints[job.segmentId to job.revision] = unfinished
                 hints.keys.removeIf { it.first < job.segmentId - 8 }
@@ -410,7 +411,8 @@ class Pipeline(
 
     /** A Jev answer as the overlay sees it: an answer is a success only while no pause is on (a late old request). */
     private fun reportJev(c: JevCall, judge: Judge, setup: Setup) {
-        if (c.error == "cancelled") return
+        // a question skipped while paused asked nothing; the overlay reads the pause from the judge itself
+        if (c.error == "cancelled" || c.error == "paused") return
         val limit = c.limit ?: judge.paused()
         onService(true, ServiceCall(c.answer != null && limit == null, c.status, c.error, limit, setup.version))
     }
@@ -481,7 +483,9 @@ class Pipeline(
         judgeMs(clock() - c0) // the Jev call only; a retranslation below is translation time
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
         reportJev(call, judge, j.setup)
-        val note = call.choice?.let { fixNote(it, j.setup.source, j.setup.target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
+        // limited meanwhile (this answer may be an older request's): the translation is kept, nothing is retried
+        val note = call.choice?.takeIf { call.limit == null && judge.paused() == null }
+            ?.let { fixNote(it, j.setup.source, j.setup.target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")
             return zh

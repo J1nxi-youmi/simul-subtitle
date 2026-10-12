@@ -2,6 +2,7 @@ package io.github.korenkrita.simulsub
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
@@ -672,11 +673,15 @@ class PipelineTest {
         assertTrue(judge.cancelled.get())
     }
 
-    /** A judge the service limited: every question returns at once without asking, like [Jev] while paused. */
+    /**
+     * A judge the service limited: while [limited] every question returns at once without asking, like [Jev] while
+     * paused; otherwise each question gets the 429 itself (sent, answered with a limit).
+     */
     private class PausedJudge(val limited: Boolean = true) : Judge {
         val asked = Collections.synchronizedList(ArrayList<String>())
         val limit = JevLimit(Long.MAX_VALUE, null, free = true)
-        private fun call() = JevCall("{req}", 0, null, 0, "paused", null, limit)
+        private fun call() = if (limited) JevCall("{req}", 0, null, 0, "paused", null, limit)
+            else JevCall("{req}", 429, "{}", 5, "HTTP 429", null, limit)
         override fun unfinished(text: String): JevCall { asked.add("u:$text"); return call() }
         override fun mistranslation(ja: String, zh: String): JevCall { asked.add("m:$ja|$zh"); return call() }
         override fun cancel() {}
@@ -736,6 +741,88 @@ class PipelineTest {
         assertEquals(1, mt.calls.size)
         assertEquals(1, services.size)
         assertFalse(services[0].first); assertTrue(services[0].second.ok)
+    }
+
+    /**
+     * Its questions wait on [gate]; [limit] switched on from outside stands for a 429 another question got meanwhile.
+     * The answer that comes back after it is an older request's: "hold" / a fix class with high confidence.
+     */
+    private class LateJudge : Judge {
+        val gate = CountDownLatch(1)
+        val entered = CountDownLatch(1)
+        @Volatile var limit: JevLimit? = null
+        val asked = Collections.synchronizedList(ArrayList<String>())
+        override fun unfinished(text: String): JevCall {
+            asked.add("u"); entered.countDown(); gate.await()
+            return JevCall("{req}", 200, "{}", 1, null, mapOf("noul" to 0.95))
+        }
+        override fun mistranslation(ja: String, zh: String): JevCall {
+            asked.add("m"); entered.countDown(); gate.await()
+            return JevCall("{req}", 200, "{}", 1, null, mapOf("choice" to "negation", "confidence" to 0.99))
+        }
+        override fun cancel() { gate.countDown() }
+        override fun paused(): JevLimit? = limit
+    }
+
+    @Test
+    fun aLimitWhileAQuestionIsOutCutsAtOnceAndItsLateHoldIsNotUsed() {
+        val judge = LateJudge()
+        val services = Collections.synchronizedList(ArrayList<ServiceCall>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, onService = { j, c -> if (j) services.add(c) })
+        p.start()
+        try {
+            assertTrue(p.judged(1)) // fixes segment 1's setup with this judge
+            p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            assertNull(p.holdHint(1, 2)) // waiting for the answer
+            judge.limit = JevLimit(Long.MAX_VALUE, null, true) // the check got a 429 meanwhile
+            assertEquals(false, p.holdHint(1, 2)) // cut now, not when the wait runs out
+            judge.gate.countDown() // the old question answers "unfinished"
+            val deadline = monoMs() + 2000
+            while (services.isEmpty() && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(false, p.holdHint(1, 2))
+            // reported as limited, not as a success
+            assertTrue(services.single().limit != null && !services.single().ok)
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+    }
+
+    @Test
+    fun aCheckAnsweredAfterALimitDoesNotRetranslate() {
+        val judge = LateJudge()
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, judge = judge, judgeEnds = false,
+            checkTranslations = true)
+        p.start()
+        try {
+            p.submit(job(1, 3, true, 10))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            judge.limit = JevLimit(Long.MAX_VALUE, null, true)
+            judge.gate.countDown() // "negation, 0.99" from before the limit
+            assertTrue(done.await(3, TimeUnit.SECONDS))
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+        assertEquals(1, mt.calls.size)
+        assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
+    }
+
+    @Test
+    fun aSkippedQuestionIsNotReportedAsARequest() {
+        val services = Collections.synchronizedList(ArrayList<ServiceCall>())
+        val judge = object : Judge {
+            override fun unfinished(text: String) = JevCall("{req}", 0, null, 0, "paused", null, JevLimit(Long.MAX_VALUE, null, true))
+            override fun mistranslation(ja: String, zh: String) = unfinished(ja)
+            override fun cancel() {}
+        }
+        // not paused() by the judge itself (a pause that began after the ASR looked): the question still goes out and is skipped
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, onService = { j, c -> if (j) services.add(c) })
+        p.start()
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        assertEquals(false, p.holdHint(1, 2))
+        p.stop(); p.awaitStopped()
+        assertTrue(services.isEmpty())
     }
 
     @Test

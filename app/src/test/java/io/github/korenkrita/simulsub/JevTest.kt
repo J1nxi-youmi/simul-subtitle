@@ -591,8 +591,8 @@ class JevTest {
     private val zenLimit = """{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded. Please try again later."}}"""
     private var now = 1_000_000L
     private val wallNow = 1_760_000_000_000L
-    private fun timedJev(key: String = "sk-secret") = Jev(JevProvider.OFFICIAL, key, 2_000, url = "http://127.0.0.1:$port/v1/systemone",
-        clock = { now }, wall = { wallNow })
+    private fun timedJev(key: String = "sk-secret", provider: JevProvider = JevProvider.ZEN, deadline: Long = 2_000) =
+        Jev(provider, key, deadline, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = { wallNow })
 
     @Test
     fun aLimitWithRetryAfterSecondsPausesBothQuestionsWithoutSending() {
@@ -625,7 +625,31 @@ class JevTest {
         val b = timedJev("sk-other").unfinished("a").limit!!
         assertEquals(now + Jev.BACKOFF_S * 1000, b.untilMs)
         assertNull(b.resumeAt)
-        assertNull(Jev.retrySeconds("soon", wallNow)); assertNull(Jev.retrySeconds("0", wallNow)); assertNull(Jev.retrySeconds("", wallNow))
+        assertNull(Jev.retrySeconds("soon", wallNow)); assertNull(Jev.retrySeconds("", wallNow))
+        // "now" and a time already past: tried again at once, not after the backoff
+        assertEquals(0L, Jev.retrySeconds("0", wallNow))
+        val past = java.time.Instant.ofEpochMilli(wallNow - 90_000).atZone(java.time.ZoneOffset.UTC)
+        assertEquals(0L, Jev.retrySeconds(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(past), wallNow))
+        // a wait of more than a day is kept as the service asks
+        assertEquals(3 * 86_400L, Jev.retrySeconds("259200", wallNow))
+    }
+
+    @Test
+    fun onlyZensOwnErrorTypeIsTheFreeLimitAndOnlyRealAnswersCount() {
+        assertTrue(Jev.isZenFreeLimit(JevProvider.ZEN, zenLimit))
+        assertFalse(Jev.isZenFreeLimit(JevProvider.OFFICIAL, zenLimit))
+        assertFalse(Jev.isZenFreeLimit(JevProvider.ZEN, """{"error":{"type":"RateLimit","message":"not FreeUsageLimitError"}}"""))
+        // 200 without a usable answer: no answer, so no success
+        for (bad in listOf("""{"answers":{}}""", """{"answers":{"x":{"choice":"what"}}}""",
+            """{"answers":{"x":{"choice":"ok"}}}""", """{"answers":{"x":{"choice":"ok","confidence":"high"}}}""")) {
+            reply = { 200 to bad }
+            val c = timedJev("sk-$bad").mistranslation("a", "b")
+            assertNull(bad, c.answer); assertNotNull(c.error)
+        }
+        reply = { 200 to """{"answers":{"x":{"noul":7}}}""" }
+        assertNull(timedJev("sk-n").unfinished("a").answer)
+        reply = { 200 to """{"answers":{"x":{"choice":"ok","confidence":0.9}}}""" }
+        assertEquals("ok", timedJev("sk-ok").mistranslation("a", "b").choice)
     }
 
     @Test
@@ -661,5 +685,33 @@ class JevTest {
         gate.countDown(); t.join(5_000)
         assertEquals(429, late.get().status)
         assertEquals(1_000_000L + 600_000, j.paused()!!.untilMs)
+    }
+
+    @Test
+    fun thePauseStartsWhenThe429HeadersArriveAndOutlastsASlowBody() {
+        // headers at once, the body never completes before the deadline
+        reply = { 429 to zenLimit }; extraHeaders = "Retry-After: 120\r\n"; trickleMs = 1_000
+        val j = timedJev(deadline = 1_500)
+        val first = AtomicReference<JevCall>()
+        val t = Thread { first.set(j.unfinished("a")) }.apply { start() }
+        val deadline = monoMs() + 1_000
+        while (j.paused() == null && monoMs() < deadline) Thread.sleep(5)
+        // the pause is on while the body still trickles: the other question is not sent
+        assertNotNull(j.paused())
+        assertEquals("paused", j.mistranslation("a", "b").error)
+        t.join(5_000)
+        assertEquals(1, hits.get())
+        // the deadline result is still a 429 with its pause
+        assertEquals(429, first.get().status)
+        assertEquals(now + 120_000, first.get().limit!!.untilMs)
+    }
+
+    @Test
+    fun anOnlineTranslationWhose429BodyIsSlowIsStillA429() {
+        // the body trickles past the first-content cutoff (500 ms), well before the deadline: that exit keeps the 429
+        reply = { 429 to """{"error":"slow down, this body takes a while"}""" }; trickleMs = 100
+        val r = OnlineTranslator(OnlineModel.B9, 10_000, url = "http://127.0.0.1:$port/v1/chat/completions", firstContentMs = 500).translate("x")!!
+        assertEquals(429, r.http)
+        assertTrue(r.error!!, r.error!!.startsWith("no content"))
     }
 }

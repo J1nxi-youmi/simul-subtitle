@@ -63,6 +63,15 @@ class CaptionService : Service() {
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
+    /** the Jev client of the setup published last; its pause shows without a new request. Main thread only. */
+    private var activeJudge: Judge? = null
+    /** Jev's light state: its last result, or the pause the current client is in (also from before this session). */
+    private fun jevNow(): ServiceCall? {
+        val p = activeJudge?.paused() ?: return jevState
+        return jevState?.takeIf { it.limit != null } ?: ServiceCall(false, 429, "paused", p, jevFrom)
+    }
+    /** the translator in use: BYOK by the service its probe accepted, others by model */
+    private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
     private var mtState: ServiceCall? = null
     private var jevState: ServiceCall? = null
@@ -304,7 +313,9 @@ class CaptionService : Service() {
             notice = built.notice
             inUse = built.byok
             jevEndsOn = jevEnds; jevCheckOn = jevCheck
-            var mtId = firstSnap.mtService; var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
+            // the services really in use (BYOK: the one its probe accepted, not a newly saved one still probed)
+            var mtId = mtService(firstSnap, built.byok); var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
+            first.judge.let { j -> main.post { activeJudge = j; refresh() } }
             // the settings in use are not the ones session_start logged: say so, like a change while running
             logUsed(built, firstSnap, change = firstSnap !== s0)
             val pl = Pipeline(
@@ -363,13 +374,16 @@ class CaptionService : Service() {
                     published = v
                     inUse = b.byok
                     notice = b.notice
-                    // another translator or Jev service: its light starts unknown (grey), never the old one's
-                    val m = s.mtService; val j = s.jevKey?.let { s.provider.name + "\n" + it }
+                    // another translator or Jev service: its light starts unknown (grey), never the old one's. Only
+                    // results of older setups are dropped: one of this setup may already have arrived
+                    val m = mtService(s, b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
                     val mtNew = m != mtId; val jevNew = j != jevId
                     mtId = m; jevId = j
-                    if (mtNew || jevNew) main.post {
-                        if (mtNew) { mtFrom = v; mtState = null }
-                        if (jevNew) { jevFrom = v; jevState = null }
+                    val judge = b.setup.judge
+                    main.post {
+                        activeJudge = judge
+                        if (mtNew) { mtFrom = v; if ((mtState?.setup ?: v) < v) mtState = null }
+                        if (jevNew) { jevFrom = v; if ((jevState?.setup ?: v) < v) jevState = null }
                         refresh()
                     }
                     logUsed(b, s, change = true)
@@ -527,7 +541,7 @@ class CaptionService : Service() {
             if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
             // a failing service stays shown, also with timings off; one that works says nothing here
-            serviceWarning(mtState, jevState, jevEndsOn, jevCheckOn, monoMs(), System.currentTimeMillis())?.let {
+            serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, monoMs(), System.currentTimeMillis())?.let {
                 append("${if (isNotEmpty()) "  ·  " else ""}$it")
             }
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
@@ -544,9 +558,10 @@ class CaptionService : Service() {
         }
         if (lines.isEmpty() && status.isEmpty()) v.setLines(listOf(CaptionOverlayView.Line("正在听…", null, false)), diag.ifEmpty { null })
         else v.setLines(lines, diag.ifEmpty { null })
-        v.setServices(light(mtState, true), light(jevState, jevEndsOn || jevCheckOn),
+        val jevNow = jevNow()
+        v.setServices(light(mtState, true), light(jevNow, jevEndsOn || jevCheckOn),
             mtState?.let { reason(it, false, monoMs(), System.currentTimeMillis()) },
-            if (jevEndsOn || jevCheckOn) jevState?.let { reason(it, true, monoMs(), System.currentTimeMillis()) } else "未开启")
+            if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, monoMs(), System.currentTimeMillis()) } else "未开启")
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {
@@ -759,8 +774,8 @@ class CaptionService : Service() {
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
         private val mtModel = online?.id ?: if (mode == MtMode.BYOK) byokModel else localModel
-        /** the translation service in use, for the overlay's light (another one starts grey) */
-        val mtService get() = "$mtModel\n${online?.let { OnlineTranslator.URL } ?: byokUrl}\n${byokKey.orEmpty()}"
+        /** the translation model of a non-BYOK setup (local or the online one), for [mtService] */
+        val mtLabel get() = "$mtModel\n${online?.let { OnlineTranslator.URL }.orEmpty()}"
 
         fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
@@ -780,7 +795,7 @@ class CaptionService : Service() {
 
         fun light(c: ServiceCall?, on: Boolean): CaptionOverlayView.Light = when {
             !on || c == null -> CaptionOverlayView.Light.GREY
-            c.limit != null -> CaptionOverlayView.Light.YELLOW
+            c.limit != null || c.http == 429 -> CaptionOverlayView.Light.YELLOW
             c.ok -> CaptionOverlayView.Light.GREEN
             else -> CaptionOverlayView.Light.RED
         }
@@ -822,18 +837,19 @@ class CaptionService : Service() {
 
         /**
          * The always-shown line for a failing service, or null. It says what still works: sentence ends by pauses
-         * only when that switch is on, "翻译照常" only when the translator works.
+         * only when that switch is on, "翻译照常" only when the translator's last request worked.
          */
         fun serviceWarning(mt: ServiceCall?, jev: ServiceCall?, jevEnds: Boolean, jevCheck: Boolean, nowMono: Long, nowWall: Long): String? {
-            val mtBad = mt?.let { light(it, true) == CaptionOverlayView.Light.RED } == true
-            val jevBad = (jevEnds || jevCheck) && jev != null && light(jev, true).let { it == CaptionOverlayView.Light.RED || it == CaptionOverlayView.Light.YELLOW }
+            fun bad(c: ServiceCall?) = c != null && light(c, true).let { it == CaptionOverlayView.Light.RED || it == CaptionOverlayView.Light.YELLOW }
+            val mtBad = bad(mt)
+            val jevBad = (jevEnds || jevCheck) && bad(jev)
             val parts = mutableListOf<String>()
             if (mtBad) parts += "⚠ 翻译：${reason(mt!!, false, nowMono, nowWall)}"
             if (jevBad) {
                 val effects = mutableListOf<String>()
                 if (jevEnds) effects += "断句改按停顿"
                 if (jevCheck) effects += "译文不检查"
-                if (!mtBad) effects.add(0, "翻译照常")
+                if (mt?.ok == true) effects.add(0, "翻译照常")
                 parts += "⚠ Jev ${reason(jev!!, true, nowMono, nowWall)} · ${effects.joinToString("，")}"
             }
             return parts.joinToString("  ·  ").ifEmpty { null }

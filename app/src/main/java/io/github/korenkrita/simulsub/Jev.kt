@@ -91,19 +91,37 @@ class Jev(
         if (provider.needsKey && !validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
         paused()?.let { return JevCall(body, 0, null, 0, "paused", null, it) }
         val auth = if (provider.needsKey) mapOf("Authorization" to "Bearer $apiKey") else emptyMap()
-        val r = calls.post(url, body, auth, beforeSend)
+        // the pause starts when the 429's headers arrive (the other question waits no longer than that); its body
+        // only tells whether it is Zen's free limit
+        fun pause(retryAfter: String?, free: Boolean): JevLimit {
+            // only a value that would overflow is bounded: a long wait the service asks for is kept
+            val secs = retrySeconds(retryAfter, wall())?.coerceAtMost(1_000_000_000_000L)
+            val l = JevLimit(clock() + (secs ?: BACKOFF_S) * 1000, secs?.let { wall() + it * 1000 }, free)
+            // a later end wins: an older request's answer arriving now never shortens (or ends) a pause
+            return LIMITS.merge(limitKey, l) { a, b -> if (b.untilMs > a.untilMs) b else JevLimit(a.untilMs, a.resumeAt, a.free || b.free) }!!
+        }
+        val r = calls.post(url, body, auth, beforeSend, on429 = { pause(it, false) })
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null
-        // a later end wins: an older request's answer arriving now never shortens (or ends) a pause
+        // the end was fixed by the headers; the body only adds whether it is the free limit
         val limit = if (r.status != 429) null else {
-            val secs = retrySeconds(r.retryAfter, wall())?.coerceAtMost(MAX_PAUSE_S)
-            val l = JevLimit(clock() + (secs ?: BACKOFF_S) * 1000, secs?.let { wall() + it * 1000 },
-                r.body?.contains("FreeUsageLimitError") == true)
-            LIMITS.merge(limitKey, l) { a, b -> if (b.untilMs > a.untilMs) b else a }
+            val free = isZenFreeLimit(provider, r.body)
+            LIMITS.computeIfPresent(limitKey) { _, a -> if (free && !a.free) JevLimit(a.untilMs, a.resumeAt, true) else a }
+                ?: pause(r.retryAfter, free)
+        }
+        // a 200 is a success only when it answers the question asked (a number for noul, a known class for choice)
+        val usable = answer?.takeIf { a ->
+            when (question["type"]) {
+                "noul" -> (a["noul"] as? Number)?.toDouble()?.let { it in 0.0..1.0 } == true
+                "choice" -> (a["choice"] as? String) in ((question["criteria"] as? Map<*, *>)?.keys ?: emptySet<Any>()) &&
+                    (a["confidence"] as? Number)?.toDouble()?.let { it in 0.0..1.0 } == true
+                else -> true
+            }
         }
         // a server may echo the key back (also JSON-escaped); the session log is shareable
-        return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer, limit)
+        return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms,
+            r.error ?: if (usable == null) "HTTP ${r.status}" else null, usable, limit)
     }
 
     companion object {
@@ -113,18 +131,23 @@ class Jev(
         private val LIMITS = java.util.concurrent.ConcurrentHashMap<String, JevLimit>()
         /** a 429 without a usable Retry-After: tried again after this */
         const val BACKOFF_S = 60L
-        /** a longer Retry-After is taken as this (a day limit resets within a day) */
-        const val MAX_PAUSE_S = 86_400L
 
-        /** Seconds a Retry-After value ([h]: delay-seconds or an HTTP-date) asks to wait; null: none or not usable. */
+        /**
+         * Seconds a Retry-After value ([h]: delay-seconds or an HTTP-date) asks to wait: 0 for "now" or a time already
+         * past (tried again at once), null when there is none or it cannot be read (then [BACKOFF_S]).
+         */
         fun retrySeconds(h: String?, nowWall: Long): Long? {
             val v = h?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-            v.toLongOrNull()?.let { return it.takeIf { s -> s > 0 } }
+            v.toLongOrNull()?.let { return it.takeIf { s -> s >= 0 } }
             val at = runCatching {
                 java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
             }.getOrNull() ?: return null
-            return ((at - nowWall + 999) / 1000).takeIf { it > 0 }
+            return maxOf(0, (at - nowWall + 999) / 1000)
         }
+
+        /** OpenCode Zen's own free-usage error (`error.type`), not any body that happens to contain the word */
+        fun isZenFreeLimit(provider: JevProvider, body: String?): Boolean = provider == JevProvider.ZEN && body != null &&
+            runCatching { ((Json.parse(body) as? Map<*, *>)?.get("error") as? Map<*, *>)?.get("type") == "FreeUsageLimitError" }.getOrDefault(false)
 
         /**
          * [body] for the log without [secret], as text (a body need not be valid JSON): every spelling of the key, with any
@@ -235,7 +258,9 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
      */
     fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {},
              firstContentMs: Long? = null, isContent: (String) -> Boolean = { false },
-             isEnd: (String) -> Boolean = { false }): HttpResult {
+             isEnd: (String) -> Boolean = { false },
+             /** a 429's headers arrived (its Retry-After, as sent): called at once, before its body is read */
+             on429: (String?) -> Unit = {}): HttpResult {
         val t0 = monoMs()
         if (cancelled) return HttpResult(0, null, 0, "cancelled")
         val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
@@ -247,6 +272,8 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         val first = java.util.concurrent.atomic.AtomicLong(-1)
         fun firstOrNull() = first.get().takeIf { it >= 0 }
         val result = AtomicReference<HttpResult?>()
+        /** a 429's status and Retry-After, set as soon as its headers arrive */
+        val headersOnly = AtomicReference<HttpResult?>()
         inFlight[call] = Waiters(done, started)
         // cancel() either saw the call in the map or set the flag before this check
         if (cancelled) { inFlight.remove(call); return HttpResult(0, null, 0, "cancelled") }
@@ -265,6 +292,11 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                 override fun onResponse(call: Call, response: Response) {
                     var r: HttpResult? = null
                     val ra = if (response.code == 429) response.header("Retry-After") else null
+                    // a 429 counts from its headers: a body still trickling at a deadline must not hide it
+                    if (response.code == 429) {
+                        headersOnly.set(HttpResult(429, null, monoMs() - t0, "body unread", retryAfter = ra))
+                        on429(ra)
+                    }
                     try {
                         val src = response.body?.source()
                         r = when {
@@ -298,14 +330,22 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                     val f = first.get()
                     // finished without text (an HTTP error, a failure, an empty answer): reported as what it is
                     val late = if (f >= 0) f > firstContentMs else !finished
-                    if (late) { call.cancel(); return HttpResult(0, null, monoMs() - t0, "no content in ${firstContentMs}ms", firstOrNull()) }
+                    if (late) {
+                        call.cancel()
+                        return headersOnly.get()?.let { HttpResult(429, null, monoMs() - t0, "no content in ${firstContentMs}ms", firstOrNull(), it.retryAfter) }
+                            ?: HttpResult(0, null, monoMs() - t0, "no content in ${firstContentMs}ms", firstOrNull())
+                    }
                 }
             }
             // the deadline is absolute from the start of post(); cancel() wakes this at once
             done.await(maxOf(0, t0 + deadlineMs - monoMs()), TimeUnit.MILLISECONDS)
             return when {
                 cancelled -> HttpResult(result.get()?.status ?: 0, null, monoMs() - t0, "cancelled", firstOrNull())
-                else -> result.get() ?: run { call.cancel(); HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms", firstOrNull()) }
+                else -> result.get() ?: run {
+                    call.cancel()
+                    headersOnly.get()?.let { HttpResult(it.status, null, monoMs() - t0, "deadline ${deadlineMs}ms", firstOrNull(), it.retryAfter) }
+                        ?: HttpResult(0, null, monoMs() - t0, "deadline ${deadlineMs}ms", firstOrNull())
+                }
             }
         } catch (e: InterruptedException) {
             call.cancel(); Thread.currentThread().interrupt()

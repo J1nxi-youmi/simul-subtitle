@@ -1,21 +1,129 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- group title above a settings card -->
+    <!-- magpie's .label: small grey caps-weight title above a list -->
     <style name="SectionTitle">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">30dp</item>
-        <item name="android:layout_marginBottom">12dp</item>
-        <item name="android:layout_marginStart">8dp</item>
-        <item name="android:textColor">@color/brand</item>
-        <item name="android:textSize">17sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-    <style name="SliderLabel">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">18dp</item>
+        <item name="android:layout_marginTop">20dp</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.05</item>
+    </style>
+    <!-- magpie's .list: white card, 12dp corners, a hairline edge instead of a shadow -->
+    <style name="ListCard" parent="Widget.Material3.CardView.Outlined">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="cardBackgroundColor">@color/card</item>
+        <item name="cardCornerRadius">12dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeColor">@color/line</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+    <!-- a row's name (magpie's .row .name) -->
+    <style name="RowName">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
         <item name="android:textColor">@color/text</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+    <!-- a row's grey line under the name (magpie's .row .sub) -->
+    <style name="RowSub">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+    <!-- a slider's name and value, one line above the slider -->
+    <style name="SliderLabel" parent="RowName">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_marginTop">10dp</item>
+    </style>
+    <!-- a list row with a switch on the right: full width, finger-sized -->
+    <style name="RowSwitch" parent="Widget.JpSub.Switch">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">52dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <!-- magpie's toggle: an ink track with a card-coloured thumb when on, a pale line track when off -->
+    <style name="Widget.JpSub.Switch" parent="Widget.Material3.CompoundButton.MaterialSwitch">
+        <item name="trackTint">@color/switch_track</item>
+        <item name="thumbTint">@color/switch_thumb</item>
+        <item name="trackDecorationTint">@color/switch_deco</item>
+    </style>
+    <!-- magpie's .eslide: ink fill on a line-coloured rail, a white knob, no value bubble -->
+    <style name="Widget.JpSub.Slider" parent="Widget.Material3.Slider">
+        <item name="trackColorActive">@color/text</item>
+        <item name="trackColorInactive">@color/line</item>
+        <item name="thumbColor">@color/slider_thumb</item>
+        <item name="haloColor">@color/slider_halo</item>
+        <item name="tickVisible">false</item>
+        <item name="labelBehavior">gone</item>
+        <item name="trackHeight">4dp</item>
+        <item name="thumbRadius">9dp</item>
+        <item name="thumbElevation">2dp</item>
+        <item name="thumbStrokeColor">@color/line</item>
+        <item name="thumbStrokeWidth">0.5dp</item>
+    </style>
+    <!-- magpie's .text: a quiet text button -->
+    <style name="Widget.JpSub.TextButton" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textColor">@color/text2</item>
+        <item name="android:textSize">14sp</item>
+        <item name="rippleColor">@color/line</item>
+        <item name="shapeAppearance">@style/Shape.JpSub.8</item>
+    </style>
+    <!-- magpie's .text.primary: the indigo button, 10dp corners -->
+    <style name="Widget.JpSub.Button" parent="Widget.Material3.Button">
+        <item name="shapeAppearance">@style/Shape.JpSub.10</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+    <!-- magpie's .text.action: a white button with a hairline -->
+    <style name="Widget.JpSub.ActionButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="strokeColor">@color/line</item>
+        <item name="backgroundTint">@color/card</item>
+        <item name="rippleColor">@color/line</item>
+        <item name="shapeAppearance">@style/Shape.JpSub.8</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+    </style>
+    <!-- magpie's .seg: a grey track, the chosen option a raised card-coloured thumb, the others plain grey text.
+         One button of a MaterialButtonToggleGroup; the group itself paints the track (seg_track.xml). -->
+    <style name="Widget.JpSub.Segment" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="backgroundTint">@color/seg_bg</item>
+        <item name="android:textColor">@color/seg_fg</item>
+        <item name="strokeColor">@color/seg_stroke</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="rippleColor">@color/line</item>
+        <item name="shapeAppearance">@style/Shape.JpSub.8</item>
+        <item name="android:insetTop">3dp</item>
+        <item name="android:insetBottom">3dp</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="Shape.JpSub.8" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
+    </style>
+    <style name="Shape.JpSub.10" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">10dp</item>
+    </style>
+    <!-- the hairline between two rows of a list (magpie's .row + .row), inset from the start -->
+    <style name="RowDivider">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginStart">14dp</item>
+        <item name="android:background">@color/line2</item>
     </style>
 </resources>

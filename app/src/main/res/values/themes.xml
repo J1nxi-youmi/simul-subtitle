@@ -1,16 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- magpie's look on Material 3: one quiet surface, ink controls, the indigo accent only where it matters -->
     <style name="Theme.JpSub" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/brand</item>
         <item name="colorOnPrimary">@color/on_brand</item>
-        <item name="colorSecondary">@color/brand_pink</item>
+        <item name="colorPrimaryContainer">@color/brand_soft</item>
+        <item name="colorOnPrimaryContainer">@color/text</item>
+        <!-- tonal buttons, chips: magpie's grey pill, not Material's lilac -->
+        <item name="colorSecondary">@color/text2</item>
+        <item name="colorOnSecondary">@color/card</item>
+        <item name="colorSecondaryContainer">@color/pill</item>
+        <item name="colorOnSecondaryContainer">@color/text</item>
+        <item name="colorTertiary">@color/brand</item>
+        <item name="colorError">@color/err</item>
+        <item name="colorOnError">@color/on_err</item>
         <item name="android:colorBackground">@color/bg</item>
         <item name="colorSurface">@color/card</item>
         <item name="colorOnSurface">@color/text</item>
+        <item name="colorSurfaceVariant">@color/pill</item>
+        <item name="colorOnSurfaceVariant">@color/text2</item>
+        <item name="colorSurfaceContainerLowest">@color/card</item>
+        <item name="colorSurfaceContainerLow">@color/card</item>
+        <item name="colorSurfaceContainer">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorSurfaceContainerHighest">@color/pill</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="colorOutlineVariant">@color/line2</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text2</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">@bool/light_bars</item>
         <item name="android:windowLightNavigationBar">@bool/light_bars</item>
+        <!-- every switch, slider and text button in the app, static or built in code -->
+        <item name="materialSwitchStyle">@style/Widget.JpSub.Switch</item>
+        <item name="sliderStyle">@style/Widget.JpSub.Slider</item>
+        <item name="borderlessButtonStyle">@style/Widget.JpSub.TextButton</item>
+        <item name="materialButtonStyle">@style/Widget.JpSub.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.JpSub.Segment</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.JpSub.Dialog</item>
+    </style>
+    <style name="ThemeOverlay.JpSub.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/card</item>
+        <item name="colorSurfaceContainerHigh">@color/card</item>
+        <item name="colorPrimary">@color/text</item>
+        <item name="shapeAppearanceCornerExtraLarge">@style/Shape.JpSub.12</item>
+    </style>
+    <style name="Shape.JpSub.12" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">12dp</item>
     </style>
     <bool name="light_bars">true</bool>
 </resources>

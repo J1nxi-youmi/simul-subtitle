@@ -93,26 +93,36 @@ class MainActivity : Activity() {
         setupStyle()
         renderTranslate()
         findViewById<LinearLayout>(R.id.themeBox).apply {
-            addView(label("这个页面用白天还是夜间颜色（不影响悬浮字幕，字幕颜色在上面选）", top = 0))
+            addView(hint("这个页面用白天还是夜间颜色。不影响悬浮字幕，字幕颜色在「字幕」里选。").apply { setPadding(0, 0, 0, (10 * dpx).toInt()) })
             // recreate re-reads resources with the new mode; the overlay lives in the service and is untouched
             addView(choice(listOf("system" to "跟随系统", "light" to "白天", "dark" to "夜间"), prefs.theme) {
                 if (prefs.theme != it) { prefs.theme = it; recreate() }
             })
         }
+        // the settings categories, magpie's preferences tabs: one list shown at a time
+        findViewById<android.widget.FrameLayout>(R.id.tabBox).addView(choice(TABS.indices.map { it to TABS[it].second }, tab) { showTab(it) })
         findViewById<View>(R.id.openSettings).setOnClickListener { showSettings(true) }
-        findViewById<View>(R.id.closeSettings).setOnClickListener { showSettings(false) }
+        findViewById<View>(R.id.closeSettings).setOnClickListener { back() }
+        findViewById<View>(R.id.openSize).setOnClickListener { showSize(true) }
         findViewById<TextView>(R.id.aboutVersion).text = "${getString(R.string.app_name)}  版本 ${BuildConfig.VERSION_NAME}"
         findViewById<View>(R.id.openRepo).setOnClickListener {
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
             catch (_: android.content.ActivityNotFoundException) { }
         }
-        // a theme switch recreates the activity from the settings page: stay there
+        // a theme switch recreates the activity from the settings page: stay there, on the same category / page
+        tab = savedInstanceState?.getInt("tab", 0)?.coerceIn(TABS.indices) ?: 0
+        showTab(tab)
         showSettings(savedInstanceState?.getBoolean("settings") == true)
+        if (inSettings && savedInstanceState?.getBoolean("sizePage") == true) showSize(true)
         updater = AppUpdater(this)
         updater.start()
     }
 
     private var inSettings = false
+    /** Index into [TABS]: the settings category shown. */
+    private var tab = 0
+    /** The size page (字幕 › 字幕框大小和保留几句) is open over the 字幕 category. */
+    private var inSize = false
 
     private fun showSettings(on: Boolean) {
         inSettings = on
@@ -122,17 +132,42 @@ class MainActivity : Activity() {
         if (on) {
             loadStyle() // the preview needs the stage's real width, known once the page is laid out
             findViewById<View>(R.id.previewStage).post { loadStyle() }
-        } else renderLang()
+        } else { showSize(false); renderLang() }
+    }
+
+    private fun showTab(i: Int) {
+        tab = i
+        TABS.forEachIndexed { n, (id, _) -> findViewById<View>(id).visibility = if (n == i && !inSize) View.VISIBLE else View.GONE }
+        findViewById<android.widget.ScrollView>(R.id.scroll).scrollTo(0, 0)
+        if (TABS[i].first == R.id.tabCaption && inSettings) findViewById<View>(R.id.previewStage).post { loadStyle() }
+    }
+
+    /** The size page replaces the categories and the 字幕 list; back returns to them. */
+    private fun showSize(on: Boolean) {
+        inSize = on
+        findViewById<View>(R.id.sizePage).visibility = if (on) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.tabBox).visibility = if (on) View.GONE else View.VISIBLE
+        findViewById<TextView>(R.id.settingsTitle).text = if (on) "字幕框大小和保留几句" else "设置"
+        showTab(if (on) TABS.indexOfFirst { it.first == R.id.tabCaption } else tab)
+    }
+
+    /** One step back: size page → settings → home → leave. */
+    private fun back(): Boolean = when {
+        inSize -> { showSize(false); true }
+        inSettings -> { showSettings(false); true }
+        else -> false
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean("settings", inSettings)
+        outState.putInt("tab", tab)
+        outState.putBoolean("sizePage", inSize)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (inSettings) showSettings(false) else @Suppress("DEPRECATION") super.onBackPressed()
+        if (!back()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     /** The home page's two questions: what is spoken, what the captions should be in. Next start, like the settings. */
@@ -140,40 +175,16 @@ class MainActivity : Activity() {
         val box = findViewById<LinearLayout>(R.id.langBox)
         box.removeAllViews()
         val running = CaptionService.running
-        val dp = resources.displayMetrics.density
-        fun big(t: String, top: Int) = TextView(this).apply {
-            text = t; textSize = 18f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(0, (top * dp).toInt(), 0, (8 * dp).toInt())
-        }
-        fun spinner(items: List<String>, sel: Int, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
-            adapter = object : android.widget.ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items) {
-                override fun getView(p: Int, c: View?, g: android.view.ViewGroup) =
-                    (super.getView(p, c, g) as TextView).apply { textSize = 20f; minHeight = (52 * dp).toInt() }
-                override fun getDropDownView(p: Int, c: View?, g: android.view.ViewGroup) =
-                    (super.getDropDownView(p, c, g) as TextView).apply { textSize = 19f; minHeight = (52 * dp).toInt() }
-            }
-            setSelection(sel, false)
-            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = onPick(pos)
-                override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-            }
-            isEnabled = !running
-        }
-        box.addView(big("视频里说的是", 0))
         val sources = Lang.SOURCES
-        box.addView(spinner(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0)) {
+        box.addView(pickRow("视频里说的是", sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), !running) {
             if (prefs.sourceLang != sources[it]) { prefs.sourceLang = sources[it]; renderTranslate() }
         })
-        box.addView(big("字幕翻译成", 18))
+        box.addView(divider())
         val targets = Lang.entries
-        box.addView(spinner(targets.map { it.zh }, prefs.targetLang.ordinal) {
+        box.addView(pickRow("字幕翻译成", targets.map { it.zh }, prefs.targetLang.ordinal, !running) {
             if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate() }
         })
-        box.addView(TextView(this).apply {
-            text = if (running) "字幕运行中，停止后才能改语言。" else "知道是哪种语言就选上，翻译会更准。"
-            textSize = 14f; setTextColor(getColor(R.color.text2))
-            setPadding(0, (10 * dp).toInt(), 0, 0)
-        })
+        findViewById<TextView>(R.id.langHint).text = if (running) "字幕运行中，停止后才能改语言。" else "知道是哪种语言就选上，翻译会更准。"
     }
 
     override fun onResume() {
@@ -231,6 +242,7 @@ class MainActivity : Activity() {
             status(R.color.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止。")
             primary.text = "停止字幕"; primary.setIconResource(R.drawable.ic_stop)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err))
+            onPrimary(R.color.on_err)
             primary.setOnClickListener { CaptionService.stop(this); main.postDelayed({ render() }, 300) }
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
@@ -239,8 +251,14 @@ class MainActivity : Activity() {
             else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
+            onPrimary(R.color.on_brand)
             primary.setOnClickListener { start() }
         }
+    }
+
+    /** Text and icon colour of the main button: each fill has its own readable foreground (indigo / red, day / night). */
+    private fun onPrimary(color: Int) {
+        primary.setTextColor(getColor(color)); primary.iconTint = ColorStateList.valueOf(getColor(color))
     }
 
     private fun renderModels() {
@@ -325,21 +343,21 @@ class MainActivity : Activity() {
 
     private fun permRow(title: String, sub: String, granted: Boolean, parent: LinearLayout, grant: () -> Unit) {
         val dp = resources.displayMetrics.density
+        if (parent.childCount > 0) parent.addView(divider())
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((20 * dp).toInt(), (12 * dp).toInt(), (14 * dp).toInt(), (12 * dp).toInt())
+            minimumHeight = (56 * dp).toInt()
+            setPadding((14 * dp).toInt(), (8 * dp).toInt(), (10 * dp).toInt(), (8 * dp).toInt())
         }
         val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        texts.addView(TextView(this).apply { text = title; textSize = 18f; setTextColor(getColor(R.color.text)) })
-        texts.addView(TextView(this).apply { text = sub; textSize = 14f; setTextColor(getColor(R.color.text2)) })
+        texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
+        texts.addView(TextView(this).apply { text = sub; textSize = 13f; setTextColor(getColor(R.color.muted)) })
         row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         if (granted) {
-            row.addView(TextView(this).apply { text = "✓ 已允许"; textSize = 16f; setTextColor(getColor(R.color.ok)) })
+            row.addView(TextView(this).apply { text = "✓ 已允许"; textSize = 14f; setTextColor(getColor(R.color.ok)); setPadding((8 * dp).toInt(), 0, (4 * dp).toInt(), 0) })
         } else {
-            row.addView(MaterialButton(this).apply {
-                text = "去允许"; textSize = 16f; minHeight = (52 * dp).toInt(); setOnClickListener { grant() }
-            })
+            row.addView(pillButton("去允许") { grant() })
         }
         parent.addView(row)
     }
@@ -350,57 +368,123 @@ class MainActivity : Activity() {
 
     /** Small grey caption above a control. */
     private fun label(t: String, top: Int = 14) = TextView(this).apply {
-        text = t; textSize = 15f; setTextColor(getColor(R.color.text2))
+        text = t; textSize = 15f; setTextColor(getColor(R.color.text))
         setPadding(0, (top * dpx).toInt(), 0, (8 * dpx).toInt())
     }
 
     /** Heading of a group inside a settings card. */
     private fun heading(t: String, top: Int = 26) = TextView(this).apply {
-        text = t; textSize = 18f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
+        text = t; textSize = 15f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
         setPadding(0, (top * dpx).toInt(), 0, (4 * dpx).toInt())
     }
 
-    /** One or two lines saying what an option does. */
+    /** One or two lines saying what an option does (magpie's grey .sub). */
     private fun hint(t: String) = TextView(this).apply {
-        text = t; textSize = 14f; setTextColor(getColor(R.color.text2)); setLineSpacing(3 * dpx, 1f)
+        text = t; textSize = 13f; setTextColor(getColor(R.color.muted)); setLineSpacing(2 * dpx, 1f)
         setPadding(0, (6 * dpx).toInt(), 0, 0)
+    }
+
+    /** A risk / cost / "takes effect later" note: magpie's amber note, never cut short. */
+    private fun note(t: String) = TextView(this).apply {
+        text = t; textSize = 13f; setTextColor(getColor(R.color.warn)); setLineSpacing(2 * dpx, 1f)
+        setBackgroundResource(R.drawable.note_warn)
+        setPadding((10 * dpx).toInt(), (8 * dpx).toInt(), (10 * dpx).toInt(), (8 * dpx).toInt())
+    }
+
+    /** The hairline between two rows of a list. */
+    private fun divider() = View(this).apply {
+        setBackgroundColor(getColor(R.color.line2))
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dpx).toInt().coerceAtLeast(1)).apply { marginStart = (14 * dpx).toInt() }
+    }
+
+    /** A small grey button at the end of a row (magpie's .text.action on a pill). */
+    private fun pillButton(t: String, onClick: () -> Unit) = MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+        text = t; textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (44 * dpx).toInt(); minimumHeight = minHeight
+        backgroundTintList = ColorStateList.valueOf(getColor(R.color.pill))
+        setOnClickListener { onClick() }
+    }
+
+    /** Group title + white list card on the settings page; returns the card's content box. */
+    private fun group(root: LinearLayout, title: String): LinearLayout {
+        root.addView(TextView(this, null, 0, R.style.SectionTitle).apply { text = title }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (20 * dpx).toInt(); bottomMargin = (6 * dpx).toInt()
+        })
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((14 * dpx).toInt(), (6 * dpx).toInt(), (14 * dpx).toInt(), (14 * dpx).toInt())
+        }
+        root.addView(com.google.android.material.card.MaterialCardView(this).apply {
+            setCardBackgroundColor(getColor(R.color.card)); radius = 12 * dpx; cardElevation = 0f
+            strokeColor = getColor(R.color.line); strokeWidth = (1 * dpx).toInt().coerceAtLeast(1)
+            addView(inner)
+        })
+        return inner
     }
 
     /** A switch with its title, and the description under it. */
     private fun switchRow(box: LinearLayout, title: String, desc: String, on: Boolean, onChange: (Boolean) -> Unit): MaterialSwitch {
         val s = MaterialSwitch(this).apply {
-            text = title; textSize = 17f; setTextColor(getColor(R.color.text)); isChecked = on
-            minHeight = (52 * dpx).toInt()
+            text = title; textSize = 15f; setTextColor(getColor(R.color.text)); isChecked = on
+            minHeight = (48 * dpx).toInt()
             setOnCheckedChangeListener { _, v -> onChange(v) }
         }
         box.addView(s, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (14 * dpx).toInt()
+            topMargin = (8 * dpx).toInt()
         })
         box.addView(hint(desc).apply { setPadding(0, 0, (56 * dpx).toInt(), 0) })
         return s
     }
 
-    /** A full-width dropdown. */
+    /** A dropdown: magpie's grey pill with a chevron; full width unless placed at the end of a row. */
     private fun dropdown(items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
-        adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
+        adapter = object : android.widget.ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items) {
+            override fun getView(p: Int, c: View?, g: android.view.ViewGroup) =
+                (super.getView(p, c, g) as TextView).apply {
+                    textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (44 * dpx).toInt()
+                    setPadding((12 * dpx).toInt(), 0, (8 * dpx).toInt(), 0)
+                }
+            override fun getDropDownView(p: Int, c: View?, g: android.view.ViewGroup) =
+                (super.getDropDownView(p, c, g) as TextView).apply { textSize = 15f; minHeight = (48 * dpx).toInt() }
+        }
+        setBackgroundResource(R.drawable.spinner_pill)
+        setPadding(0, 0, (26 * dpx).toInt(), 0) // room for the chevron
         setSelection(sel, false)
         onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = onPick(pos)
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
         }
-        isEnabled = enabled
-        minimumHeight = (52 * dpx).toInt()
+        isEnabled = enabled; alpha = if (enabled) 1f else 0.5f
+        minimumHeight = (44 * dpx).toInt()
     }
 
-    /** Single-choice row of segmented buttons. */
+    /** One list row: the name on the left, a dropdown at the end (magpie's row with a pop-up button). */
+    private fun pickRow(title: String, items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = (56 * dpx).toInt()
+        setPadding((14 * dpx).toInt(), (6 * dpx).toInt(), (10 * dpx).toInt(), (6 * dpx).toInt())
+        addView(TextView(this@MainActivity).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(dropdown(items, sel, enabled, onPick).apply { dropDownHorizontalOffset = 0 },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
+    }
+
+    /** A segment of [choice]: the group squares off its inner buttons on every measure; magpie's thumb keeps all corners round. */
+    private class SegButton(ctx: android.content.Context) : MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle) {
+        override fun setShapeAppearanceModel(m: com.google.android.material.shape.ShapeAppearanceModel) =
+            super.setShapeAppearanceModel(m.toBuilder().setAllCornerSizes(8 * resources.displayMetrics.density).build())
+    }
+
+    /** Single-choice row of segmented buttons (magpie's .seg: a grey track, the chosen option a raised thumb). */
     private fun <T> choice(options: List<Pair<T, String>>, current: T, onPick: (T) -> Unit) =
         com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
             isSingleSelection = true; isSelectionRequired = true
             // a LinearLayout lines its children up on the text baseline: a button whose label shrank would sit lower
             isBaselineAligned = false
+            setBackgroundResource(R.drawable.seg_track)
+            setPadding((3 * dpx).toInt(), 0, (3 * dpx).toInt(), 0)
             options.forEach { (v, t) ->
-                val b = MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                    id = View.generateViewId(); text = t; tag = v; textSize = 16f; minHeight = (52 * dpx).toInt()
+                val b = SegButton(this@MainActivity).apply {
+                    id = View.generateViewId(); text = t; tag = v; textSize = 14f; minHeight = (48 * dpx).toInt()
                     // narrow phones: the label shrinks (down to 10 sp) until the laid-out text is uncut, instead of
                     // being cut to "在…"; judged on the real layout, so the button's paddings and stroke count. Still
                     // cut at 10 sp (very large system font): it wraps over as many lines as it needs, never cut.
@@ -429,17 +513,15 @@ class MainActivity : Activity() {
 
     /** Engine, scene, display mode and Jev. Engine, scene and Jev apply to the next start; the mode applies immediately. */
     private fun renderTranslate() {
-        val box = findViewById<LinearLayout>(R.id.translateList)
-        box.removeAllViews()
+        val root = findViewById<LinearLayout>(R.id.translateList)
+        root.removeAllViews()
         val running = CaptionService.running
         translateRunning = running
-        if (running) box.addView(TextView(this).apply {
-            text = "字幕正在运行：下面的改动从下次开始字幕时生效（显示方式除外，马上生效）。"
-            textSize = 15f; setTextColor(getColor(R.color.warn)); setPadding(0, 0, 0, (6 * dpx).toInt())
-        })
+        if (running) root.addView(note("字幕正在运行：下面的改动从下次开始字幕时生效（显示方式除外，马上生效）。"), LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
         // -- how it translates
-        box.addView(heading("怎么翻译", top = 0))
+        var box = group(root, "怎么翻译")
         box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
         // one line each, like the other two: the "experimental" warning is shown right below when it is picked
         val engine = choice(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "手机上翻译", MtMode.BYOK to "自己的模型"), prefs.mtMode) {
@@ -461,6 +543,7 @@ class MainActivity : Activity() {
             MtMode.BYOK -> renderByok(box, running)
         }
 
+        box = group(root, "内容")
         box.addView(label("内容类型"))
         box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
         box.addView(hint("选「B站 VTuber 直播」时，翻译会知道这是虚拟主播在 B 站和观众闲聊、念弹幕，并按 B 站的说法翻译「SC」「舰长」「弹幕」这类直播用语。"))
@@ -484,7 +567,7 @@ class MainActivity : Activity() {
         showCtx()
 
         // -- how captions appear
-        box.addView(heading("字幕怎么出现"))
+        box = group(root, "字幕怎么出现")
         modeGroup = choice(listOf(false to "边听边出", true to "说完再出"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }
         box.addView(modeGroup, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = (8 * dpx).toInt()
@@ -494,7 +577,7 @@ class MainActivity : Activity() {
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
 
         // -- Jev (optional cloud judge)
-        box.addView(heading("AI 辅助（可选，需要联网）"))
+        box = group(root, "AI 辅助（可选，需要联网）")
         val jev = switchRow(box, "智能断句", "由 Jev 判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) {}
         val jevCheck = switchRow(box, "检查译文", "由 Jev 检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
         val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -553,10 +636,8 @@ class MainActivity : Activity() {
 
     /** BYOK: the user's OpenAI-compatible service; URL, key, model id and a test that also finds the thinking switch. */
     private fun renderByok(box: LinearLayout, running: Boolean) {
-        box.addView(TextView(this).apply {
-            text = "⚠ 实验性功能：翻译效果和速度都无法预测，取决于你填的服务和模型。开启后风险由你自己承担，包括费用、额度和服务商对内容的处理。"
-            textSize = 15f; setTextColor(getColor(R.color.warn)); setPadding(0, (10 * dpx).toInt(), 0, 0)
-        })
+        box.addView(note("⚠ 实验性功能：翻译效果和速度都无法预测，取决于你填的服务和模型。开启后风险由你自己承担，包括费用、额度和服务商对内容的处理。"),
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (10 * dpx).toInt() })
         fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
             box.addView(label(title))
             return android.widget.EditText(this).apply {
@@ -859,28 +940,33 @@ class MainActivity : Activity() {
         val keepHint = findViewById<TextView>(R.id.keepHint)
         val paletteRow = findViewById<LinearLayout>(R.id.paletteRow)
         val dpx = resources.displayMetrics.density
-        // one swatch per palette: its background with a sample glyph in its text colour, brand outline when chosen
+        // one chip per palette (magpie's .chip): a round sample of its background and text colour, then its name;
+        // the chosen one gets an ink outline
         fun renderPalettes() {
             paletteRow.removeAllViews()
             for (p in CaptionOverlayView.PALETTES) {
                 val sel = p.id == CaptionOverlayView.palette(prefs.palette).id
                 paletteRow.addView(LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                     contentDescription = p.label + if (sel) "（已选）" else ""
-                    setPadding((4 * dpx).toInt(), 0, (4 * dpx).toInt(), 0)
+                    minimumHeight = (44 * dpx).toInt()
+                    setPadding((5 * dpx).toInt(), 0, (12 * dpx).toInt(), 0)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 22 * dpx; setColor(getColor(R.color.card))
+                        setStroke(((if (sel) 2 else 1) * dpx).toInt().coerceAtLeast(1), getColor(if (sel) R.color.text else R.color.line))
+                    }
                     addView(TextView(this@MainActivity).apply {
-                        text = "字"; gravity = Gravity.CENTER; textSize = 18f; setTextColor(p.zh); typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        text = "字"; gravity = Gravity.CENTER; textSize = 13f; setTextColor(p.zh); typeface = android.graphics.Typeface.DEFAULT_BOLD
                         background = android.graphics.drawable.GradientDrawable().apply {
-                            cornerRadius = 14 * dpx; setColor(p.bg or 0xFF000000.toInt())
-                            setStroke(((if (sel) 3 else 1) * dpx).toInt(), if (sel) getColor(R.color.brand) else 0x33888888)
+                            shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(p.bg or 0xFF000000.toInt()); setStroke((1 * dpx).toInt().coerceAtLeast(1), 0x33888888)
                         }
-                    }, LinearLayout.LayoutParams((52 * dpx).toInt(), (52 * dpx).toInt()))
+                    }, LinearLayout.LayoutParams((32 * dpx).toInt(), (32 * dpx).toInt()))
                     addView(TextView(this@MainActivity).apply {
-                        text = p.label; textSize = 12f; gravity = Gravity.CENTER
-                        setTextColor(getColor(if (sel) R.color.brand else R.color.text2))
-                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (4 * dpx).toInt() })
+                        text = p.label; textSize = 14f
+                        setTextColor(getColor(if (sel) R.color.text else R.color.text2))
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
                     setOnClickListener { prefs.palette = p.id; renderPalettes(); preview.setColors(p) }
-                }, LinearLayout.LayoutParams((68 * dpx).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = (8 * dpx).toInt() })
             }
         }
 
@@ -900,12 +986,16 @@ class MainActivity : Activity() {
         }
         fun apply() {
             lSize.text = "文字大小  ${size.value.toInt()}"
-            lAlpha.text = "背景深浅  ${alpha.value.toInt()}%"
+            lAlpha.text = "背景浓淡  ${alpha.value.toInt()}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
             lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（跟着内容变）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"
             lKeepS.text = "屏幕上至少留  ${keepS.value.toInt()} 句"
             lKeepC.text = "字数超过  ${keepC.value.toInt()} 字后，收起最早的句子"
             keepHint.text = "屏幕上会留着刚说完的几句话，方便回看；句数和字数都超过上面的数字时，最早的一句才会收起。字幕框放不下时，只显示最新的内容。"
+            // the row that opens the size page says what is set there now
+            findViewById<TextView>(R.id.sizeSummary).text = "宽 ${width.value.toInt()}% · 高 " +
+                (if (prefs.heightFrac <= 0f) "自动" else "${Math.round(prefs.heightFrac * 100)}%") +
+                " · 至少留 ${keepS.value.toInt()} 句 · ${keepC.value.toInt()} 字"
             preview.setColors(CaptionOverlayView.palette(prefs.palette))
             preview.applyStyle(size.value, alpha.value / 100f)
             // same caption height as the overlay will get (the stage grows with it)
@@ -993,5 +1083,7 @@ class MainActivity : Activity() {
         const val LOGS_BEFORE_SCROLL = 5
         /** where the project lives (set by the author; the repository may not be public yet) */
         const val REPO_URL = "https://github.com/KorenKrita/simul-subtitle"
+        /** Settings categories: the list shown for each, and its tab label. */
+        val TABS: List<Pair<Int, String>> = listOf(R.id.tabCaption to "字幕", R.id.tabTranslate to "翻译", R.id.tabPage to "页面", R.id.tabRecords to "记录", R.id.tabAbout to "关于")
     }
 }

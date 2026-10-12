@@ -1,14 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- magpie's dark palette (internal/gui/assets/app.css, prefers-color-scheme: dark) -->
 <resources>
-    <color name="brand">#FF9D93FF</color>
-    <!-- light brand / err at night: dark text keeps ≥ 6.5:1 (white would be ~2.6:1) -->
-    <color name="on_brand">#FF17132B</color>
-    <color name="brand_pink">#FFF472B6</color>
-    <color name="bg">#FF121117</color>
-    <color name="card">#FF1D1B24</color>
-    <color name="text">#FFF2F0F8</color>
-    <color name="text2">#FFB9B5C6</color>
-    <color name="ok">#FF4ADE80</color>
-    <color name="warn">#FFFBBF24</color>
-    <color name="err">#FFF87171</color>
+    <color name="brand">#FFA5B4FC</color>
+    <!-- light accent at night: magpie's accent-fg, dark text (≥ 9:1); white would be ~1.9:1 -->
+    <color name="on_brand">#FF14142A</color>
+    <color name="brand_soft">#FF2B2C47</color>
+    <color name="bg">#FF1A1A1E</color>
+    <color name="card">#FF232327</color>
+    <color name="card2">#FF1F1F23</color>
+    <color name="pill">#FF2D2D33</color>
+    <color name="line">#FF333339</color>
+    <color name="line2">#FF2C2C32</color>
+    <!-- rgba(255,255,255,.035) / .15 over the card, flattened: Android tints need opaque colours to stay predictable -->
+    <color name="seg_track">#FF29292D</color>
+    <color name="seg_thumb">#FF444448</color>
+    <color name="ctl_fg">#FFA1A1AA</color>
+    <color name="text">#FFEDEDF1</color>
+    <color name="text2">#FFB9B9C1</color>
+    <color name="muted">#FF8B8B94</color>
+    <color name="faint">#FF56565F</color>
+    <color name="ok">#FF6FD99B</color>
+    <color name="warn">#FFF2B544</color>
+    <color name="warn_soft">#FF3F3220</color>
+    <color name="err">#FFF28B82</color>
+    <color name="err_soft">#FF45272A</color>
+    <!-- light red at night: dark text (≥ 7:1) -->
+    <color name="on_err">#FF14142A</color>
 </resources>

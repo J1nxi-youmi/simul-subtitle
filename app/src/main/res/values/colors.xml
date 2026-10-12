@@ -1,14 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- magpie's light palette (internal/gui/assets/app.css :root) -->
 <resources>
-    <color name="brand">#FF5B4AE8</color>
-    <!-- text / icons on brand- and err-coloured buttons (≥ 4.5:1 on both) -->
+    <!-- accent: the one start button, links, the focused field -->
+    <color name="brand">#FF4F46E5</color>
+    <!-- text / icons on the accent (white on #4f46e5: 6.3:1) -->
     <color name="on_brand">#FFFFFFFF</color>
-    <color name="brand_pink">#FFEC4899</color>
-    <color name="bg">#FFF6F5FB</color>
+    <color name="brand_soft">#FFEEEDFD</color>
+    <color name="bg">#FFF4F4F6</color>
     <color name="card">#FFFFFFFF</color>
-    <color name="text">#FF1C1B22</color>
-    <color name="text2">#FF57536A</color>
-    <color name="ok">#FF16A34A</color>
-    <color name="warn">#FFD97706</color>
-    <color name="err">#FFDC2626</color>
+    <color name="card2">#FFF9F9FB</color>
+    <!-- a quiet control: dropdown, unselected chip -->
+    <color name="pill">#FFF1F1F4</color>
+    <color name="line">#FFE3E3E8</color>
+    <color name="line2">#FFECECF0</color>
+    <!-- segmented control: the track, the thumb on the chosen option, the other options' text -->
+    <color name="seg_track">#FFE6E6EB</color>
+    <color name="seg_thumb">#FFFFFFFF</color>
+    <color name="ctl_fg">#FF63636B</color>
+    <!-- ink: body text, switches and slider fills (magpie's fg) -->
+    <color name="text">#FF1C1C21</color>
+    <color name="text2">#FF4B4B53</color>
+    <color name="muted">#FF85858D</color>
+    <color name="faint">#FFB9B9C2</color>
+    <color name="ok">#FF189A58</color>
+    <color name="warn">#FFB45309</color>
+    <color name="warn_soft">#FFFBF0DF</color>
+    <color name="err">#FFD64545</color>
+    <color name="err_soft">#FFFBE9E9</color>
+    <!-- text on the red stop button (white on #d64545: 4.6:1) -->
+    <color name="on_err">#FFFFFFFF</color>
 </resources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- magpie's dropdown: a grey pill with a small chevron at the end -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape>
+            <corners android:radius="8dp" />
+            <solid android:color="@color/pill" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/ic_chevron_down" android:gravity="end|center_vertical"
+        android:width="12dp" android:height="12dp" android:right="10dp" />
+</layer-list>

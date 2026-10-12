@@ -99,7 +99,9 @@ class MainActivity : Activity() {
                 if (prefs.theme != it) { prefs.theme = it; recreate() }
             })
         }
-        // the settings categories, magpie's preferences tabs: one list shown at a time
+        // the settings categories, magpie's preferences tabs: one list shown at a time. The saved category is read
+        // first, so the switch is built with it checked (a theme change recreates the activity on 页面)
+        tab = savedInstanceState?.getInt("tab", 0)?.coerceIn(TABS.indices) ?: 0
         findViewById<android.widget.FrameLayout>(R.id.tabBox).addView(choice(TABS.indices.map { it to TABS[it].second }, tab) { showTab(it) })
         findViewById<View>(R.id.openSettings).setOnClickListener { showSettings(true) }
         findViewById<View>(R.id.closeSettings).setOnClickListener { back() }
@@ -110,7 +112,6 @@ class MainActivity : Activity() {
             catch (_: android.content.ActivityNotFoundException) { }
         }
         // a theme switch recreates the activity from the settings page: stay there, on the same category / page
-        tab = savedInstanceState?.getInt("tab", 0)?.coerceIn(TABS.indices) ?: 0
         showTab(tab)
         showSettings(savedInstanceState?.getBoolean("settings") == true)
         if (inSettings && savedInstanceState?.getBoolean("sizePage") == true) showSize(true)
@@ -352,7 +353,7 @@ class MainActivity : Activity() {
         }
         val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         texts.addView(TextView(this).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) })
-        texts.addView(TextView(this).apply { text = sub; textSize = 13f; setTextColor(getColor(R.color.muted)) })
+        texts.addView(TextView(this).apply { text = sub; textSize = 13f; setTextColor(getColor(R.color.text2)) })
         row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         if (granted) {
             row.addView(TextView(this).apply { text = "✓ 已允许"; textSize = 14f; setTextColor(getColor(R.color.ok)); setPadding((8 * dp).toInt(), 0, (4 * dp).toInt(), 0) })
@@ -378,9 +379,9 @@ class MainActivity : Activity() {
         setPadding(0, (top * dpx).toInt(), 0, (4 * dpx).toInt())
     }
 
-    /** One or two lines saying what an option does (magpie's grey .sub). */
+    /** One or two lines saying what an option does (text2: these carry privacy / cost explanations, so ≥ 4.5:1). */
     private fun hint(t: String) = TextView(this).apply {
-        text = t; textSize = 13f; setTextColor(getColor(R.color.muted)); setLineSpacing(2 * dpx, 1f)
+        text = t; textSize = 13f; setTextColor(getColor(R.color.text2)); setLineSpacing(2 * dpx, 1f)
         setPadding(0, (6 * dpx).toInt(), 0, 0)
     }
 
@@ -399,7 +400,7 @@ class MainActivity : Activity() {
 
     /** A small grey button at the end of a row (magpie's .text.action on a pill). */
     private fun pillButton(t: String, onClick: () -> Unit) = MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-        text = t; textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (44 * dpx).toInt(); minimumHeight = minHeight
+        text = t; textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (48 * dpx).toInt(); minimumHeight = minHeight
         backgroundTintList = ColorStateList.valueOf(getColor(R.color.pill))
         setOnClickListener { onClick() }
     }
@@ -435,13 +436,15 @@ class MainActivity : Activity() {
         return s
     }
 
-    /** A dropdown: magpie's grey pill with a chevron; full width unless placed at the end of a row. */
-    private fun dropdown(items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
+    /** A dropdown: magpie's grey pill with a chevron; full width unless placed at the end of a row. With [wrap] the
+     *  shown value may take several lines instead of being cut (a row that shares its width with a name). */
+    private fun dropdown(items: List<String>, sel: Int, enabled: Boolean, wrap: Boolean = false, onPick: (Int) -> Unit) = android.widget.Spinner(this).apply {
         adapter = object : android.widget.ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items) {
             override fun getView(p: Int, c: View?, g: android.view.ViewGroup) =
                 (super.getView(p, c, g) as TextView).apply {
-                    textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (44 * dpx).toInt()
-                    setPadding((12 * dpx).toInt(), 0, (8 * dpx).toInt(), 0)
+                    textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (48 * dpx).toInt()
+                    setPadding((12 * dpx).toInt(), (6 * dpx).toInt(), (8 * dpx).toInt(), (6 * dpx).toInt())
+                    if (wrap) { isSingleLine = false; maxLines = Int.MAX_VALUE; ellipsize = null }
                 }
             override fun getDropDownView(p: Int, c: View?, g: android.view.ViewGroup) =
                 (super.getDropDownView(p, c, g) as TextView).apply { textSize = 15f; minHeight = (48 * dpx).toInt() }
@@ -454,18 +457,19 @@ class MainActivity : Activity() {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
         }
         isEnabled = enabled; alpha = if (enabled) 1f else 0.5f
-        minimumHeight = (44 * dpx).toInt()
+        minimumHeight = (48 * dpx).toInt()
     }
 
-    /** One list row: the name on the left, a dropdown at the end (magpie's row with a pop-up button). */
+    /** One list row: the name on the left, a dropdown at the end (magpie's row with a pop-up button). The two share
+     *  the row by weight, so a long choice under a large system font wraps instead of squeezing the name to nothing. */
     private fun pickRow(title: String, items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         minimumHeight = (56 * dpx).toInt()
         setPadding((14 * dpx).toInt(), (6 * dpx).toInt(), (10 * dpx).toInt(), (6 * dpx).toInt())
         addView(TextView(this@MainActivity).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(dropdown(items, sel, enabled, onPick).apply { dropDownHorizontalOffset = 0 },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
+        addView(dropdown(items, sel, enabled, true, onPick).apply { dropDownHorizontalOffset = 0 },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f).apply { marginStart = (8 * dpx).toInt() })
     }
 
     /** A segment of [choice]: the group squares off its inner buttons on every measure; magpie's thumb keeps all corners round. */
@@ -949,7 +953,7 @@ class MainActivity : Activity() {
                 paletteRow.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                     contentDescription = p.label + if (sel) "（已选）" else ""
-                    minimumHeight = (44 * dpx).toInt()
+                    minimumHeight = (48 * dpx).toInt()
                     setPadding((5 * dpx).toInt(), 0, (12 * dpx).toInt(), 0)
                     background = android.graphics.drawable.GradientDrawable().apply {
                         cornerRadius = 22 * dpx; setColor(getColor(R.color.card))

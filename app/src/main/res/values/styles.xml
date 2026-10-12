@@ -30,11 +30,12 @@
         <item name="android:textColor">@color/text</item>
         <item name="android:textSize">15sp</item>
     </style>
-    <!-- a row's grey line under the name (magpie's .row .sub) -->
+    <!-- a row's line under the name (magpie's .row .sub). text2, not muted: these lines carry the status, privacy
+         and cost explanations, and muted is under 4.5:1 on white -->
     <style name="RowSub">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textColor">@color/muted</item>
+        <item name="android:textColor">@color/text2</item>
         <item name="android:textSize">13sp</item>
         <item name="android:lineSpacingExtra">2dp</item>
     </style>

@@ -323,8 +323,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         /** Caption size range, shared with the settings slider. */
         const val MIN_SP = 5f
         const val MAX_SP = 36f
-        /** Card opacity when the user has not set one (magpie's ink card at 78%). */
-        const val DEFAULT_ALPHA = 0.78f
+        /** Card opacity when the user has not set one: magpie's ink card, on the settings slider's 5% grid. */
+        const val DEFAULT_ALPHA = 0.80f
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
         val PALETTES = listOf(

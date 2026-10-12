@@ -134,11 +134,12 @@ internal class AppUpdater(private val activity: Activity) {
      * [manualInterrupted]: a recreation cancelled a manual check; it is redone as one, whatever the settings.
      */
     fun start(configRecreated: Boolean, manualInterrupted: Boolean) {
-        if (manualInterrupted) { check(manual = true); return }
-        // something to show or answer first (a result kept for the foreground, an open dialog): no check over it
+        // something to show or answer first (a result kept for the foreground, an open dialog): no check over it,
+        // not even a redone manual one (the saved result is what that check found)
         val pending = prefs.contains("pendingInstall") || prefs.contains("pendingDownload") || prefs.contains("pendingOffer") ||
             deferred != null || dialog?.isShowing == true
-        if (UpdateRelease.checksOnEntry(auto, pending, configRecreated)) check(manual = false)
+        if (manualInterrupted && !pending) check(manual = true)
+        else if (UpdateRelease.checksOnEntry(auto, pending, configRecreated)) check(manual = false)
     }
 
     fun resume() {
@@ -344,9 +345,12 @@ internal class AppUpdater(private val activity: Activity) {
                 foreground { install(release) }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                prefs.edit().remove("pendingDownload").apply()
+                // pendingDownload stays until answered: a rotation or the process ending first brings the retry back
                 alert.dismiss()
-                foreground { error("这次没有下载好", "网络不通、手机空间不足，或安装包不完整。请检查网络和剩余空间后重试。") { download(release) } }
+                foreground {
+                    error("这次没有下载好", "网络不通、手机空间不足，或安装包不完整。请检查网络和剩余空间后重试。",
+                        later = { prefs.edit().remove("pendingDownload").apply() }) { download(release) }
+                }
             } finally { checkButton.isEnabled = true }
         }
     }

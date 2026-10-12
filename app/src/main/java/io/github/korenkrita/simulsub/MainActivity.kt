@@ -169,8 +169,9 @@ class MainActivity : Activity() {
         // recreated right away for a rotation / theme (no check then), unless that stops a check under way; a state
         // saved for a process the system may end is not this, and the restored app checks again
         outState.putBoolean("configChange", isChangingConfigurations && !updater.checking)
-        // a manual check the recreation stops is redone as manual (also with automatic checks off)
-        outState.putBoolean("manualCheck", updater.checkingManual)
+        // a manual check this recreation stops is redone as manual (also with automatic checks off); not for a state
+        // saved while stopped, whose check may still finish in the background
+        outState.putBoolean("manualCheck", isChangingConfigurations && updater.checkingManual)
     }
 
     /** this activity only replaces one a configuration change ended; its first start is not an entry into the app */

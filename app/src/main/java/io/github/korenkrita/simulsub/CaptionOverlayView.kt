@@ -24,7 +24,7 @@ import kotlin.math.abs
  * The subtitle card. Used twice: as the floating overlay (with [interactive] gestures) and as the live
  * preview in the settings screen, so what the user tunes is exactly what they get.
  *
- * Overlay gestures: drag anywhere to move, drag the corner dot to resize width and height, single tap to show the
+ * Overlay gestures: drag anywhere to move, drag the bottom-right corner to resize width and height, single tap to show the
  * toolbar (font −/+, opacity −/+, lock, stop). When locked the card ignores drags; tap still unlocks.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
@@ -37,7 +37,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private val handle = View(ctx)
     private val lockBadge = TextView(ctx)
     private val toolbar = LinearLayout(ctx)
-    private val bg = GradientDrawable().apply { cornerRadius = dp(18f) }
+    private val bg = GradientDrawable().apply { cornerRadius = dp(12f) }
 
     var textSp = 20f; private set
     var bgAlpha = 0.55f; private set
@@ -59,6 +59,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         gravity = Gravity.CENTER
         setPadding(dp(10f).toInt(), dp(8f).toInt(), dp(10f).toInt(), dp(8f).toInt())
         minHeight = dp(48f).toInt(); minWidth = dp(48f).toInt() // a finger-sized tap area
+        // a quiet pill marks it as the one toggle on the toolbar (magpie's --pill on the dark pop-up)
+        background = android.graphics.drawable.InsetDrawable(GradientDrawable().apply { cornerRadius = dp(7f); setColor(0x1AFFFFFF) }, 0, dp(8f).toInt(), 0, dp(8f).toInt())
         setOnClickListener { onToggleMode(); bumpToolbarTimer() }
     }
     /** Shows the current mode on the toolbar button; the label is what is on screen now. */
@@ -122,7 +124,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             setLineSpacing(dp(2f), 1f)
         }
         stats.apply {
-            setTextColor(0xFFB4ACFA.toInt())
+            setTextColor(0xFFA5B4FC.toInt())
             gravity = Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             visibility = GONE
@@ -136,14 +138,9 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         card.background = bg
         card.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
 
-        // resize dot, bottom-right
-        handle.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL; setColor(0xE6FFFFFF.toInt()); setStroke(dp(2f).toInt(), 0xFF6D5DF6.toInt())
-        }
+        // resize area, bottom-right: an invisible corner the finger can grab (no dot drawn)
         handle.visibility = GONE
-        card.addView(handle, FrameLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt(), Gravity.BOTTOM or Gravity.END).apply {
-            setMargins(0, 0, dp(4f).toInt(), dp(4f).toInt())
-        })
+        card.addView(handle, FrameLayout.LayoutParams(dp(36f).toInt(), dp(36f).toInt(), Gravity.BOTTOM or Gravity.END))
         lockBadge.apply {
             text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); visibility = GONE
         }
@@ -167,6 +164,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         // dark text on a light card has none (a black shadow would only blur it)
         if (colors.shadow) text.setShadowLayer(dp(if (alpha < 0.2f) 4f else 3f), 0f, dp(1f), 0xEE000000.toInt())
         else text.setShadowLayer(0f, 0f, 0f, 0)
+        // magpie's hairline edge on a dark card, so it stands off a dark video; none once the card is nearly clear
+        bg.setStroke(dp(0.5f).toInt().coerceAtLeast(1), if (colors.shadow && alpha >= 0.2f) 0x1AFFFFFF else 0)
     }
 
     /** Text / background colours of the captions; the background keeps the user's opacity. */
@@ -213,7 +212,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         toolbar.apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply { cornerRadius = dp(22f); setColor(0xF01D1B24.toInt()) }
+            background = GradientDrawable().apply { cornerRadius = dp(12f); setColor(0xF526262B.toInt()); setStroke(dp(0.5f).toInt().coerceAtLeast(1), 0x1AFFFFFF) }
             setPadding(dp(6f).toInt(), dp(4f).toInt(), dp(6f).toInt(), dp(4f).toInt())
             elevation = dp(6f)
             visibility = GONE
@@ -225,10 +224,10 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun tag(t: String) = TextView(context).apply {
-            text = t; setTextColor(0xFFC9C3FF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            text = t; setTextColor(0xFF8B8B94.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setPadding(dp(2f).toInt(), 0, dp(2f).toInt(), 0)
         }
-        fun sep() = View(context).apply { setBackgroundColor(0x33FFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(22f).toInt()).apply { marginStart = dp(4f).toInt(); marginEnd = dp(4f).toInt() } }
+        fun sep() = View(context).apply { setBackgroundColor(0x1AFFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(22f).toInt()).apply { marginStart = dp(4f).toInt(); marginEnd = dp(4f).toInt() } }
 
         fun tbtn(label: String, desc: String, onClick: () -> Unit) = TextView(context).apply {
             text = label; contentDescription = desc
@@ -259,7 +258,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 1f))
         toolbar.addView(sep())
         toolbar.addView(btn(R.drawable.ic_lock, "锁定位置") { toggleLock() })
-        toolbar.addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF87171.toInt()) })
+        toolbar.addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF28B82.toInt()) })
     }
 
     private fun setSize(v: Float) { applyStyle(v.coerceIn(MIN_SP, MAX_SP), bgAlpha); onStyleChanged() }
@@ -325,12 +324,12 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
         val PALETTES = listOf(
-            Palette("white", "经典白", 0xFFFFFFFF.toInt(), 0xCCDCD8F0.toInt(), 0xFFB9B5C9.toInt(), 0xFFB4ACFA.toInt(), 0xFF100E1A.toInt()),
+            Palette("white", "经典白", 0xFFFFFFFF.toInt(), 0xCCDCDCE4.toInt(), 0xFFB9B9C1.toInt(), 0xFFA5B4FC.toInt(), 0xFF1A1A1E.toInt()),
             Palette("yellow", "影院黄", 0xFFFFE066.toInt(), 0xCCFFF3C4.toInt(), 0xFFCFC48F.toInt(), 0xFFFFC94D.toInt(), 0xFF000000.toInt()),
             Palette("mint", "薄荷绿", 0xFFA7F3D0.toInt(), 0xCCD1FAE5.toInt(), 0xFF8CBBA6.toInt(), 0xFF6EE7B7.toInt(), 0xFF0B1F1A.toInt()),
             Palette("sky", "天空蓝", 0xFFBAE6FD.toInt(), 0xCCE0F2FE.toInt(), 0xFF93B4C9.toInt(), 0xFF7DD3FC.toInt(), 0xFF0B1726.toInt()),
             Palette("sakura", "樱花粉", 0xFFFBCFE8.toInt(), 0xCCFCE7F3.toInt(), 0xFFC9A3B8.toInt(), 0xFFF9A8D4.toInt(), 0xFF24101C.toInt()),
-            Palette("paper", "白底黑字", 0xFF16151C.toInt(), 0xCC3D3B48.toInt(), 0xFF6E6C7A.toInt(), 0xFF5B4BD6.toInt(), 0xFFFFFFFF.toInt(), shadow = false),
+            Palette("paper", "白底黑字", 0xFF16151C.toInt(), 0xCC3D3B48.toInt(), 0xFF6E6C7A.toInt(), 0xFF4F46E5.toInt(), 0xFFFFFFFF.toInt(), shadow = false),
         )
         fun palette(id: String?) = PALETTES.firstOrNull { it.id == id } ?: PALETTES[0]
     }

@@ -61,8 +61,9 @@
         <item name="thumbTint">@color/switch_thumb</item>
         <item name="trackDecorationTint">@color/switch_deco</item>
     </style>
-    <!-- magpie's .eslide: ink fill on a line-coloured rail, a white knob, no value bubble -->
-    <style name="Widget.JpSub.Slider" parent="Widget.Material3.Slider">
+    <!-- magpie's .eslide: ink fill on a line-coloured rail, a small round white knob, no value bubble. Material 1.12's
+         M3 slider draws a tall 4dp-wide bar with a gap and stop dots; the Legacy style keeps the round thumb. -->
+    <style name="Widget.JpSub.Slider" parent="Widget.Material3.Slider.Legacy">
         <item name="trackColorActive">@color/text</item>
         <item name="trackColorInactive">@color/line</item>
         <item name="thumbColor">@color/slider_thumb</item>
@@ -74,6 +75,7 @@
         <item name="thumbElevation">2dp</item>
         <item name="thumbStrokeColor">@color/line</item>
         <item name="thumbStrokeWidth">0.5dp</item>
+        <item name="haloRadius">16dp</item>
     </style>
     <!-- magpie's .text: a quiet text button -->
     <style name="Widget.JpSub.TextButton" parent="Widget.Material3.Button.TextButton">
@@ -87,7 +89,8 @@
         <item name="shapeAppearance">@style/Shape.JpSub.10</item>
         <item name="android:textSize">15sp</item>
     </style>
-    <!-- magpie's .text.action: a white button with a hairline -->
+    <!-- magpie's .text.action: a white button with a hairline. Side by side they share one row, so they get the same
+         fixed inset and height (the row stretches both to the taller one, see activity_main tabAbout). -->
     <style name="Widget.JpSub.ActionButton" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:textColor">@color/text</item>
         <item name="android:textSize">14sp</item>
@@ -95,22 +98,24 @@
         <item name="backgroundTint">@color/card</item>
         <item name="rippleColor">@color/line</item>
         <item name="shapeAppearance">@style/Shape.JpSub.8</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
     </style>
-    <!-- magpie's .seg: a grey track, the chosen option a raised card-coloured thumb, the others plain grey text.
-         One button of a MaterialButtonToggleGroup; the group itself paints the track (seg_track.xml). -->
+    <!-- magpie's .seg: a grey track, the chosen option a card-coloured thumb, the others plain grey text, no outlines.
+         One button of a MaterialButtonToggleGroup; the group paints the track (seg_track.xml). -->
     <style name="Widget.JpSub.Segment" parent="Widget.Material3.Button.OutlinedButton">
         <item name="backgroundTint">@color/seg_bg</item>
         <item name="android:textColor">@color/seg_fg</item>
-        <item name="strokeColor">@color/seg_stroke</item>
-        <item name="strokeWidth">1dp</item>
+        <item name="strokeWidth">0dp</item>
         <item name="rippleColor">@color/line</item>
         <item name="shapeAppearance">@style/Shape.JpSub.8</item>
         <item name="android:insetTop">3dp</item>
         <item name="android:insetBottom">3dp</item>
         <item name="android:textSize">14sp</item>
+        <item name="elevation">0dp</item>
     </style>
     <style name="Shape.JpSub.8" parent="">
         <item name="cornerFamily">rounded</item>

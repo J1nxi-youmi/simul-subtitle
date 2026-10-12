@@ -198,9 +198,18 @@
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginStart="-8dp"
+                    android:minWidth="0dp"
                     android:minHeight="48dp"
                     android:paddingStart="4dp"
-                    android:text="‹ 返回" />
+                    android:paddingEnd="10dp"
+                    android:text="返回"
+                    android:textColor="@color/text2"
+                    android:textSize="15sp"
+                    app:icon="@drawable/ic_chevron_left"
+                    app:iconPadding="2dp"
+                    app:iconSize="20dp"
+                    app:iconTint="@color/text2" />
 
                 <TextView
                     android:id="@+id/settingsTitle"
@@ -630,13 +639,14 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="horizontal"
+                            android:baselineAligned="false"
                             android:padding="10dp">
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/checkUpdate"
                                 style="@style/Widget.JpSub.ActionButton"
                                 android:layout_width="0dp"
-                                android:layout_height="wrap_content"
+                                android:layout_height="match_parent"
                                 android:layout_weight="1"
                                 android:text="检查更新" />
 
@@ -644,7 +654,7 @@
                                 android:id="@+id/openRepo"
                                 style="@style/Widget.JpSub.ActionButton"
                                 android:layout_width="0dp"
-                                android:layout_height="wrap_content"
+                                android:layout_height="match_parent"
                                 android:layout_marginStart="8dp"
                                 android:layout_weight="1"
                                 android:text="GitHub 项目主页" />

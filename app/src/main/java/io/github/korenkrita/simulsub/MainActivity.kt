@@ -479,8 +479,12 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f).apply { marginStart = (8 * dpx).toInt() })
     }
 
-    /** A segment of [choice]: the group squares off its inner buttons on every measure; magpie's thumb keeps all corners round. */
+    /** A segment of [choice], recoloured to magpie's .seg: an unchosen option is plain text on the grey track (no
+     *  fill, no outline); the chosen one is the card-coloured thumb. No stroke at all: the group pulls each button
+     *  over its neighbour by the stroke width on every measure, which let the thumb cover the next option's edge.
+     *  The group also squares the inner corners on every measure; every segment keeps 8dp. */
     private class SegButton(ctx: android.content.Context) : MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle) {
+        init { strokeWidth = 0 }
         override fun setShapeAppearanceModel(m: com.google.android.material.shape.ShapeAppearanceModel) =
             super.setShapeAppearanceModel(m.toBuilder().setAllCornerSizes(8 * resources.displayMetrics.density).build())
     }

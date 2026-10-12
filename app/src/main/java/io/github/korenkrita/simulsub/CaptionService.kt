@@ -286,7 +286,10 @@ class CaptionService : Service() {
                     }
                 }
                 // one Jev client for both features; no key = both paused until one is entered
-                val judge = s.jevKey?.let { Jev(s.provider, it, source = s.source, target = s.target) }
+                // pauses count deep sleep: one kept across sessions ends at the time the service named
+                val judge = s.jevKey?.let {
+                    Jev(s.provider, it, source = s.source, target = s.target, clock = android.os.SystemClock::elapsedRealtime)
+                }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
                 return Built(Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version),
                     notices.joinToString("  ·  "), used, ev)
@@ -544,7 +547,7 @@ class CaptionService : Service() {
             if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
             // a failing service stays shown, also with timings off; one that works says nothing here
-            serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, realtimeMs(), System.currentTimeMillis())?.let {
+            serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis())?.let {
                 append("${if (isNotEmpty()) "  ·  " else ""}$it")
             }
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
@@ -563,8 +566,8 @@ class CaptionService : Service() {
         else v.setLines(lines, diag.ifEmpty { null })
         val jevNow = jevNow()
         v.setServices(light(mtState, true), light(jevNow, jevEndsOn || jevCheckOn),
-            mtState?.let { reason(it, false, realtimeMs(), System.currentTimeMillis()) },
-            if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, realtimeMs(), System.currentTimeMillis()) } else "未开启")
+            mtState?.let { reason(it, false, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) },
+            if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) } else "未开启")
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {

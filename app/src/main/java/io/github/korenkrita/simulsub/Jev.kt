@@ -47,12 +47,6 @@ class JevCall(val request: String, val status: Int, val response: String?, val m
  */
 class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean, val gen: Int = 0)
 
-/**
- * Monotonic ms that keep counting in deep sleep (Android's elapsedRealtime), for pauses that outlive a session; on the
- * JVM of unit tests, which has no Android clock, [monoMs].
- */
-val realtimeMs: () -> Long = runCatching { android.os.SystemClock.elapsedRealtime(); { android.os.SystemClock.elapsedRealtime() } }
-    .getOrElse { ::monoMs }
 
 /** What the pipeline asks; an interface so tests can answer without a network. */
 interface Judge {
@@ -85,8 +79,8 @@ class Jev(
     /** the session's languages; Japanese→Chinese uses the wording tuned on the test sets */
     private val source: Lang? = Lang.JA,
     private val target: Lang = Lang.ZH,
-    /** tests */
-    private val clock: () -> Long = realtimeMs,
+    /** monotonic ms for pauses; the app passes one that keeps counting in deep sleep (elapsedRealtime) */
+    private val clock: () -> Long = ::monoMs,
     private val wall: () -> Long = System::currentTimeMillis,
     dns: okhttp3.Dns = okhttp3.Dns.SYSTEM,
 ) : Judge {
@@ -100,7 +94,10 @@ class Jev(
     override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), mistranslationQ)
 
     override fun cancel() = calls.cancel()
-    override fun paused(): JevLimit? = synchronized(svc) { svc.limit?.takeIf { clock() < it.untilMs } }
+    // a 429 still being installed already counts (its end is not known yet)
+    override fun paused(): JevLimit? = synchronized(svc) {
+        svc.limit?.takeIf { clock() < it.untilMs } ?: if (svc.installing > 0) JevLimit(Long.MAX_VALUE, null, false, svc.gen) else null
+    }
     override fun limitedAfter(gen: Int): Boolean = synchronized(svc) { gen >= 0 && svc.gen > gen }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
@@ -112,39 +109,50 @@ class Jev(
         // let out only when not paused, checked again right before the request is written (after OkHttp's queue and
         // the connection); the generation it went out with tells a later 429 apart
         val sentGen = java.util.concurrent.atomic.AtomicInteger(-1)
-        val admit = { synchronized(svc) { if (svc.limit?.let { clock() < it.untilMs } == true) false else { sentGen.set(svc.gen); true } } }
-        // the pause starts when the 429's headers arrive (the other question waits no longer than that): one new
-        // generation per response, installed once whichever path sees it first; a later end wins, an older
-        // request's answer never shortens (or ends) a pause
+        val admit = { synchronized(svc) {
+            if (svc.installing > 0 || svc.limit?.let { clock() < it.untilMs } == true) false else { sentGen.set(svc.gen); true }
+        } }
+        // the pause starts when the 429's headers arrive. First, at once and under the monitor: the receipt time, a
+        // new generation, and "being installed" (nothing is let out from here on). Then, outside it: reading the
+        // header and the wall clock, and merging the end in (a later end wins, an older request's answer never
+        // shortens or ends a pause). Delay-seconds count from the receipt; an HTTP-date is an instant, turned into
+        // the monotonic clock by a wall/monotonic pair read together.
         val myGen = java.util.concurrent.atomic.AtomicInteger(-1)
         val on429 = { retryAfter: String? ->
-            // all under the monitor, from the first clock read on: admission waits for an arriving 429 instead of
-            // slipping past it while it is read. Wall time first, then the monotonic one: time passing between the
-            // two can only move the end later, never before the time the service named
-            synchronized(svc) {
-                val atWall = wall(); val at = clock()
-                val secs = retrySeconds(retryAfter, atWall)?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
-                if (myGen.get() < 0) {
-                    svc.gen++; myGen.set(svc.gen)
-                    val until = at + (secs ?: BACKOFF_S) * 1000
+            val at = synchronized(svc) { svc.gen++; myGen.set(svc.gen); svc.installing++; clock() }
+            var limit: JevLimit? = null
+            try {
+                val w = wall(); val m = clock()
+                val v = retryAfter?.trim().orEmpty()
+                val secs = if (v.isNotEmpty() && v.all { it in '0'..'9' }) (v.toLongOrNull() ?: Long.MAX_VALUE).coerceAtMost(1_000_000_000_000L) else null
+                val date = if (secs == null && v.isNotEmpty()) httpDate(v, w) else null
+                limit = when {
+                    secs != null -> JevLimit(at + secs * 1000, w - (m - at) + secs * 1000, false)
+                    date != null -> JevLimit(m + maxOf(0, date - w), date, false)
+                    else -> JevLimit(at + BACKOFF_S * 1000, null, false)
+                }
+            } finally {
+                synchronized(svc) {
+                    val mine = limit ?: JevLimit(at + BACKOFF_S * 1000, null, false)
                     val old = svc.limit
-                    svc.limit = if (old != null && old.untilMs >= until) JevLimit(old.untilMs, old.resumeAt, old.free, svc.gen)
-                        else JevLimit(until, secs?.let { atWall + it * 1000 }, false, svc.gen)
+                    svc.limit = if (old != null && old.untilMs >= mine.untilMs) JevLimit(old.untilMs, old.resumeAt, old.free, svc.gen)
+                        else JevLimit(mine.untilMs, mine.resumeAt, false, svc.gen)
+                    svc.installing--
                 }
             }
         }
         // a deadline that came while the 429 was being installed (its status not yet published): still that 429
         val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit).let {
-            if (it.status == 0 && it.error?.startsWith("deadline") == true && synchronized(svc) { myGen.get() >= 0 })
+            if (it.status == 0 && it.error?.startsWith("deadline") == true && myGen.get() >= 0)
                 HttpResult(429, null, it.ms, it.error, it.firstContentMs) else it
         }
         if (r.error == "paused") return JevCall(body, 0, null, r.ms, "paused", null, paused())
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null
-        // the end was fixed by the headers; the body only adds whether it is the free limit, to its own generation
+        // a 429 always went through the headers' callback, which installed it; the body only adds whether it is the
+        // free limit, to its own generation
         val limit = if (r.status != 429) null else synchronized(svc) {
-            on429(r.retryAfter) // a no-op when the headers already installed it (the usual case)
             val free = isZenFreeLimit(provider, r.body)
             svc.limit?.let { l -> if (free && l.gen == myGen.get() && !l.free) JevLimit(l.untilMs, l.resumeAt, true, l.gen).also { svc.limit = it } else l }
         }
@@ -165,8 +173,11 @@ class Jev(
     companion object {
         /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
-        /** one Jev service with its credentials: its pause and its limit generation (guarded by itself) */
-        private class Service { var gen = 0; var limit: JevLimit? = null }
+        /**
+         * One Jev service with its credentials: its pause, its limit generation, and how many 429s are being installed
+         * (nothing is let out meanwhile). Guarded by itself.
+         */
+        private class Service { var gen = 0; var limit: JevLimit? = null; var installing = 0 }
         /** by service and credentials, for the whole process (a new session still waits) */
         private val SERVICES = java.util.concurrent.ConcurrentHashMap<String, Service>()
         /** a 429 without a usable Retry-After: tried again after this */
@@ -185,12 +196,12 @@ class Jev(
         }
 
         /** The three HTTP-date forms a recipient must read: IMF-fixdate, RFC 850 and asctime (all GMT); impossible dates are none. */
-        private fun httpDate(v: String, nowWall: Long): Long? {
+        internal fun httpDate(v: String, nowWall: Long): Long? {
             val us = java.util.Locale.US
             val utc = java.time.ZoneOffset.UTC
             val strict = java.time.format.ResolverStyle.STRICT
             // the exact shapes only (a weekday, seconds, "GMT"); the parsers alone accept looser forms
-            if (Regex("""[A-Z][a-z]{2}, \d{1,2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT""").matches(v)) runCatching {
+            if (Regex("""[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT""").matches(v)) runCatching {
                 return java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.withResolverStyle(strict))
                     .toInstant().toEpochMilli()
             }

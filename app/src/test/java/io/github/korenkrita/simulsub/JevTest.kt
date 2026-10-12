@@ -597,6 +597,9 @@ class JevTest {
     private val zenLimit = """{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded. Please try again later."}}"""
     private var now = 1_000_000L
     private var wallNow = 1_760_000_000_000L
+    /** an HTTP IMF-fixdate (two-digit day, GMT), as a service sends it */
+    private fun imfDate(t: java.time.temporal.TemporalAccessor) =
+        java.time.format.DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", java.util.Locale.US).format(t)
     private fun timedJev(key: String = "sk-secret", provider: JevProvider = JevProvider.ZEN, deadline: Long = 2_000) =
         Jev(provider, key, deadline, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = { wallNow })
 
@@ -622,7 +625,7 @@ class JevTest {
     fun aRetryAfterDateAndAMissingOneAreBothUsed() {
         reply = { 429 to """{"error":"slow down"}""" }
         val at = java.time.Instant.ofEpochMilli(wallNow + 90_000).atZone(java.time.ZoneOffset.UTC)
-        extraHeaders = "Retry-After: ${java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(at)}\r\n"
+        extraHeaders = "Retry-After: ${imfDate(at)}\r\n"
         val l = timedJev().unfinished("a").limit!!
         assertFalse(l.free)
         assertEquals(now + 90_000, l.untilMs)
@@ -635,7 +638,7 @@ class JevTest {
         // "now" and a time already past: tried again at once, not after the backoff
         assertEquals(0L, Jev.retrySeconds("0", wallNow))
         val past = java.time.Instant.ofEpochMilli(wallNow - 90_000).atZone(java.time.ZoneOffset.UTC)
-        assertEquals(0L, Jev.retrySeconds(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(past), wallNow))
+        assertEquals(0L, Jev.retrySeconds(imfDate(past), wallNow))
         // a wait of more than a day is kept as the service asks
         assertEquals(3 * 86_400L, Jev.retrySeconds("259200", wallNow))
         // all three HTTP-date forms, a day ahead and past
@@ -652,8 +655,9 @@ class JevTest {
         // impossible dates are no date (the short backoff), not the nearest real one
         for (d in listOf("Sun, 31 Feb 2027 19:00:00 GMT", "Sunday, 31-Feb-27 19:00:00 GMT", "Sun Feb 31 19:00:00 2027", "Sun Feb 29 19:00:00 2027"))
             assertNull(d, Jev.retrySeconds(d, base))
-        // not the HTTP syntax (no seconds, no weekday, another zone, a sign): the short backoff, not a long wait
-        for (d in listOf("Tue, 13 Oct 2026 19:00 GMT", "13 Oct 2026 19:00:00 GMT", "Tue, 13 Oct 2026 19:00:00 +0100", "+259200", "-5"))
+        // not the HTTP syntax (no seconds, no weekday, another zone, a sign, a one-digit IMF day): the short backoff
+        for (d in listOf("Tue, 13 Oct 2026 19:00 GMT", "13 Oct 2026 19:00:00 GMT", "Tue, 13 Oct 2026 19:00:00 +0100", "+259200", "-5",
+                "Tue, 3 Nov 2026 19:00:00 GMT"))
             assertNull(d, Jev.retrySeconds(d, base))
         // RFC 850: a two-digit year more than 50 years ahead is the century before
         assertEquals(0L, Jev.retrySeconds("Wednesday, 13-Oct-76 19:00:00 GMT", base)) // 1976, past
@@ -780,46 +784,90 @@ class JevTest {
         assertEquals(0, hits.get())
     }
 
-    @Test
-    fun one429IsInstalledOnceAndNeverEndsBeforeTheNamedTime() {
-        // the headers' callback is held in its first clock read (inside the service's monitor) past the caller's deadline
+    /**
+     * A 429 whose installation is held (in its wall-clock read, after the receipt was recorded) past the caller's
+     * deadline, while both clocks move on by 2 s. [header] gets the wall time at receipt.
+     */
+    private fun heldInstall(header: (Long) -> String, check: (Jev, receivedAt: Long, receivedWall: Long) -> Unit) {
         val inCallback = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
         val callbackThread = AtomicReference<Thread>()
         reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }
-        // an HTTP-date 60 s after the headers arrive
-        extraHeaders = "Retry-After: ${java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(
-            java.time.Instant.ofEpochMilli(wallNow + 60_000).atZone(java.time.ZoneOffset.UTC))}\r\n"
-        val headersAt = now
-        val j = Jev(JevProvider.ZEN, "sk-secret", 600, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = {
-            if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
-                inCallback.countDown(); release.await()
-            }
-            wallNow
-        })
+        extraHeaders = "Retry-After: ${header(wallNow)}\r\n"
+        val receivedAt = now; val receivedWall = wallNow
+        val j = Jev(JevProvider.ZEN, "sk-${header(0).length}-$receivedAt", 600, url = "http://127.0.0.1:$port/v1/systemone",
+            clock = { now }, wall = {
+                if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
+                    inCallback.countDown(); release.await()
+                }
+                wallNow
+            })
         val first = AtomicReference<JevCall>()
+        val t0 = monoMs()
         val t1 = Thread { first.set(j.unfinished("a")) }.apply { start() }
-        assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
-        // the other question meets the 429 being installed: it waits for it, and is then not sent
-        val other = AtomicReference<JevCall>()
-        val t2 = Thread { other.set(j.unfinished("c")) }.apply { start() }
-        Thread.sleep(800) // past the first caller's deadline too
-        assertEquals(1, hits.get())
-        now += 2_000; wallNow += 2_000
-        release.countDown()
-        t1.join(3_000); t2.join(3_000)
-        // the caller that gave up at its deadline still reports the 429 it got
-        assertEquals(429, first.get().status)
-        assertEquals("paused", other.get().error)
-        assertEquals(1, hits.get())
-        // the time read late can only make the pause longer, never end it before the named time
-        assertTrue(j.paused()!!.untilMs >= headersAt + 60_000)
-        // once: a request let out after the pause is current
+        try {
+            assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            // being installed already counts: the other question is not sent, and an answer from before is stale
+            val other = j.unfinished("c")
+            assertEquals("paused", other.error)
+            assertNotNull(j.paused())
+            assertTrue(j.limitedAfter(0))
+            // the caller still gives up at its deadline, not when the installation is done, with the 429 it got
+            t1.join(2_000)
+            assertFalse(t1.isAlive)
+            assertTrue("returned after ${monoMs() - t0} ms", monoMs() - t0 < 1_200)
+            assertEquals(429, first.get().status)
+            assertEquals(1, hits.get())
+            now += 2_000; wallNow += 2_000
+        } finally { release.countDown(); t1.join(3_000) }
+        val deadline = monoMs() + 2_000
+        while (j.paused()?.untilMs == Long.MAX_VALUE && monoMs() < deadline) Thread.sleep(5)
+        check(j, receivedAt, receivedWall)
+        // one generation: a request let out after the pause is current
         now += 61_000; wallNow += 61_000
         val fresh = j.unfinished("b")
         assertEquals(200, fresh.status)
         Thread.sleep(100)
         assertFalse(j.limitedAfter(fresh.gen))
+    }
+
+    @Test
+    fun delaySecondsCountFromTheReceiptAlsoWhenInstalledLate() = heldInstall({ "60" }) { j, at, atWall ->
+        val l = j.paused()!!
+        assertEquals(at + 60_000, l.untilMs)
+        assertEquals(atWall + 60_000, l.resumeAt)
+    }
+
+    @Test
+    fun anHttpDateEndsAtThatTimeAlsoWhenInstalledLate() = heldInstall({ w ->
+        imfDate(java.time.Instant.ofEpochMilli(w + 60_000).atZone(java.time.ZoneOffset.UTC))
+    }) { j, at, atWall ->
+        val l = j.paused()!!
+        assertEquals(at + 60_000, l.untilMs)
+        assertEquals(atWall + 60_000, l.resumeAt)
+    }
+
+    @Test
+    fun anInvalidDateInARealResponseIsTheShortBackoff() {
+        reply = { 429 to """{"error":"slow down"}""" }
+        extraHeaders = "Retry-After: Sun, 31 Feb 2027 19:00:00 GMT\r\n"
+        val l = timedJev("sk-invalid-date").unfinished("a").limit!!
+        assertEquals(now + Jev.BACKOFF_S * 1000, l.untilMs)
+        assertNull(l.resumeAt)
+    }
+
+    @Test
+    fun aPauseKeptAcrossSessionsEndsByAClockThatCountsSleep() {
+        // the app's pause clock counts deep sleep; a new client for the same service, an hour later, may ask again
+        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }
+        extraHeaders = "Retry-After: 60\r\n"
+        var realtime = 5_000_000L
+        val mk = { Jev(JevProvider.ZEN, "sk-sleep", 2_000, url = "http://127.0.0.1:$port/v1/systemone", clock = { realtime }, wall = { wallNow }) }
+        assertNotNull(mk().unfinished("a").limit)
+        realtime += 3_600_000 // asleep: elapsedRealtime moves, nanoTime would not
+        val again = mk()
+        assertNull(again.paused())
+        assertEquals(200, again.unfinished("b").status)
     }
 
     @Test

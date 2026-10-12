@@ -16,6 +16,33 @@
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/images/screens/home.png" width="200" alt="Home"></td>
+    <td><img src="docs/images/screens/overlay.png" width="300" alt="Floating subtitles (tap for the toolbar)"></td>
+    <td><img src="docs/images/screens/caption.png" width="200" alt="Settings · Subtitles"></td>
+    <td><img src="docs/images/screens/size.png" width="200" alt="Subtitle box size and kept sentences"></td>
+    <td><img src="docs/images/screens/translate.png" width="200" alt="Settings · Translation"></td>
+    <td><img src="docs/images/screens/page-dark.png" width="200" alt="Settings · Page (dark)"></td>
+    <td><img src="docs/images/screens/records.png" width="200" alt="Settings · Records"></td>
+    <td><img src="docs/images/screens/about.png" width="200" alt="Settings · About"></td>
+    <td><img src="docs/images/screens/home-dark.png" width="200" alt="Home (dark)"></td>
+  </tr>
+  <tr>
+    <td align="center">Home</td>
+    <td align="center">Floating subtitles (tap for the toolbar)</td>
+    <td align="center">Settings · Subtitles</td>
+    <td align="center">Subtitle box size and kept sentences</td>
+    <td align="center">Settings · Translation</td>
+    <td align="center">Settings · Page (dark)</td>
+    <td align="center">Settings · Records</td>
+    <td align="center">Settings · About</td>
+    <td align="center">Home (dark)</td>
+  </tr>
+</table>
+
 ## What it does
 
 - **Works with most apps**: Bilibili, YouTube, streaming apps, the browser… any app that allows its playback to be captured; a few apps and DRM-protected video do not.
@@ -31,9 +58,9 @@
 2. **Allow**: let the app hear other apps' sound and draw over other apps.
 3. **Start**: tap 开始字幕, pick the app you want to watch, and go back to your video.
 
-Subtitle size, colours and translation options are under 字幕大小、颜色和更多设置 on the home screen.
+Subtitle size, colours and translation options are in Settings: the gear at the top right of the home screen.
 
-On the subtitle: **drag** to move · **drag the corner dot** to resize · **tap** for the toolbar (text size, background, display mode, lock, stop).
+On the subtitle: **drag** to move · **tap** for the toolbar (text size, background, display mode, lock, stop); while it is shown, **drag a corner mark** to resize · **locked**: position and size are fixed, a tap only shows an unlock button.
 
 The app's interface is in Chinese.
 
@@ -64,7 +91,7 @@ Built on these open-source projects:
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: on-device speech recognition and voice activity detection (Silero VAD).
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**: on-device translation model runtime.
 
-The optional AI assistance (sentence ends, translation checks) uses **[TypeSafe Jev](https://typesafe.ai)**, a closed-source commercial cloud service (not open source), off by default. With a paid endpoint it is billed by usage: about US$0.04 per hour of speech (see [docs/jev.md](docs/jev.md)).
+The optional online Decisions model assistance (sentence ends, translation checks) uses **[TypeSafe Jev](https://typesafe.ai)**, a closed-source commercial cloud service (not open source), off by default. With a paid endpoint it is billed by usage: about US$0.04 per hour of speech (see [docs/jev.md](docs/jev.md)).
 
 ---
 

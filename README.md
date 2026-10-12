@@ -16,6 +16,33 @@
 
 ---
 
+## 界面一览
+
+<table>
+  <tr>
+    <td><img src="docs/images/screens/home.png" width="200" alt="首页"></td>
+    <td><img src="docs/images/screens/overlay.png" width="300" alt="悬浮字幕（点一下出工具栏）"></td>
+    <td><img src="docs/images/screens/caption.png" width="200" alt="设置 · 字幕"></td>
+    <td><img src="docs/images/screens/size.png" width="200" alt="字幕框大小和保留几句"></td>
+    <td><img src="docs/images/screens/translate.png" width="200" alt="设置 · 翻译"></td>
+    <td><img src="docs/images/screens/page-dark.png" width="200" alt="设置 · 页面（夜间）"></td>
+    <td><img src="docs/images/screens/records.png" width="200" alt="设置 · 记录"></td>
+    <td><img src="docs/images/screens/about.png" width="200" alt="设置 · 关于"></td>
+    <td><img src="docs/images/screens/home-dark.png" width="200" alt="首页（夜间）"></td>
+  </tr>
+  <tr>
+    <td align="center">首页</td>
+    <td align="center">悬浮字幕（点一下出工具栏）</td>
+    <td align="center">设置 · 字幕</td>
+    <td align="center">字幕框大小和保留几句</td>
+    <td align="center">设置 · 翻译</td>
+    <td align="center">设置 · 页面（夜间）</td>
+    <td align="center">设置 · 记录</td>
+    <td align="center">设置 · 关于</td>
+    <td align="center">首页（夜间）</td>
+  </tr>
+</table>
+
 ## 它能做什么
 
 - **大多数 App 都能用**：B 站、YouTube、直播软件、浏览器……适用于允许录制播放声音的 App；少数 App 和有版权保护的视频不支持。
@@ -31,7 +58,7 @@
 2. **允许**：按提示允许「听 App 的声音」和「在屏幕上显示字幕」。
 3. **开始**：点「开始字幕」，在弹出的窗口里选你要看的 App，回到视频就能看到字幕。
 
-想调字幕大小、颜色或翻译方式，点首页的「字幕大小、颜色和更多设置」。
+想调字幕大小、颜色或翻译方式，点首页右上角的齿轮，进入「设置」。
 
 ### 字幕上的小技巧
 
@@ -59,7 +86,7 @@
 不会。声音在手机上变成文字；用在线翻译时，只把识别出的文字发给翻译服务。详见 [隐私说明](docs/privacy.md)。
 
 **翻译不准怎么办？**
-可以在设置里打开「结合上文来翻译」，或换更大的翻译模型；也可以在「使用记录」里把这次的文字记录分享出来，帮助改进。
+可以在设置里打开「结合上文来翻译」，或换更大的翻译模型；也可以在「设置 → 记录」里打开「记录每次使用」，把这次的文字记录分享出来，帮助改进。
 
 ## 致谢
 

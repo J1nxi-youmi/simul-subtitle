@@ -53,13 +53,8 @@ class CaptionService : Service() {
     private var translator: Mt? = null
     /** A BYOK first-use probe in progress (at start or after "保存" while running), so stop can cancel it. */
     private var probing: ByokTranslator? = null
-    /** The session takes no new setup or probe any more (set under [cancelLock] when it ends). */
-    private var setupClosed = false
-    /** The BYOK service being probed (or about to be); a newer save clears it with the cancel. Guarded by [cancelLock]. */
-    private var probeFor: Triple<String, String, String>? = null
-
-    /** Bumped by every settings change a running session takes from the next sentence (see [setupKeys]). */
-    private val setupWanted = java.util.concurrent.atomic.AtomicInteger()
+    /** The running session's settings versions and BYOK probe (shares [cancelLock]); null outside a session. */
+    @Volatile private var order: SetupOrder<Triple<String, String, String>, ByokTranslator.ThinkingOff?>? = null
     /** The running session's rebuild trigger; null before its pipeline exists and after it ended. */
     @Volatile private var onSetupChange: (() -> Unit)? = null
 
@@ -116,8 +111,9 @@ class CaptionService : Service() {
             val mode = prefs.mtMode
             val jevEnds = prefs.jevOn; val jevCheck = prefs.jevCheck
             val wantJev = jevEnds || jevCheck
-            setupWanted.set(0) // a change from here on is seen by the snapshot below or rebuilt after the start
-            synchronized(cancelLock) { setupClosed = false; probeFor = null }
+            // a change from here on is seen by the snapshot below or rebuilt after the start
+            val order = SetupOrder<Triple<String, String, String>, ByokTranslator.ThinkingOff?>(cancelLock).also { this.order = it }
+            val v0 = order.version()
             val s0 = Snap(prefs, mode, wantJev, files.mt.name)
             if (mode == MtMode.BYOK && (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null)) {
                 setStatus("⚠ 自己的模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
@@ -156,25 +152,22 @@ class CaptionService : Service() {
             /**
              * BYOK probes: a URL + model used for the first time is first probed for the switch that turns thinking off
              * (logged like any MT call). At the start the session waits for it; while running it runs on [probeExec] and
-             * the current service keeps translating until it is done, so other changes are not held up behind it.
-             * [probed] keeps this session's results, also an inconclusive one (no switch stored, used without one).
-             * Guarded by [cancelLock]: [probeFor], [probed].
+             * the service in use keeps translating until it is done, so other changes are not held up behind it.
+             * [order] keeps this session's results, also an inconclusive one (no switch stored, used without one), and
+             * tells a wanted probe from one a newer save or the end made pointless.
              */
-            val probed = HashMap<Triple<String, String, String>, ByokTranslator.ThinkingOff?>()
             val probeExec = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "jpsub-probe") }
-            /** The BYOK service of the setup in use (session / setup worker thread only). */
+            /** The BYOK service of the setup published last (session / setup worker thread only). */
             var inUse: Triple<String, String, String>? = null
-            /** a probe that ended without an answer ("cannot be used now"), shown while that service is in use */
-            val probeTrouble = java.util.concurrent.ConcurrentHashMap<Triple<String, String, String>, String>()
 
-            /** Runs one probe of [t]; false: stopped, closed or overtaken by a newer save (nothing recorded). */
-            fun runProbe(t: Triple<String, String, String>, system: String, target: Lang): Boolean {
+            /** Runs probe [token] of [t]; false: stopped, closed or overtaken by a newer save (nothing recorded). */
+            fun runProbe(t: Triple<String, String, String>, token: Long, system: String, target: Lang): Boolean {
                 val asking = "第一次用这个模型，正在试怎样关闭思考…"
                 val before = status
                 val probe = ByokTranslator(t.first, t.second, t.third, system, null, maxTokens = mtMaxTokens(target))
                 synchronized(cancelLock) {
                     // registered under the lock a newer save or the session end cancels under: neither slips in between
-                    if (stopping || setupClosed || probeFor != t) return false
+                    if (stopping || !order.current(token)) return false
                     probing = probe
                 }
                 setStatus(asking)
@@ -184,20 +177,19 @@ class CaptionService : Service() {
                     steps.forEach { st -> sl?.write(mapOf("ev" to "byok_probe", "variant" to st.variant.name, "request" to st.result.request,
                         "http" to st.result.http, "response" to st.result.response, "error" to st.result.error, "usable" to st.result.usable,
                         "thinking" to st.result.thinking, "first_content_ms" to st.result.firstContentMs)) }
+                    val none = variant == null && probe.exhausted(steps)
+                    // stopped early (service error): no switch is stored, the next session tries again
+                    val trouble = if (variant == null && !none)
+                        "⚠ 你的翻译服务现在不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}" else null
                     synchronized(cancelLock) {
                         if (probing === probe) probing = null
                         // cancelled by a newer save or the end: a partial result says nothing about this model
-                        if (stopping || setupClosed || probeFor != t) return false
-                        probed[t] = variant
-                        probeFor = null
+                        if (stopping || !order.endProbe(t, token, variant, trouble)) return false
                     }
-                    val none = variant == null && probe.exhausted(steps)
                     when {
                         variant != null -> prefs.setByokVariant(t.first, t.second, variant.name)
                         none -> prefs.setByokVariant(t.first, t.second, ByokTranslator.NONE_WORKED)
                     }
-                    // stopped early (service error): no switch is stored, the next session tries again
-                    if (variant == null && !none) probeTrouble[t] = "⚠ 你的翻译服务现在不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
                     return true
                 } finally {
                     synchronized(cancelLock) { if (probing === probe) probing = null }
@@ -205,77 +197,95 @@ class CaptionService : Service() {
                 }
             }
 
+            /** A built setup, the warnings it comes with, and for BYOK the service it really uses and its log entry. */
+            class Built(val setup: Setup, val notice: String, val byok: Triple<String, String, String>?, val byokEv: Map<String, Any?>?)
+
             /**
-             * The translator for BYOK. [wait]: probe a new service here (the start); otherwise start its probe in the
-             * background and keep the service in use (with the new prompt) until it is done. null: stopped, or overtaken.
+             * The translator for BYOK and the service it uses. [wait]: probe a new service here (the start); otherwise
+             * start its probe in the background and keep the service in use (with the new prompt) until it is done.
+             * null: stopped, or overtaken by a newer change (whose own rebuild follows).
              */
-            fun byok(s: Snap, wait: Boolean, notices: MutableList<String>): ByokTranslator? {
+            fun byok(s: Snap, version: Int, wait: Boolean, notices: MutableList<String>): Triple<ByokTranslator, Triple<String, String, String>, Map<String, Any?>>? {
                 val t = Triple(s.byokUrl!!, s.byokModel, s.byokKey!!)
                 val system = byokSystem(s.scene, s.source, s.target)
-                fun known(): Pair<Boolean, ByokTranslator.ThinkingOff?> {
-                    val stored = prefs.byokVariant(t.first, t.second)
+                fun known(k: Triple<String, String, String>): Pair<Boolean, ByokTranslator.ThinkingOff?> {
+                    val stored = prefs.byokVariant(k.first, k.second)
                     if (stored != null) return true to ByokTranslator.variant(stored)
-                    return synchronized(cancelLock) { if (t in probed) true to probed[t] else false to null }
+                    return if (order.knows(k)) true to order.result(k) else false to null
                 }
-                var (ready, variant) = known()
+                // the log names the service really used (never the key): the one saved last may still be in its probe
+                fun use(k: Triple<String, String, String>, variant: ByokTranslator.ThinkingOff?) = Triple(
+                    ByokTranslator(k.first, k.second, k.third, system, variant, maxTokens = mtMaxTokens(s.target)), k,
+                    mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.first, "mt_model" to k.second))
+                var (ready, variant) = known(t)
                 if (!ready) {
-                    val start = synchronized(cancelLock) { if (probeFor == t) false else { probeFor = t; true } }
                     val keep = inUse
                     if (wait || keep == null) {
-                        if (!runProbe(t, system, s.target)) return null
-                        variant = known().second
+                        val token = order.beginProbe(t, version) ?: return null
+                        if (!runProbe(t, token, system, s.target)) return null
+                        variant = known(t).second
                     } else {
-                        if (start) runCatching {
-                            probeExec.execute {
-                                if (runProbe(t, system, s.target)) {
-                                    synchronized(cancelLock) { setupWanted.incrementAndGet() }
-                                    onSetupChange?.invoke() // now build with the tested service
+                        val token = order.beginProbe(t, version)
+                        if (token != null) {
+                            val started = runCatching {
+                                probeExec.execute {
+                                    if (runProbe(t, token, system, s.target) && order.changed())
+                                        onSetupChange?.invoke() // now build with the tested service
                                 }
-                            }
-                        }
+                            }.isSuccess
+                            if (!started) return null // the session is ending
+                        } else if (!order.isProbing(t)) return null // overtaken: the newer change builds again
                         notices += "正在测试新保存的模型，测好之前先用原来的"
-                        val v = ByokTranslator.variant(prefs.byokVariant(keep.first, keep.second))
-                            ?: synchronized(cancelLock) { probed[keep] }
-                        return ByokTranslator(keep.first, keep.second, keep.third, byokSystem(s.scene, s.source, s.target), v,
-                            maxTokens = mtMaxTokens(s.target))
+                        return use(keep, known(keep).second)
                     }
                 }
-                probeTrouble[t]?.let { notices += it }
+                order.trouble(t)?.let { notices += it }
                 if (variant == null && prefs.byokVariant(t.first, t.second) == ByokTranslator.NONE_WORKED)
                     notices += "⚠ 关不掉这个模型的思考，翻译可能很慢或经常失败"
-                sl?.write(mapOf("ev" to "byok", "variant" to variant?.name, "system" to system))
-                inUse = t
-                return ByokTranslator(t.first, t.second, t.third, system, variant, maxTokens = mtMaxTokens(s.target))
+                return use(t, variant)
             }
-            /** A setup for [s] and the warnings it comes with; null: stopped meanwhile. */
-            fun make(s: Snap, version: Int, wait: Boolean): Pair<Setup, String>? {
+            /** A setup for [s] and the warnings it comes with; null: stopped, or overtaken (the newer change builds). */
+            fun make(s: Snap, version: Int, wait: Boolean): Built? {
                 val notices = mutableListOf<String>()
+                var used: Triple<String, String, String>? = null
+                var ev: Map<String, Any?>? = null
                 val mt: Mt = when (mode) {
                     MtMode.INDEX -> OnlineTranslator(s.online!!, maxTokens = mtMaxTokens(s.target))
                     MtMode.LOCAL -> LlamaTranslator.Capped(local!!, mtMaxTokens(s.target))
-                    MtMode.BYOK -> byok(s, wait, notices) ?: return null
+                    MtMode.BYOK -> {
+                        val (t, k, e) = byok(s, version, wait, notices) ?: return null
+                        used = k; ev = e; t
+                    }
                 }
                 // one Jev client for both features; no key = both paused until one is entered
                 val judge = s.jevKey?.let { Jev(s.provider, it, source = s.source, target = s.target) }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
-                return Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version) to
-                    notices.joinToString("  ·  ")
+                return Built(Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version),
+                    notices.joinToString("  ·  "), used, ev)
+            }
+            /** Log a built setup that is now in use: its BYOK details, and [change] = also as a config_change of [s]. */
+            fun logUsed(b: Built, s: Snap, change: Boolean) {
+                b.byokEv?.let { sl?.write(mapOf("ev" to "byok") + it) }
+                // the service really in use: while a newly saved one is probed that is still the previous one
+                if (change) sl?.write(mapOf("ev" to "config_change", "setup" to b.setup.version) + s.log() +
+                    (b.byokEv?.filterKeys { it == "mt_url" || it == "mt_model" } ?: emptyMap()))
             }
             // A save during the start probe overtakes it: build again from the newest settings (stop ends the loop).
             var firstSnap = s0
-            var built = make(s0, 0, wait = true)
+            var built = make(s0, v0, wait = true)
             while (built == null && !stopping) {
-                val v = setupWanted.get()
+                val v = order.version()
                 val s = Snap(prefs, mode, wantJev, files.mt.name)
                 if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return
                 firstSnap = s
                 built = make(s, v, wait = true)
             }
             if (stopping || built == null) return
-            val (first, firstNotice) = built
-            notice = firstNotice
+            val first = built.setup
+            notice = built.notice
+            inUse = built.byok
             // the settings in use are not the ones session_start logged: say so, like a change while running
-            if (firstSnap !== s0) sl?.write(mapOf("ev" to "config_change", "setup" to first.version) + firstSnap.log())
+            logUsed(built, firstSnap, change = firstSnap !== s0)
             val pl = Pipeline(
                 asr, first.mt,
                 onCaption = { onCaption(it, sl) },
@@ -312,19 +322,19 @@ class CaptionService : Service() {
             var published = first.version
             val rebuild = Runnable {
                 try {
-                    val v = setupWanted.get()
+                    val v = order.version()
                     if (v == published || stopping) return@Runnable
                     val s = Snap(prefs, mode, wantJev, files.mt.name)
                     // BYOK is only switched by "保存", which checks the fields; a half-filled one keeps the current setup
                     if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return@Runnable
-                    val (setup, warn) = make(s, v, wait = false) ?: return@Runnable
-                    // the version check and the publication under one lock: a newer change or the session end
-                    // either comes before (this setup is dropped) or after (it rebuilds again / cancels it)
-                    val ok = synchronized(cancelLock) { !setupClosed && v == setupWanted.get() && pl.setSetup(setup) }
-                    if (!ok) return@Runnable
+                    val b = make(s, v, wait = false) ?: return@Runnable
+                    // the version check and the publication under the lock every change bumps the version under: a newer
+                    // change or the session end either comes before (this setup is dropped) or after (it rebuilds again)
+                    if (!order.publish(v) { pl.setSetup(b.setup) }) return@Runnable
                     published = v
-                    notice = warn
-                    sl?.write(mapOf("ev" to "config_change", "setup" to v) + s.log())
+                    inUse = b.byok
+                    notice = b.notice
+                    logUsed(b, s, change = true)
                     refresh()
                 } catch (t: Throwable) {
                     // a failed rebuild keeps the current settings; it must not end the session
@@ -338,7 +348,7 @@ class CaptionService : Service() {
             // after start: setSetup refuses a pipeline that is not running
             val exec = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "jpsub-setup") }
             onSetupChange = { runCatching { exec.execute(rebuild) } } // rejected once the session ends
-            exec.execute(rebuild) // a change made since the first snapshot only counted in setupWanted
+            exec.execute(rebuild) // a change made since the first snapshot only bumped the version
             try {
                 capture(p, pl, vad, sl)
                 if (overloaded && !stopping) {
@@ -354,7 +364,7 @@ class CaptionService : Service() {
                 // it is either in a probe (cancelled now, returns within the request's cancel) or in quick local work,
                 // so the wait ends; only then the log is closed and the models are freed below.
                 onSetupChange = null
-                synchronized(cancelLock) { setupClosed = true; probing?.cancel() }
+                synchronized(cancelLock) { order.close(); probing?.cancel() }
                 exec.shutdownNow(); probeExec.shutdownNow()
                 while (!exec.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS) ||
                     !probeExec.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) Log.w(TAG, "waiting for the setup worker")
@@ -616,7 +626,7 @@ class CaptionService : Service() {
             when (key) {
                 // a newer BYOK save makes an unfinished probe of the previous one pointless (and billed): stop it
                 "byokSaved" -> {
-                    synchronized(cancelLock) { setupWanted.incrementAndGet(); probeFor = null; probing?.cancel() }
+                    synchronized(cancelLock) { order?.byokSaved(); probing?.cancel() }
                     onSetupChange?.invoke()
                 }
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
@@ -628,8 +638,8 @@ class CaptionService : Service() {
                 "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
                 "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }
                 // translation settings: the session rebuilds its setup off the main thread, from the next sentence on
-                in setupKeys -> { setupWanted.incrementAndGet(); onSetupChange?.invoke() }
-                else -> if (key?.startsWith("jevKey:") == true) { setupWanted.incrementAndGet(); onSetupChange?.invoke() }
+                in setupKeys -> { order?.changed(); onSetupChange?.invoke() }
+                else -> if (key?.startsWith("jevKey:") == true) { order?.changed(); onSetupChange?.invoke() }
             }
         }.also { prefs.listen(it) }
         v.setCardWidth(cardW)

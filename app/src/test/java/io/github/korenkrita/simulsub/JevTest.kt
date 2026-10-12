@@ -646,6 +646,15 @@ class JevTest {
             assertEquals(d, 0L, Jev.retrySeconds(d, base))
         assertEquals(86_400L, Jev.retrySeconds("Tue Oct  13 19:00:00 2026", base)) // asctime pads the day with a space
         assertNull(Jev.retrySeconds("13 Oct 2026", base))
+        // impossible dates are no date (the short backoff), not the nearest real one
+        for (d in listOf("Sun, 31 Feb 2027 19:00:00 GMT", "Sunday, 31-Feb-27 19:00:00 GMT", "Sun Feb 31 19:00:00 2027", "Sun Feb 29 19:00:00 2027"))
+            assertNull(d, Jev.retrySeconds(d, base))
+        // RFC 850: a two-digit year more than 50 years ahead is the century before
+        assertEquals(0L, Jev.retrySeconds("Wednesday, 13-Oct-76 19:00:00 GMT", base)) // 1976, past
+        val in2076 = java.time.LocalDateTime.of(2076, 10, 12, 19, 0)
+        val d2076 = in2076.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.US)
+        assertEquals((in2076.toInstant(java.time.ZoneOffset.UTC).toEpochMilli() - base) / 1000,
+            Jev.retrySeconds("$d2076, 12-Oct-76 19:00:00 GMT", base)) // exactly 50 years ahead: 2076
     }
 
     @Test
@@ -783,8 +792,16 @@ class JevTest {
         assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
         // not yet installed, so not published: the caller does not install it with its own, later clock
         assertTrue(first.status != 429)
+        // the other question meets the 429 being installed: it waits for it, and is then not sent
+        val other = AtomicReference<JevCall>()
+        val t = Thread { other.set(j.unfinished("c")) }.apply { start() }
+        Thread.sleep(200)
+        assertEquals(1, hits.get())
         now += 900
         release.countDown()
+        t.join(3_000)
+        assertEquals("paused", other.get().error)
+        assertEquals(1, hits.get())
         val deadline = monoMs() + 2_000
         while (j.paused() == null && monoMs() < deadline) Thread.sleep(5)
         assertEquals(headersAt + 60_000, j.paused()!!.untilMs)

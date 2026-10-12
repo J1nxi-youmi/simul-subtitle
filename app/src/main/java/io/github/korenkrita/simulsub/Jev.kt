@@ -111,9 +111,11 @@ class Jev(
         // request's answer never shortens (or ends) a pause
         val myGen = java.util.concurrent.atomic.AtomicInteger(-1)
         val on429 = { retryAfter: String? ->
-            val at = clock(); val atWall = wall()
-            val secs = retrySeconds(retryAfter, atWall)?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
+            // all under the monitor, from the first clock read on: admission waits for an arriving 429 instead of
+            // slipping past it while it is read, and both clocks are read together
             synchronized(svc) {
+                val at = clock(); val atWall = wall()
+                val secs = retrySeconds(retryAfter, atWall)?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
                 if (myGen.get() < 0) {
                     svc.gen++; myGen.set(svc.gen)
                     val until = at + (secs ?: BACKOFF_S) * 1000
@@ -169,18 +171,31 @@ class Jev(
             return maxOf(0, (at - nowWall + 999) / 1000)
         }
 
-        /** The three HTTP-date forms a recipient must read: IMF-fixdate, RFC 850 and asctime (all GMT). */
+        /** The three HTTP-date forms a recipient must read: IMF-fixdate, RFC 850 and asctime (all GMT); impossible dates are none. */
         private fun httpDate(v: String, nowWall: Long): Long? {
             val us = java.util.Locale.US
             val utc = java.time.ZoneOffset.UTC
-            runCatching { return java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }
-            // RFC 850's two-digit year: the one no more than 50 years ahead
-            val thisYear = java.time.Instant.ofEpochMilli(nowWall).atZone(utc).year
-            val rfc850 = java.time.format.DateTimeFormatterBuilder().parseCaseInsensitive().appendPattern("EEEE, dd-MMM-")
-                .appendValueReduced(java.time.temporal.ChronoField.YEAR, 2, 2, thisYear - 49).appendPattern(" HH:mm:ss 'GMT'")
-                .toFormatter(us)
-            runCatching { return java.time.LocalDateTime.parse(v, rfc850).toInstant(utc).toEpochMilli() }
-            val asctime = java.time.format.DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss yyyy", us)
+            val strict = java.time.format.ResolverStyle.STRICT
+            runCatching {
+                return java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.withResolverStyle(strict))
+                    .toInstant().toEpochMilli()
+            }
+            // RFC 850's two-digit year: the century whose date is no more than 50 years ahead, the weekday checked after
+            Regex("""(?i)([a-z]+), (\d{2})-([a-z]{3})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT""").matchEntire(v)?.let { m ->
+                val (wd, d, mon, yy, time) = m.destructured
+                val fmt = java.time.format.DateTimeFormatterBuilder().parseCaseInsensitive()
+                    .appendPattern("dd-MMM-uuuu HH:mm:ss").toFormatter(us).withResolverStyle(strict)
+                val limit = java.time.Instant.ofEpochMilli(nowWall).atZone(utc).plusYears(50)
+                val century = limit.year / 100 * 100
+                val t = runCatching {
+                    java.time.LocalDateTime.parse("$d-$mon-${century + yy.toInt()} $time", fmt).let {
+                        if (it.atZone(utc).isAfter(limit)) java.time.LocalDateTime.parse("$d-$mon-${century - 100 + yy.toInt()} $time", fmt) else it
+                    }
+                }.getOrNull() ?: return null
+                val day = t.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, us)
+                return if (day.equals(wd, ignoreCase = true)) t.toInstant(utc).toEpochMilli() else null
+            }
+            val asctime = java.time.format.DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss uuuu", us).withResolverStyle(strict)
             runCatching { return java.time.LocalDateTime.parse(v.replace(Regex("\\s+"), " "), asctime).toInstant(utc).toEpochMilli() }
             return null
         }

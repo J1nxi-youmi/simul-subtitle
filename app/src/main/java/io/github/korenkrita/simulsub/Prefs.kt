@@ -150,6 +150,8 @@ class Prefs(ctx: Context) {
     var byokKey: String?
         get() = sp.getString("byokKey", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
         set(v) = sp.edit().apply { if (v.isNullOrBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(v.trim())) }.apply()
+    /** Written after "保存" stored all BYOK fields: a running session switches to them as one (see CaptionService). */
+    fun byokSaved() = sp.edit().putLong("byokSaved", System.nanoTime()).apply()
     /**
      * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and
      * model; null = not found yet. Kept per URL + model, so switching back and forth does not probe again.

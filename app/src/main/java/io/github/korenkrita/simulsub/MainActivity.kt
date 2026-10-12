@@ -177,15 +177,16 @@ class MainActivity : Activity() {
         box.removeAllViews()
         val running = CaptionService.running
         val sources = Lang.SOURCES
-        box.addView(pickRow("视频里说的是", sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), !running) {
+        // a running session takes a new language from the next sentence
+        box.addView(pickRow("视频里说的是", sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), true) {
             if (prefs.sourceLang != sources[it]) { prefs.sourceLang = sources[it]; renderTranslate() }
         })
         box.addView(divider())
         val targets = Lang.entries
-        box.addView(pickRow("字幕翻译成", targets.map { it.zh }, prefs.targetLang.ordinal, !running) {
+        box.addView(pickRow("字幕翻译成", targets.map { it.zh }, prefs.targetLang.ordinal, true) {
             if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate() }
         })
-        findViewById<TextView>(R.id.langHint).text = if (running) "字幕运行中，停止后才能改语言。" else "知道是哪种语言就选上，翻译会更准。"
+        findViewById<TextView>(R.id.langHint).text = if (running) "字幕运行中，改了从下一句开始生效。" else "知道是哪种语言就选上，翻译会更准。"
     }
 
     override fun onResume() {
@@ -526,13 +527,16 @@ class MainActivity : Activity() {
             }
         }
 
-    /** Engine, scene, display mode and Jev. Engine, scene and Jev apply to the next start; the mode applies immediately. */
+    /**
+     * Engine, scene, display mode and Jev. While running: the engine and the two Jev switches wait for the next start,
+     * the display mode applies at once, everything else from the next sentence (CaptionService rebuilds its setup).
+     */
     private fun renderTranslate() {
         val root = findViewById<LinearLayout>(R.id.translateList)
         root.removeAllViews()
         val running = CaptionService.running
         translateRunning = running
-        if (running) root.addView(note("字幕正在运行：下面的改动从下次开始字幕时生效（显示方式除外，马上生效）。"), LinearLayout.LayoutParams(
+        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型、自己的模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；翻译方式要先停止字幕才能换，智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
         // -- how it translates
@@ -549,7 +553,7 @@ class MainActivity : Activity() {
         when (prefs.mtMode) {
             MtMode.INDEX -> {
                 box.addView(label("翻译模型"))
-                box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, !running) {
+                box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, true) {
                     if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
                 box.addView(hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。"))
@@ -563,7 +567,7 @@ class MainActivity : Activity() {
         box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
         box.addView(hint("选「B站 VTuber 直播」时，翻译会知道这是虚拟主播在 B 站和观众闲聊、念弹幕，并按 B 站的说法翻译「SC」「舰长」「弹幕」这类直播用语。"))
 
-        // translation context: on/off and how many finished sentences (applies to the next start)
+        // translation context: on/off and how many finished sentences (a running session: from the next sentence)
         val ctxCount = label("")
         val ctxSlider = com.google.android.material.slider.Slider(this).apply {
             valueFrom = 1f; valueTo = Pipeline.MAX_PREVIOUS_SENTENCES.toFloat(); stepSize = 1f; isTickVisible = false
@@ -660,7 +664,6 @@ class MainActivity : Activity() {
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or
                     if (password) android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else android.text.InputType.TYPE_TEXT_VARIATION_URI
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-                isEnabled = !running
                 box.addView(this)
             }
         }
@@ -683,19 +686,27 @@ class MainActivity : Activity() {
             }
             prefs.byokUrl = u; prefs.byokModel = m
             if (k.isNotEmpty()) { prefs.byokKey = k; key.setText("") }
+            prefs.byokSaved() // a running session switches to the saved service now, as one change
             return ByokTranslator.chatUrl(u).second
         }
         val testing = byokTest != null
         // while a test runs the boxes are locked, so its result always belongs to what they show
-        listOf(url, model, key).forEach { it.isEnabled = !running && !testing }
+        // Running: "保存" switches the session to what was saved from the next sentence (it tests a new model itself),
+        // so the test button is off (two probes would bill twice) and so is clearing the key (the session needs one).
+        listOf(url, model, key).forEach { it.isEnabled = !testing }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
             text = "清除 key"; textSize = 16f; isEnabled = saved != null && !running && !testing
             setOnClickListener { prefs.byokKey = null; renderTranslate() }
         })
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = "保存"; textSize = 16f; isEnabled = !running && !testing
-            setOnClickListener { if (save() != null) renderTranslate() }
+            text = "保存"; textSize = 16f; isEnabled = !testing
+            setOnClickListener {
+                if (save() != null) {
+                    if (running) byokResult = "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。"
+                    renderTranslate()
+                }
+            }
         })
         val test = MaterialButton(this).apply { text = if (testing) "测试中…" else "测试连接"; textSize = 16f; isEnabled = !running && !testing }
         row.addView(test)

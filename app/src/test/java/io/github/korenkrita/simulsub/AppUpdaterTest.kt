@@ -41,6 +41,12 @@ class AppUpdaterTest {
         assertTrue(release.copy(versionCode = 5).shouldOffer(3, false, true, 0, 4, 2000, 1999))
     }
 
+    @Test fun everyEntryChecksButARotationAndUnfinishedWorkDoNot() {
+        assertTrue(UpdateRelease.checksOnEntry(auto = true, pending = false, configRecreated = false))
+        assertFalse(UpdateRelease.checksOnEntry(auto = false, pending = false, configRecreated = false))
+        assertFalse(UpdateRelease.checksOnEntry(auto = true, pending = true, configRecreated = false))
+        assertFalse(UpdateRelease.checksOnEntry(auto = true, pending = false, configRecreated = true))
+    }
 
     @Test fun directFirstThenTheExistingDownloadProxies() {
         assertEquals(listOf(UpdateRelease.LATEST, "https://gh-proxy.com/${UpdateRelease.LATEST}",

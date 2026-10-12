@@ -116,8 +116,8 @@ class MainActivity : Activity() {
         showSettings(savedInstanceState?.getBoolean("settings") == true)
         if (inSettings && savedInstanceState?.getBoolean("sizePage") == true) showSize(true)
         updater = AppUpdater(this)
-        // each launch checks once; a rotation or theme change (savedInstanceState) does not
-        updater.start(fresh = savedInstanceState == null)
+        // a rotation or theme change is not an entry into the app (unless it cancelled a check that was running)
+        configRecreated = savedInstanceState?.getBoolean("configChange") == true
     }
 
     private var inSettings = false
@@ -165,6 +165,19 @@ class MainActivity : Activity() {
         outState.putBoolean("settings", inSettings)
         outState.putInt("tab", tab)
         outState.putBoolean("sizePage", inSize)
+        // recreated right away for a rotation / theme (no check then), unless that stops a check under way; a state
+        // saved for a process the system may end is not this, and the restored app checks again
+        outState.putBoolean("configChange", isChangingConfigurations && !updater.checking)
+    }
+
+    /** this activity only replaces one a configuration change ended; its first start is not an entry into the app */
+    private var configRecreated = false
+
+    override fun onStart() {
+        super.onStart()
+        // each entry into the app (a launch, or coming back from the background) checks for an update once
+        updater.start(configRecreated)
+        configRecreated = false
     }
 
     @Deprecated("Deprecated in Java")

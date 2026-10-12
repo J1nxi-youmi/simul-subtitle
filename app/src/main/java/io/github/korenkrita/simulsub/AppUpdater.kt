@@ -65,6 +65,13 @@ internal data class UpdateRelease(
         // Same order as ModelStore.GH_PROXIES. Never send api.github.com through these download proxies.
         fun sources(url: String) = listOf(url, "https://gh-proxy.com/$url", "https://gh.llkk.cc/$url")
 
+        /**
+         * An automatic check when the app is entered: [auto] on, nothing unfinished ([pending]: an update found,
+         * downloading or downloaded, which the app shows instead), and not a start that only follows a rotation or
+         * theme change ([configRecreated]).
+         */
+        fun checksOnEntry(auto: Boolean, pending: Boolean, configRecreated: Boolean) = auto && !pending && !configRecreated
+
 
         fun parse(text: String): UpdateRelease {
             require(text.toByteArray(Charsets.UTF_8).size <= MAX_MANIFEST)
@@ -114,10 +121,13 @@ internal class AppUpdater(private val activity: Activity) {
         checkButton.setOnClickListener { check(manual = true) }
     }
 
-    /** Each launch of the app checks once ([fresh]: a new activity, not one recreated by a rotation or theme change). */
-    fun start(fresh: Boolean) {
-        if (fresh && auto && !prefs.contains("pendingInstall") && !prefs.contains("pendingDownload") && !prefs.contains("pendingOffer"))
-            check(manual = false)
+    /** an automatic or manual check is running (a recreation cancels it: the new activity checks again) */
+    val checking get() = job?.isActive == true
+
+    /** Each entry into the app checks once ([configRecreated]: this start only follows a rotation or theme change). */
+    fun start(configRecreated: Boolean) {
+        val pending = prefs.contains("pendingInstall") || prefs.contains("pendingDownload") || prefs.contains("pendingOffer")
+        if (UpdateRelease.checksOnEntry(auto, pending, configRecreated)) check(manual = false)
     }
 
     fun resume() {

@@ -409,18 +409,23 @@ class CaptionService : Service() {
             v.setCardWidth(cardW)
             // captions ≤ 40 %, status ≤ 20 % of the usable height: card + toolbar always fit on screen
             v.setMaxContentHeight((a.height() * MAX_CAPTION_FRAC).toInt(), (a.height() * 0.2f).toInt())
-            val cardH = v.cardHeightPx().coerceAtLeast(1)
+            // measured now at this width (a resize just changed width or caption height; the last layout is stale)
+            val cardH = v.measureCardHeight(cardW).coerceAtLeast(1)
             cardX = cardX.coerceIn(0, sw - cardW)
             cardY = cardY.coerceIn(0, (sh - cardH).coerceAtLeast(0))
             val tbW = if (toolbarShown) v.toolbarWidthPx().coerceAtMost(sw) else 0
             val tbH = if (toolbarShown) v.toolbarHeightPx() else 0
             val tbX = (cardX + (cardW - tbW) / 2).coerceIn(0, sw - tbW)
-            val above = toolbarShown && cardY + cardH + tbH > sh && cardY - tbH >= 0
+            // below if it fits, else above if that fits; on a short screen with room on neither side, the roomier
+            // side, the toolbar overlapping the card's edge by what is missing (it draws over the card)
+            val below = sh - (cardY + cardH); val aboveRoom = cardY
+            val above = toolbarShown && tbH > below && (tbH <= aboveRoom || aboveRoom > below)
+            val overlap = if (!toolbarShown) 0 else (tbH - if (above) aboveRoom else below).coerceAtLeast(0)
             val left = if (toolbarShown) minOf(cardX, tbX) else cardX
             val right = if (toolbarShown) maxOf(cardX + cardW, tbX + tbW) else cardX + cardW
-            v.placeCard(cardX - left, tbX - left, above)
+            v.placeCard(cardX - left, tbX - left, above, overlap)
             lp.x = left; lp.width = right - left
-            lp.y = if (above) cardY - tbH else cardY
+            lp.y = if (above) cardY - (tbH - overlap) else cardY
             if (v.isAttachedToWindow) wm.updateViewLayout(v, lp)
         }
         // rotation / resize: the caption height may not change, so re-fit explicitly from the saved width fraction
@@ -441,7 +446,7 @@ class CaptionService : Service() {
                 if (captionH == 0) captionH = v.captionHeightPx() // start from what is on screen (also when auto)
                 val oldH = captionH
                 // room above (top corner) or below (bottom corner) the card
-                val room = if (top) cardY else a.height() - (cardY + v.cardHeightPx())
+                val room = if (top) cardY else a.height() - (cardY + v.measureCardHeight(oldW))
                 val maxH = minOf((a.height() * MAX_CAPTION_FRAC).toInt(), oldH + room.coerceAtLeast(0))
                 captionH = (captionH + if (top) -dy else dy).coerceIn(v.minCaptionPx(), maxH.coerceAtLeast(v.minCaptionPx()))
                 if (top) cardY -= captionH - oldH

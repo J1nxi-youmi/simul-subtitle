@@ -80,22 +80,28 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /**
      * Places card and toolbar inside a window that covers both (toolbar open): px from the window's left edge. The
      * card stays where the user put it; only the toolbar shifts to fit the screen. [toolbarAbove] puts the toolbar
-     * over the card when there is no room below it.
+     * over the card when there is no room below it; [overlapPx] pulls it onto the card's edge when there is room on
+     * neither side (it has the higher elevation, so it is drawn over the card).
      */
-    fun placeCard(cardOffset: Int, toolbarOffset: Int, toolbarAbove: Boolean) {
+    fun placeCard(cardOffset: Int, toolbarOffset: Int, toolbarAbove: Boolean, overlapPx: Int) {
         val clp = card.layoutParams as LayoutParams
         if (clp.marginStart != cardOffset) { clp.marginStart = cardOffset; card.layoutParams = clp }
-        val gap = dp(TOOLBAR_GAP_DP).toInt()
+        val m = dp(TOOLBAR_GAP_DP).toInt() - overlapPx
         val tlp = toolbar.layoutParams as LayoutParams
+        val top = if (toolbarAbove) 0 else m; val bottom = if (toolbarAbove) m else 0
         if ((indexOfChild(toolbar) == 0) != toolbarAbove) {
             removeView(toolbar)
-            tlp.topMargin = if (toolbarAbove) 0 else gap; tlp.bottomMargin = if (toolbarAbove) gap else 0
-            tlp.marginStart = toolbarOffset
+            tlp.topMargin = top; tlp.bottomMargin = bottom; tlp.marginStart = toolbarOffset
             addView(toolbar, if (toolbarAbove) 0 else 1, tlp)
-        } else if (tlp.marginStart != toolbarOffset) { tlp.marginStart = toolbarOffset; toolbar.layoutParams = tlp }
+        } else if (tlp.marginStart != toolbarOffset || tlp.topMargin != top || tlp.bottomMargin != bottom) {
+            tlp.topMargin = top; tlp.bottomMargin = bottom; tlp.marginStart = toolbarOffset; toolbar.layoutParams = tlp
+        }
     }
-    /** Caption card height in px as laid out. */
-    fun cardHeightPx() = card.height
+    /** Caption card height in px at [widthPx], with the current text and caption height (measured, not laid out). */
+    fun measureCardHeight(widthPx: Int): Int {
+        card.measure(MeasureSpec.makeMeasureSpec(widthPx, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        return card.measuredHeight
+    }
     /** Height the open toolbar adds to the window, gap included. */
     fun toolbarHeightPx(): Int {
         toolbar.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))

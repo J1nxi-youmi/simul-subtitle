@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.korenkrita.simulsub"
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.6"
+        versionCode = 12
+        versionName = "0.6.1"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake {

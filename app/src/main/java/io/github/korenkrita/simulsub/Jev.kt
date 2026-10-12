@@ -28,12 +28,23 @@ enum class JevProvider(val label: String, val url: String, val model: String, va
     OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1/systemone", "~typesafe/jev-latest", note = "需要 key"),
 }
 
-/** One request with everything the session log needs. [answer] is the parsed `answers.x`, null on any failure. */
-class JevCall(val request: String, val status: Int, val response: String?, val ms: Long, val error: String?, val answer: Map<*, *>?) {
+/**
+ * One request with everything the session log needs. [answer] is the parsed `answers.x`, null on any failure.
+ * [limit]: the service limited requests (HTTP 429), now or before (then nothing was sent, [error] "paused").
+ */
+class JevCall(val request: String, val status: Int, val response: String?, val ms: Long, val error: String?, val answer: Map<*, *>?,
+              val limit: JevLimit? = null) {
     val noul: Double? get() = (answer?.get("noul") as? Number)?.toDouble()
     val choice: String? get() = answer?.get("choice") as? String
     val confidence: Double? get() = (answer?.get("confidence") as? Number)?.toDouble()
 }
+
+/**
+ * A 429 from a Jev service: no request is sent to it before [untilMs] (monotonic). [resumeAt] is the wall time
+ * its Retry-After named, null when it named none (then a short backoff, retried by the next request). [free]:
+ * OpenCode Zen's free usage limit (FreeUsageLimitError).
+ */
+class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean)
 
 /** What the pipeline asks; an interface so tests can answer without a network. */
 interface Judge {
@@ -43,6 +54,8 @@ interface Judge {
     fun mistranslation(ja: String, zh: String): JevCall
     /** Abort the request in progress (stop). */
     fun cancel()
+    /** The service limited requests and the pause has not ended: a question now is not sent. */
+    fun paused(): JevLimit? = null
 }
 
 class Jev(
@@ -56,32 +69,62 @@ class Jev(
     /** the session's languages; Japanese→Chinese uses the wording tuned on the test sets */
     private val source: Lang? = Lang.JA,
     private val target: Lang = Lang.ZH,
+    /** tests */
+    private val clock: () -> Long = ::monoMs,
+    private val wall: () -> Long = System::currentTimeMillis,
 ) : Judge {
     private val calls = Calls(deadlineMs)
     private val unfinishedQ = unfinishedQuestion(source)
     private val mistranslationQ = mistranslationQuestion(source, target)
+    /** the pause is per service and credentials, so a rebuilt setup (new client) does not end it */
+    private val limitKey = "$url\n$apiKey"
 
     override fun unfinished(text: String) = ask(mapOf("current" to text), unfinishedQ)
     override fun mistranslation(ja: String, zh: String) = ask(mapOf("ja" to ja, "zh" to zh), mistranslationQ)
 
     override fun cancel() = calls.cancel()
+    override fun paused(): JevLimit? = LIMITS[limitKey]?.takeIf { clock() < it.untilMs }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
         val body = Json.encode(mapOf("model" to provider.model, "state" to state, "questions" to mapOf("x" to question)))
         // an illegal header value would make the HTTP library put the key into its exception message
         if (provider.needsKey && !validKey(apiKey)) return JevCall(body, 0, null, 0, "bad key", null)
+        paused()?.let { return JevCall(body, 0, null, 0, "paused", null, it) }
         val auth = if (provider.needsKey) mapOf("Authorization" to "Bearer $apiKey") else emptyMap()
         val r = calls.post(url, body, auth, beforeSend)
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
         else null
+        // a later end wins: an older request's answer arriving now never shortens (or ends) a pause
+        val limit = if (r.status != 429) null else {
+            val secs = retrySeconds(r.retryAfter, wall())?.coerceAtMost(MAX_PAUSE_S)
+            val l = JevLimit(clock() + (secs ?: BACKOFF_S) * 1000, secs?.let { wall() + it * 1000 },
+                r.body?.contains("FreeUsageLimitError") == true)
+            LIMITS.merge(limitKey, l) { a, b -> if (b.untilMs > a.untilMs) b else a }
+        }
         // a server may echo the key back (also JSON-escaped); the session log is shareable
-        return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer)
+        return JevCall(body, r.status, r.body?.let { redact(it, apiKey) }, r.ms, r.error ?: if (answer == null) "HTTP ${r.status}" else null, answer, limit)
     }
 
     companion object {
         /** Printable ASCII only: a valid bearer token, and nothing the HTTP library would reject (and echo). */
         fun validKey(k: String) = k.isNotEmpty() && k.all { it in '!'..'~' }
+        /** pauses after a 429, by service and credentials, for the whole process (a new session still waits) */
+        private val LIMITS = java.util.concurrent.ConcurrentHashMap<String, JevLimit>()
+        /** a 429 without a usable Retry-After: tried again after this */
+        const val BACKOFF_S = 60L
+        /** a longer Retry-After is taken as this (a day limit resets within a day) */
+        const val MAX_PAUSE_S = 86_400L
+
+        /** Seconds a Retry-After value ([h]: delay-seconds or an HTTP-date) asks to wait; null: none or not usable. */
+        fun retrySeconds(h: String?, nowWall: Long): Long? {
+            val v = h?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            v.toLongOrNull()?.let { return it.takeIf { s -> s > 0 } }
+            val at = runCatching {
+                java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+            }.getOrNull() ?: return null
+            return ((at - nowWall + 999) / 1000).takeIf { it > 0 }
+        }
 
         /**
          * [body] for the log without [secret], as text (a body need not be valid JSON): every spelling of the key, with any
@@ -154,8 +197,12 @@ class Jev(
     }
 }
 
-/** One POST as the session log records it. [error] is a fixed code or an exception class name, never a message. */
-class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?, val firstContentMs: Long? = null)
+/**
+ * One POST as the session log records it. [error] is a fixed code or an exception class name, never a message.
+ * [retryAfter]: the Retry-After header of a 429, as sent.
+ */
+class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?, val firstContentMs: Long? = null,
+                 val retryAfter: String? = null)
 
 /**
  * POSTs of one session (Jev and online MT). Each request is an OkHttp [Call], registered before it runs:
@@ -217,16 +264,17 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                 }
                 override fun onResponse(call: Call, response: Response) {
                     var r: HttpResult? = null
+                    val ra = if (response.code == 429) response.header("Retry-After") else null
                     try {
                         val src = response.body?.source()
                         r = when {
-                            src == null -> HttpResult(response.code, null, monoMs() - t0, null)
+                            src == null -> HttpResult(response.code, null, monoMs() - t0, null, retryAfter = ra)
                             firstContentMs != null && response.code == 200 -> readStream(src, t0, first, started, isContent, isEnd)
                             // a real answer is a few KB; anything far larger is not one
-                            src.request(MAX_RESPONSE + 1L) -> HttpResult(response.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes")
-                            else -> HttpResult(response.code, src.buffer.readUtf8(), monoMs() - t0, null)
+                            src.request(MAX_RESPONSE + 1L) -> HttpResult(response.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes", retryAfter = ra)
+                            else -> HttpResult(response.code, src.buffer.readUtf8(), monoMs() - t0, null, retryAfter = ra)
                         }
-                    } catch (e: IOException) { r = HttpResult(response.code, null, monoMs() - t0, why(e, t0), firstOrNull()) }
+                    } catch (e: IOException) { r = HttpResult(response.code, null, monoMs() - t0, why(e, t0), firstOrNull(), ra) }
                     finally {
                         if (firstContentMs != null) {
                             // a stream: publish first, then drop the rest, as closing an unfinished chunked body may

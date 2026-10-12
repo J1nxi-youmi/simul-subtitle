@@ -81,6 +81,12 @@ class Setup(
 )
 
 /**
+ * The outcome of one real request to the translator or Jev (not a reused translation), for the overlay's lights.
+ * [http] 0 = no HTTP status (local model, network failure); [limit]: Jev is paused after a 429; [setup] its version.
+ */
+class ServiceCall(val ok: Boolean, val http: Int, val error: String?, val limit: JevLimit?, val setup: Int)
+
+/**
  * Two worker threads (ASR, MT) connected by small queues.
  *
  * "Draft then correct" contract:
@@ -132,6 +138,8 @@ class Pipeline(
     private val log: (Map<String, Any?>) -> Unit = {},
     /** Read live: false = "only finished sentences", display drafts are not recognized or translated at all. */
     private val drafts: () -> Boolean = { true },
+    /** After each real request to the translator (jev false) or Jev (true), on a worker thread; must not block. */
+    private val onService: (jev: Boolean, call: ServiceCall) -> Unit = { _, _ -> },
 ) {
     private class Queued(val job: AsrJob, val submittedAt: Long)
     private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long, val setup: Setup)
@@ -175,12 +183,16 @@ class Pipeline(
      * Fixes the segment's setup now (also without smart sentence ends), so its sentence ends and its translation use
      * the same one and a change while it is spoken, or while ASR is behind, applies from the next utterance.
      */
-    fun judged(segmentId: Long): Boolean = setupOf(segmentId).judge != null && judgeEnds // setup fixed first, always
+    fun judged(segmentId: Long): Boolean {
+        val j = setupOf(segmentId).judge // setup fixed first, always
+        // limited by the service (429): cut by pauses as without Jev, nothing is asked until the pause ends
+        return j != null && judgeEnds && j.paused() == null
+    }
 
     /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished. */
     private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Boolean>()
     /** The newest endOfSpeech draft waiting for Jev; an older one that has not started is replaced. */
-    private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Judge>?>(null)
+    private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Setup>?>(null)
 
     /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
@@ -347,9 +359,10 @@ class Pipeline(
             // judgeEnds alone: a session may start without a key and get one later (the setup then has a judge)
             if (judgeEnds && job.endOfSpeech) {
                 // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent.
-                // No judge in this segment's setup (key missing for now): no question, the segmenter waits as without Jev
-                if (ja.isEmpty() || setup.judge == null) hints[job.segmentId to job.revision] = false
-                else pendingJudge.set(Triple(job, ja, setup.judge))
+                // No judge in this segment's setup (key missing for now) or one the service limited: no question,
+                // the segmenter cuts at once as without Jev instead of waiting for an answer that never comes
+                if (ja.isEmpty() || setup.judge == null || setup.judge.paused() != null) hints[job.segmentId to job.revision] = false
+                else pendingJudge.set(Triple(job, ja, setup))
             }
             synchronized(lock) {
                 // A draft that already ran is kept even if a newer draft is queued: on a slow phone every
@@ -368,11 +381,14 @@ class Pipeline(
 
     private fun judgeLoop() {
         while (running && !failed) {
-            val (job, ja, judge) = pendingJudge.getAndSet(null) ?: run { Thread.sleep(10); null } ?: continue
+            val (job, ja, setup) = pendingJudge.getAndSet(null) ?: run { Thread.sleep(10); null } ?: continue
+            val judge = setup.judge ?: continue
             val call = judge.unfinished(ja)
             if (!running) { logJev("unfinished", job.segmentId, job.revision, call, "stopped"); return }
+            reportJev(call, judge, setup)
             val p = call.noul
-            val unfinished = p?.let { it >= UNFINISHED_THRESHOLD }
+            // limited (now or already paused): finished, so the segmenter cuts at the pause instead of waiting
+            val unfinished = if (call.limit != null) false else p?.let { it >= UNFINISHED_THRESHOLD }
             if (unfinished != null) {
                 hints[job.segmentId to job.revision] = unfinished
                 hints.keys.removeIf { it.first < job.segmentId - 8 }
@@ -391,6 +407,13 @@ class Pipeline(
     private fun logJev(kind: String, seg: Long, rev: Int, c: JevCall, action: String) = log(mapOf(
         "ev" to "jev", "kind" to kind, "seg" to seg, "rev" to rev, "request" to c.request, "status" to c.status,
         "response" to c.response, "ms" to c.ms, "error" to c.error, "action" to action))
+
+    /** A Jev answer as the overlay sees it: an answer is a success only while no pause is on (a late old request). */
+    private fun reportJev(c: JevCall, judge: Judge, setup: Setup) {
+        if (c.error == "cancelled") return
+        val limit = c.limit ?: judge.paused()
+        onService(true, ServiceCall(c.answer != null && limit == null, c.status, c.error, limit, setup.version))
+    }
 
     /** Japanese of the last [MAX_PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */
     private val recentFinals = ArrayDeque<String>()
@@ -434,6 +457,9 @@ class Pipeline(
             // reused: everything but ms is that of the earlier call (rev reused_from)
             "reused" to (hit != null), "reused_from" to hit?.rev, "setup" to setup.version))
         if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r, setup.version)
+        // a reused result asked no service; a stop's cancelled call says nothing about it
+        if (hit == null && r != null && running && r.error != "cancelled")
+            onService(false, ServiceCall(r.usable, r.http ?: 0, r.error, null, setup.version))
         return r
     }
 
@@ -451,9 +477,10 @@ class Pipeline(
         if (zh.isEmpty()) return zh
         val job = j.q.job
         val c0 = clock()
-        val call = judge.mistranslation(j.ja, zh)
+        val call = judge.mistranslation(j.ja, zh) // limited: returns at once without asking, the translation is kept
         judgeMs(clock() - c0) // the Jev call only; a retranslation below is translation time
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
+        reportJev(call, judge, j.setup)
         val note = call.choice?.let { fixNote(it, j.setup.source, j.setup.target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")

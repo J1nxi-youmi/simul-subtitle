@@ -63,6 +63,18 @@ class CaptionService : Service() {
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
+    /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
+    private var mtState: ServiceCall? = null
+    private var jevState: ServiceCall? = null
+    /** Jev is used this session (one of its switches on) and which of them; set before the pipeline starts. */
+    @Volatile private var jevEndsOn = false
+    @Volatile private var jevCheckOn = false
+    /**
+     * Oldest setup version whose results count for each light: raised when a published setup uses another
+     * translator / Jev service, so a slow request to the old one does not light the new one. Main thread only.
+     */
+    private var mtFrom = 0
+    private var jevFrom = 0
     /** this session has a Jev judge: the segmenter asks it at sentence ends */
     @Volatile private var jevActive = false
     @Volatile private var logWarned = false
@@ -291,6 +303,8 @@ class CaptionService : Service() {
             val first = built.setup
             notice = built.notice
             inUse = built.byok
+            jevEndsOn = jevEnds; jevCheckOn = jevCheck
+            var mtId = firstSnap.mtService; var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
             // the settings in use are not the ones session_start logged: say so, like a change while running
             logUsed(built, firstSnap, change = firstSnap !== s0)
             val pl = Pipeline(
@@ -318,6 +332,14 @@ class CaptionService : Service() {
                 setupVersion = first.version,
                 log = { e -> sl?.write(e) },
                 drafts = { !prefs.finalOnly }, // "only finished sentences" saves the draft work, not just hides it
+                onService = { jev, c ->
+                    main.post {
+                        // a slow request to a service replaced since says nothing about the current one
+                        if (c.setup < if (jev) jevFrom else mtFrom) return@post
+                        if (jev) jevState = c else mtState = c
+                        refresh()
+                    }
+                },
             )
             // The segmenter's judged hold and its timings follow the sentence-end switch; while its key is missing the
             // pipeline answers "finished" at once, so a cut happens at the shorter Jev limit.
@@ -341,6 +363,15 @@ class CaptionService : Service() {
                     published = v
                     inUse = b.byok
                     notice = b.notice
+                    // another translator or Jev service: its light starts unknown (grey), never the old one's
+                    val m = s.mtService; val j = s.jevKey?.let { s.provider.name + "\n" + it }
+                    val mtNew = m != mtId; val jevNew = j != jevId
+                    mtId = m; jevId = j
+                    if (mtNew || jevNew) main.post {
+                        if (mtNew) { mtFrom = v; mtState = null }
+                        if (jevNew) { jevFrom = v; jevState = null }
+                        refresh()
+                    }
                     logUsed(b, s, change = true)
                     refresh()
                 } catch (t: Throwable) {
@@ -495,6 +526,10 @@ class CaptionService : Service() {
             if (status.isNotEmpty()) append(status)
             if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
+            // a failing service stays shown, also with timings off; one that works says nothing here
+            serviceWarning(mtState, jevState, jevEndsOn, jevCheckOn, monoMs(), System.currentTimeMillis())?.let {
+                append("${if (isNotEmpty()) "  ·  " else ""}$it")
+            }
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
             if (prefs.showStats && status.isEmpty()) shown.lastOrNull()?.let { c ->
                 val t = c.timing
@@ -509,6 +544,9 @@ class CaptionService : Service() {
         }
         if (lines.isEmpty() && status.isEmpty()) v.setLines(listOf(CaptionOverlayView.Line("正在听…", null, false)), diag.ifEmpty { null })
         else v.setLines(lines, diag.ifEmpty { null })
+        v.setServices(light(mtState, true), light(jevState, jevEndsOn || jevCheckOn),
+            mtState?.let { reason(it, false, monoMs(), System.currentTimeMillis()) },
+            if (jevEndsOn || jevCheckOn) jevState?.let { reason(it, true, monoMs(), System.currentTimeMillis()) } else "未开启")
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {
@@ -721,6 +759,8 @@ class CaptionService : Service() {
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
         private val mtModel = online?.id ?: if (mode == MtMode.BYOK) byokModel else localModel
+        /** the translation service in use, for the overlay's light (another one starts grey) */
+        val mtService get() = "$mtModel\n${online?.let { OnlineTranslator.URL } ?: byokUrl}\n${byokKey.orEmpty()}"
 
         fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
@@ -737,6 +777,67 @@ class CaptionService : Service() {
         private val setupKeys = setOf("scene", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
             "sourceLang", "targetLang", "onlineModel")
         const val EXTRA_CODE = "code"
+
+        fun light(c: ServiceCall?, on: Boolean): CaptionOverlayView.Light = when {
+            !on || c == null -> CaptionOverlayView.Light.GREY
+            c.limit != null -> CaptionOverlayView.Light.YELLOW
+            c.ok -> CaptionOverlayView.Light.GREEN
+            else -> CaptionOverlayView.Light.RED
+        }
+
+        /** Why a light is not green, short; null for a working one. */
+        fun reason(c: ServiceCall, jev: Boolean, nowMono: Long, nowWall: Long): String? {
+            c.limit?.let { l ->
+                val what = if (l.free) "免费额度已用完" else "请求受限"
+                val whenText = when {
+                    nowMono >= l.untilMs -> "下一句重试"
+                    l.resumeAt != null -> "预计 ${clockText(l.resumeAt, nowWall)} 可重试"
+                    else -> "稍后重试"
+                }
+                return "$what，$whenText"
+            }
+            if (c.ok) return null
+            return when {
+                c.http == 401 || c.http == 403 -> "key 无效或没有权限"
+                c.http == 429 -> "请求受限"
+                c.http >= 500 -> "服务出错（HTTP ${c.http}）"
+                c.http in 400..499 -> "请求被拒绝（HTTP ${c.http}）"
+                c.http == 200 -> if (jev) "回答无法使用" else "没有得到译文"
+                c.error?.startsWith("deadline") == true || c.error?.startsWith("no content") == true -> "响应超时"
+                c.error == "bad key" -> "key 格式不对"
+                c.error == "busy" -> "请求太多，没有发出"
+                c.http == 0 && c.error != null && c.error.contains('.') -> "网络连不上"
+                else -> "请求失败"
+            }
+        }
+
+        /** The time of [at] (wall ms) as the phone shows it, with the day when it is not today. */
+        private fun clockText(at: Long, nowWall: Long): String {
+            val z = java.time.ZoneId.systemDefault()
+            val t = java.time.Instant.ofEpochMilli(at).atZone(z)
+            val today = java.time.Instant.ofEpochMilli(nowWall).atZone(z).toLocalDate()
+            val hm = "%02d:%02d".format(t.hour, t.minute)
+            return when (t.toLocalDate()) { today -> hm; today.plusDays(1) -> "明天 $hm"; else -> "${t.monthValue}月${t.dayOfMonth}日 $hm" }
+        }
+
+        /**
+         * The always-shown line for a failing service, or null. It says what still works: sentence ends by pauses
+         * only when that switch is on, "翻译照常" only when the translator works.
+         */
+        fun serviceWarning(mt: ServiceCall?, jev: ServiceCall?, jevEnds: Boolean, jevCheck: Boolean, nowMono: Long, nowWall: Long): String? {
+            val mtBad = mt?.let { light(it, true) == CaptionOverlayView.Light.RED } == true
+            val jevBad = (jevEnds || jevCheck) && jev != null && light(jev, true).let { it == CaptionOverlayView.Light.RED || it == CaptionOverlayView.Light.YELLOW }
+            val parts = mutableListOf<String>()
+            if (mtBad) parts += "⚠ 翻译：${reason(mt!!, false, nowMono, nowWall)}"
+            if (jevBad) {
+                val effects = mutableListOf<String>()
+                if (jevEnds) effects += "断句改按停顿"
+                if (jevCheck) effects += "译文不检查"
+                if (!mtBad) effects.add(0, "翻译照常")
+                parts += "⚠ Jev ${reason(jev!!, true, nowMono, nowWall)} · ${effects.joinToString("，")}"
+            }
+            return parts.joinToString("  ·  ").ifEmpty { null }
+        }
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"
         // 8 Gen 3: 1×X4 + 5×A720 + 2×A520. Keep ASR + MT below the 6 big cores so they don't thrash.

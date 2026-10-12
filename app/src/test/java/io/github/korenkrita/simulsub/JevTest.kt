@@ -24,6 +24,8 @@ class JevTest {
     @Volatile private var delayMs = 0L
     @Volatile private var trickleMs = 0L
     @Volatile private var redirectTo: String? = null
+    /** extra header lines for the plain reply, e.g. "Retry-After: 30" */
+    @Volatile private var extraHeaders = ""
     /** streamed reply: (text, pause before it) pieces written one by one after the headers, no Content-Length */
     @Volatile private var pieces: List<Pair<String, Long>>? = null
 
@@ -53,7 +55,7 @@ class JevTest {
                         }
                         val (code, text) = reply(hits.get())
                         val b = text.toByteArray()
-                        out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                        out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\n${extraHeaders}Connection: close\r\n\r\n".toByteArray())
                         out.flush()
                         // trickle: one byte every trickleMs, each gap shorter than any read timeout
                         if (trickleMs > 0) for (x in b) { out.write(x.toInt()); out.flush(); Thread.sleep(trickleMs) }
@@ -582,5 +584,82 @@ class JevTest {
         val u = byokUser("今", listOf("note"), listOf("前1", "前2"))
         assertTrue(u.indexOf("前1") < u.indexOf("今")); assertTrue(u.indexOf("今") < u.indexOf("note"))
         assertEquals("【当前句】\n今", byokUser("今"))
+    }
+
+    // ---- 429: pause by service ----
+
+    private val zenLimit = """{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded. Please try again later."}}"""
+    private var now = 1_000_000L
+    private val wallNow = 1_760_000_000_000L
+    private fun timedJev(key: String = "sk-secret") = Jev(JevProvider.OFFICIAL, key, 2_000, url = "http://127.0.0.1:$port/v1/systemone",
+        clock = { now }, wall = { wallNow })
+
+    @Test
+    fun aLimitWithRetryAfterSecondsPausesBothQuestionsWithoutSending() {
+        reply = { 429 to zenLimit }; extraHeaders = "Retry-After: 46879\r\n"
+        val j = timedJev()
+        val first = j.unfinished("今日は")
+        assertEquals(429, first.status)
+        val l = first.limit!!
+        assertTrue(l.free)
+        assertEquals(now + 46_879_000, l.untilMs)
+        assertEquals(wallNow + 46_879_000, l.resumeAt)
+        // paused: nothing is sent, the call says so at once
+        val u = j.unfinished("今日は"); val m = j.mistranslation("今日は", "今天")
+        assertEquals(1, hits.get())
+        assertEquals("paused", u.error); assertEquals("paused", m.error)
+        assertNotNull(u.limit); assertNull(u.answer)
+        assertNotNull(j.paused())
+    }
+
+    @Test
+    fun aRetryAfterDateAndAMissingOneAreBothUsed() {
+        reply = { 429 to """{"error":"slow down"}""" }
+        val at = java.time.Instant.ofEpochMilli(wallNow + 90_000).atZone(java.time.ZoneOffset.UTC)
+        extraHeaders = "Retry-After: ${java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(at)}\r\n"
+        val l = timedJev().unfinished("a").limit!!
+        assertFalse(l.free)
+        assertEquals(now + 90_000, l.untilMs)
+        // no header (another key, so another pause): the short backoff, no promised time
+        extraHeaders = ""
+        val b = timedJev("sk-other").unfinished("a").limit!!
+        assertEquals(now + Jev.BACKOFF_S * 1000, b.untilMs)
+        assertNull(b.resumeAt)
+        assertNull(Jev.retrySeconds("soon", wallNow)); assertNull(Jev.retrySeconds("0", wallNow)); assertNull(Jev.retrySeconds("", wallNow))
+    }
+
+    @Test
+    fun thePauseOutlivesTheClientAndEndsOnTime() {
+        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.9}}}""" }
+        extraHeaders = "Retry-After: 30\r\n"
+        timedJev().unfinished("a")
+        // a setup rebuilt with the same service and key: a new client, still paused
+        assertEquals("paused", timedJev().unfinished("a").error)
+        // another key is not paused by it
+        assertNull(timedJev("sk-b").paused())
+        assertEquals(1, hits.get())
+        now += 30_000
+        val ok = timedJev().unfinished("a")
+        assertEquals(0.9, ok.noul!!, 1e-9)
+        assertNull(ok.limit)
+        assertEquals(2, hits.get())
+    }
+
+    @Test
+    fun aLateAnswerOfAnOlderRequestDoesNotEndOrShortenThePause() {
+        // first request: 600 s; the second, sent before that pause began, comes back later with 5 s / or with 200
+        val gate = java.util.concurrent.CountDownLatch(1)
+        reply = { 429 to zenLimit }
+        val slow = Jev(JevProvider.OFFICIAL, "sk-secret", 5_000, url = "http://127.0.0.1:$port/v1/systemone",
+            beforeSend = { gate.await() }, clock = { now }, wall = { wallNow })
+        val late = AtomicReference<JevCall>()
+        val t = Thread { late.set(slow.unfinished("old")) }.apply { start() }
+        Thread.sleep(100) // the slow one has passed the pause check and waits to be sent
+        extraHeaders = "Retry-After: 600\r\n"
+        val j = timedJev(); j.unfinished("a")
+        extraHeaders = "Retry-After: 5\r\n"
+        gate.countDown(); t.join(5_000)
+        assertEquals(429, late.get().status)
+        assertEquals(1_000_000L + 600_000, j.paused()!!.untilMs)
     }
 }

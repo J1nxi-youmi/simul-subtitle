@@ -672,6 +672,72 @@ class PipelineTest {
         assertTrue(judge.cancelled.get())
     }
 
+    /** A judge the service limited: every question returns at once without asking, like [Jev] while paused. */
+    private class PausedJudge(val limited: Boolean = true) : Judge {
+        val asked = Collections.synchronizedList(ArrayList<String>())
+        val limit = JevLimit(Long.MAX_VALUE, null, free = true)
+        private fun call() = JevCall("{req}", 0, null, 0, "paused", null, limit)
+        override fun unfinished(text: String): JevCall { asked.add("u:$text"); return call() }
+        override fun mistranslation(ja: String, zh: String): JevCall { asked.add("m:$ja|$zh"); return call() }
+        override fun cancel() {}
+        override fun paused(): JevLimit? = if (limited) limit else null
+    }
+
+    @Test
+    fun aPausedJudgeIsNotAskedAndTheSegmenterCutsAtOnce() {
+        val judge = PausedJudge()
+        val services = Collections.synchronizedList(ArrayList<Pair<Boolean, ServiceCall>>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, onService = { j, c -> services.add(j to c) })
+        p.start()
+        // a new utterance is cut by pauses only, as without Jev
+        assertFalse(p.judged(1))
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        // "finished" at once, not null until the wait runs out
+        assertEquals(false, p.holdHint(1, 2))
+        p.stop(); p.awaitStopped()
+        assertTrue(judge.asked.isEmpty())
+    }
+
+    @Test
+    fun aLimitAnswerFinishesTheCandidateAndKeepsTheTranslation() {
+        // the 429 itself comes back from the question: finished, and the check keeps the first translation
+        val judge = PausedJudge(limited = false)
+        val services = Collections.synchronizedList(ArrayList<Pair<Boolean, ServiceCall>>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, onService = { j, c -> services.add(j to c) })
+        p.start()
+        p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        val deadline = monoMs() + 2000
+        while (p.holdHint(1, 2) == null && monoMs() < deadline) Thread.sleep(5)
+        assertEquals(false, p.holdHint(1, 2))
+        p.stop(); p.awaitStopped()
+        val jev = services.filter { it.first }.map { it.second }
+        assertTrue(jev.isNotEmpty())
+        assertTrue(jev.all { !it.ok && it.limit != null })
+
+        val mt = FakeMt(1)
+        val out = runFinal(PausedJudge(limited = false), mt = mt)
+        assertEquals(1, mt.calls.size)
+        assertEquals("zh(ja10)", out.last { it.isFinal }.zh)
+    }
+
+    @Test
+    fun aReusedTranslationIsNotReportedAsARequest() {
+        val services = Collections.synchronizedList(ArrayList<Pair<Boolean, ServiceCall>>())
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val mt = FakeMt(1)
+        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() }, onService = { j, c -> services.add(j to c) })
+        p.start()
+        p.submit(job(1, 1, false, 10)); Thread.sleep(100)
+        p.submit(job(1, 2, true, 10)) // same text: the draft's translation is reused
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(1, mt.calls.size)
+        assertEquals(1, services.size)
+        assertFalse(services[0].first); assertTrue(services[0].second.ok)
+    }
+
     @Test
     fun belowThresholdAnswersFinishAndFailedCallsGiveNoHint() {
         for ((pr, want) in listOf(0.3 to false, null to null)) {

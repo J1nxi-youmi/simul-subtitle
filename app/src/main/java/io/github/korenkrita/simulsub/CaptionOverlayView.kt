@@ -94,6 +94,30 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     fun setShown(ja: Boolean, stats: Boolean) {
         showSwitch(jaBtn, ja, "显示原文"); showSwitch(statsBtn, stats, "显示识别和翻译用时")
     }
+    /** Grey = off or not asked yet, green = the last request worked, yellow = limited (paused), red = failed. */
+    enum class Light(val color: Int, val word: String) {
+        GREY(0xFF8B8B94.toInt(), "未使用"), GREEN(0xFF81C995.toInt(), "正常"),
+        YELLOW(0xFFFDD663.toInt(), "受限"), RED(0xFFF28B82.toInt(), "出错"),
+    }
+    private fun lightView() = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); setTextColor(0xFFDADCE0.toInt())
+        gravity = Gravity.CENTER_VERTICAL; compoundDrawablePadding = dp(4f).toInt()
+        setPadding(dp(8f).toInt(), 0, dp(8f).toInt(), 0)
+        maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+    private val mtLight = lightView()
+    private val jevLight = lightView()
+    private fun showLight(t: TextView, name: String, l: Light, why: String?) {
+        val dot = GradientDrawable().apply { shape = GradientDrawable.OVAL; setSize(dp(7f).toInt(), dp(7f).toInt()); setColor(l.color) }
+        t.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null)
+        // a word says it too (a light is never told by its colour alone); the full reason is in the warning line
+        t.text = if (l == Light.GREEN || l == Light.GREY) name else "$name ${l.word}"
+        t.contentDescription = "$name ${l.word}${why?.let { "，$it" } ?: ""}"
+    }
+    /** The toolbar's service row: the translator and Jev, each with a light and, when not fine, why. */
+    fun setServices(mt: Light, jev: Light, mtWhy: String?, jevWhy: String?) {
+        showLight(mtLight, "翻译", mt, mtWhy); showLight(jevLight, "Jev", jev, jevWhy)
+    }
     /** Toolbar opened/closed: the host widens the window while it is open so the toolbar is never clipped. */
     var onToolbarShown: (Boolean) -> Unit = {}
 
@@ -284,6 +308,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
      * Two rows, both as wide as the wider one, every cell sharing that width (no gaps):
      *   字号  A−  A+   │  背景  −  +
      *   边听边出 │ ● 原文 │ ● 用时 │ 🔒 │ ✕
+     *   ● 翻译 │ ● Jev 受限     (service lights, read only; the reason is in the warning line)
      * The two switches carry a dot that is lit when on, so they read as switches. As small as a finger allows.
      */
     private fun buildToolbar() {
@@ -345,6 +370,13 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             addView(btn(R.drawable.ic_lock, "锁定位置和大小") { toggleLock() })
             addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF28B82.toInt()) })
         }, full)
+        // read only: each half shares the width; short words only, so the row never widens the toolbar
+        toolbar.addView(row().apply {
+            addView(mtLight, LayoutParams(0, dp(28f).toInt(), 1f))
+            addView(sep())
+            addView(jevLight, LayoutParams(0, dp(28f).toInt(), 1f))
+        }, full)
+        setServices(Light.GREY, Light.GREY, null, null)
     }
 
     private fun setSize(v: Float) { applyStyle(v.coerceIn(MIN_SP, MAX_SP), bgAlpha); onStyleChanged() }

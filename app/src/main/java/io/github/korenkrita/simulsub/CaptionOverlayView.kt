@@ -36,7 +36,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private val text = TextView(ctx)
     private val stats = TextView(ctx)
     /** resize marks, one per corner: top-left, top-right, bottom-right, bottom-left */
-    private val corners = List(4) { FrameLayout(ctx) }
+    private val corners = List(4) { android.widget.ImageView(ctx) }
     private val unlockBtn = ImageButton(ctx)
     private val lockBadge = TextView(ctx)
     private val toolbar = LinearLayout(ctx)
@@ -140,17 +140,16 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         card.background = bg
         card.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
 
-        // resize marks: a faint "›" in each corner, pointing out of the card; the grab area is larger than the mark
+        // resize marks: a faint "›" in each corner, pointing out of the card, in the caption colour. Only drawn;
+        // the card's touch listener finds the corner (see installGestures).
         val markRot = floatArrayOf(225f, 315f, 45f, 135f)
         val markGrav = intArrayOf(Gravity.TOP or Gravity.START, Gravity.TOP or Gravity.END, Gravity.BOTTOM or Gravity.END, Gravity.BOTTOM or Gravity.START)
         corners.forEachIndexed { k, c ->
             c.visibility = GONE
-            c.addView(android.widget.ImageView(ctx).apply {
-                setImageResource(R.drawable.ic_chevron_right); rotation = markRot[k]; alpha = 0.55f
-            }, FrameLayout.LayoutParams(dp(14f).toInt(), dp(14f).toInt(), markGrav[k]).apply {
+            c.setImageResource(R.drawable.ic_chevron_right); c.rotation = markRot[k]; c.alpha = 0.5f
+            card.addView(c, FrameLayout.LayoutParams(dp(14f).toInt(), dp(14f).toInt(), markGrav[k]).apply {
                 val m = dp(3f).toInt(); setMargins(m, m, m, m)
             })
-            card.addView(c, FrameLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt(), markGrav[k]))
         }
         lockBadge.apply {
             text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); visibility = GONE
@@ -189,6 +188,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         else text.setShadowLayer(0f, 0f, 0f, 0)
         // magpie's hairline edge on a dark card, so it stands off a dark video; none once the card is nearly clear
         bg.setStroke(dp(0.5f).toInt().coerceAtLeast(1), if (colors.shadow && alpha >= 0.2f) 0x1AFFFFFF else 0)
+        corners.forEach { it.setColorFilter(colors.zh) }
     }
 
     /** Text / background colours of the captions; the background keeps the user's opacity. */
@@ -320,41 +320,35 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
     private fun installGestures() {
         val slop = dp(8f)
+        val grab = dp(28f)
         setLocked(false) // shows the corner marks
-        var downX = 0f; var downY = 0f; var lastX = 0f; var lastY = 0f; var dragging = false
+        var downX = 0f; var downY = 0f; var lastX = 0f; var lastY = 0f; var moved = false
+        // the corner under the finger at ACTION_DOWN (-1: none). One listener on the card picks it, so the four grab
+        // areas never overlap: on a one-line card each corner gets at most half the height.
+        var corner = -1
         card.setOnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; lastX = downX; lastY = downY; dragging = false }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!dragging && !locked && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) dragging = true
-                    if (dragging) {
-                        onMove((e.rawX - lastX).toInt(), (e.rawY - lastY).toInt())
-                        lastX = e.rawX; lastY = e.rawY
-                    }
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; lastX = downX; lastY = downY; moved = false
+                    val gx = minOf(grab, card.width / 2f); val gy = minOf(grab, card.height / 2f)
+                    val l = e.x < gx; val r = e.x > card.width - gx; val t = e.y < gy; val b = e.y > card.height - gy
+                    corner = if (locked) -1 else when { t && l -> 0; t && r -> 1; b && r -> 2; b && l -> 3; else -> -1 }
                 }
-                MotionEvent.ACTION_UP -> if (dragging) onMoveEnd() else tap()
-            }
-            true
-        }
-        corners.forEachIndexed { k, c ->
-            val left = k == 0 || k == 3; val top = k <= 1
-            var hx = 0f; var hy = 0f; var cx = 0f; var cy = 0f; var resizing = false
-            c.setOnTouchListener { _, e ->
-                when (e.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> { hx = e.rawX; hy = e.rawY; cx = hx; cy = hy; resizing = false }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (!resizing && (abs(e.rawX - cx) > slop || abs(e.rawY - cy) > slop)) resizing = true
-                        if (resizing) {
-                            // whole pixels only: keep the fraction for the next move, or slow drags would not move at all
-                            val dx = (e.rawX - hx).toInt(); val dy = (e.rawY - hy).toInt()
-                            if (dx != 0 || dy != 0) { onResize(dx, dy, left, top); hx += dx; hy += dy }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) moved = true
+                    if (moved && !locked) {
+                        // whole pixels only: keep the fraction for the next move, or slow drags would not move at all
+                        val dx = (e.rawX - lastX).toInt(); val dy = (e.rawY - lastY).toInt()
+                        if (dx != 0 || dy != 0) {
+                            if (corner >= 0) onResize(dx, dy, corner == 0 || corner == 3, corner <= 1) else onMove(dx, dy)
+                            lastX += dx; lastY += dy
                         }
                     }
-                    MotionEvent.ACTION_UP -> if (resizing) onMoveEnd() else tap()
-                    MotionEvent.ACTION_CANCEL -> if (resizing) onMoveEnd()
                 }
-                true
+                MotionEvent.ACTION_UP -> if (!moved) tap() else if (!locked) onMoveEnd()
+                MotionEvent.ACTION_CANCEL -> if (moved && !locked) onMoveEnd()
             }
+            true
         }
     }
 

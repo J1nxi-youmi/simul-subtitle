@@ -118,6 +118,7 @@ class MainActivity : Activity() {
         updater = AppUpdater(this)
         // a rotation or theme change is not an entry into the app (unless it cancelled a check that was running)
         configRecreated = savedInstanceState?.getBoolean("configChange") == true
+        manualInterrupted = savedInstanceState?.getBoolean("manualCheck") == true
     }
 
     private var inSettings = false
@@ -168,16 +169,20 @@ class MainActivity : Activity() {
         // recreated right away for a rotation / theme (no check then), unless that stops a check under way; a state
         // saved for a process the system may end is not this, and the restored app checks again
         outState.putBoolean("configChange", isChangingConfigurations && !updater.checking)
+        // a manual check the recreation stops is redone as manual (also with automatic checks off)
+        outState.putBoolean("manualCheck", updater.checkingManual)
     }
 
     /** this activity only replaces one a configuration change ended; its first start is not an entry into the app */
     private var configRecreated = false
+    /** ... and that change stopped a manual check */
+    private var manualInterrupted = false
 
     override fun onStart() {
         super.onStart()
         // each entry into the app (a launch, or coming back from the background) checks for an update once
-        updater.start(configRecreated)
-        configRecreated = false
+        updater.start(configRecreated, manualInterrupted)
+        configRecreated = false; manualInterrupted = false
     }
 
     @Deprecated("Deprecated in Java")

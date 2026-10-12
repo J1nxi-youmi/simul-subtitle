@@ -121,12 +121,23 @@ internal class AppUpdater(private val activity: Activity) {
         checkButton.setOnClickListener { check(manual = true) }
     }
 
-    /** an automatic or manual check is running (a recreation cancels it: the new activity checks again) */
-    val checking get() = job?.isActive == true
+    /** the running update check, apart from a download / install (both use [job]); [checkManual]: its kind */
+    private var checkJob: Job? = null
+    private var checkManual = false
+    /** an update check is running (a recreation cancels it: the new activity checks again) */
+    val checking get() = checkJob?.isActive == true
+    /** ... and it is a manual one, which the new activity redoes as manual (skip / remind-later / off ignored) */
+    val checkingManual get() = checking && checkManual
 
-    /** Each entry into the app checks once ([configRecreated]: this start only follows a rotation or theme change). */
-    fun start(configRecreated: Boolean) {
-        val pending = prefs.contains("pendingInstall") || prefs.contains("pendingDownload") || prefs.contains("pendingOffer")
+    /**
+     * Each entry into the app checks once ([configRecreated]: this start only follows a rotation or theme change).
+     * [manualInterrupted]: a recreation cancelled a manual check; it is redone as one, whatever the settings.
+     */
+    fun start(configRecreated: Boolean, manualInterrupted: Boolean) {
+        if (manualInterrupted) { check(manual = true); return }
+        // something to show or answer first (a result kept for the foreground, an open dialog): no check over it
+        val pending = prefs.contains("pendingInstall") || prefs.contains("pendingDownload") || prefs.contains("pendingOffer") ||
+            deferred != null || dialog?.isShowing == true
         if (UpdateRelease.checksOnEntry(auto, pending, configRecreated)) check(manual = false)
     }
 
@@ -145,11 +156,12 @@ internal class AppUpdater(private val activity: Activity) {
         }
         val interrupted = prefs.getString("pendingDownload", null)
         if (interrupted != null && !prefs.contains("pendingInstall")) {
-            prefs.edit().remove("pendingDownload").apply()
             val release = runCatching { UpdateRelease.parse(interrupted) }.getOrNull()
             if (release != null && release.isNewer(BuildConfig.VERSION_CODE)) {
-                error("刚才的下载中断了", "请点「重试」重新下载，并保持这个页面打开。") { download(release) }
-            }
+                // kept until answered: a rotation or the process ending while this shows brings it back
+                error("刚才的下载中断了", "请点「重试」重新下载，并保持这个页面打开。",
+                    later = { prefs.edit().remove("pendingDownload").apply() }) { download(release) }
+            } else prefs.edit().remove("pendingDownload").apply()
             return
         }
         val pending = prefs.getString("pendingInstall", null) ?: return
@@ -197,7 +209,10 @@ internal class AppUpdater(private val activity: Activity) {
                     // Save before deferring UI: a result received in the background must also survive recreation.
                     prefs.edit().putString("pendingOffer", release.json()).putBoolean("pendingOfferManual", manual).apply()
                     foreground {
-                        if (shouldOffer(release, manual)) offer(release)
+                        // an automatic result does not replace a dialog the user is answering; it stays saved for the
+                        // next return to the page
+                        if (!manual && dialog?.isShowing == true) Unit
+                        else if (shouldOffer(release, manual)) offer(release)
                         else prefs.edit().remove("pendingOffer").apply()
                     }
                 } else if (manual) foreground {
@@ -213,6 +228,7 @@ internal class AppUpdater(private val activity: Activity) {
                 checkButton.text = "检查更新"
             }
         }
+        checkJob = job; checkManual = manual
     }
 
     private suspend fun fetchRelease(): UpdateRelease {
@@ -261,7 +277,9 @@ internal class AppUpdater(private val activity: Activity) {
     }
 
     private fun download(release: UpdateRelease) {
-        if (job?.isActive == true) return
+        // the user's download wins over an automatic check still running (its result would only offer this again)
+        if (checking && !checkManual) job?.cancel()
+        else if (job?.isActive == true) return
         prefs.edit().remove("pendingInstall").putString("pendingDownload", release.json()).apply()
         val box = column()
         val label = text("正在准备下载…\n请保持这个页面打开。")
@@ -399,9 +417,10 @@ internal class AppUpdater(private val activity: Activity) {
         } finally { call = null }
     }
 
-    private fun error(title: String, message: String, retry: () -> Unit) = show(
+    private fun error(title: String, message: String, later: () -> Unit = {}, retry: () -> Unit) = show(
         MaterialAlertDialogBuilder(activity).setTitle(title).setMessage(message)
-            .setNegativeButton("稍后再说", null).setPositiveButton("重试") { _, _ -> retry() }.create())
+            .setNegativeButton("稍后再说") { _, _ -> later() }.setPositiveButton("重试") { _, _ -> retry() }
+            .setOnCancelListener { later() }.create())
 
     private fun show(alert: AlertDialog) {
         dialog?.dismiss()

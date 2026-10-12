@@ -269,6 +269,10 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             background = GradientDrawable().apply { cornerRadius = dp(10f); setColor(0xF526262B.toInt()); setStroke(dp(0.5f).toInt().coerceAtLeast(1), 0x1AFFFFFF) }
             setPadding(dp(4f).toInt(), dp(2f).toInt(), dp(4f).toInt(), dp(2f).toInt())
             elevation = dp(6f)
+            // the hairline between the rows: a divider, not a MATCH_PARENT child, which would stretch the toolbar
+            // to the whole window (as wide as the caption card) instead of its buttons
+            dividerDrawable = GradientDrawable().apply { setColor(0x1AFFFFFF); setSize(0, dp(0.5f).toInt().coerceAtLeast(1)) }
+            showDividers = SHOW_DIVIDER_MIDDLE
             visibility = GONE
         }
         val size = dp(36f).toInt() // smallest comfortable tap target
@@ -300,7 +304,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             addView(tag("背景"))
             addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
         })
-        toolbar.addView(View(context).apply { setBackgroundColor(0x1AFFFFFF) }, LayoutParams(LayoutParams.MATCH_PARENT, dp(0.5f).toInt().coerceAtLeast(1)))
         toolbar.addView(row().apply {
             addView(modeBtn)
             addView(sep())

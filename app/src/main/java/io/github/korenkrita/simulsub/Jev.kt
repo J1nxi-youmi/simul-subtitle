@@ -63,6 +63,11 @@ interface Judge {
     fun cancel()
     /** The service's latest installed limit, also one that has ended (never a 429 still being installed). */
     fun lastLimit(): JevLimit? = null
+    /**
+     * [onChange] runs (on a network thread, no lock held) whenever a 429 of this judge's service was installed, by any
+     * client of that service: what [paused] and [lastLimit] say changed. Not a request result. Close to stop.
+     */
+    fun watch(onChange: () -> Unit): AutoCloseable = AutoCloseable {}
     /** The service limited requests and the pause has not ended: a question now is not sent. */
     fun paused(): JevLimit? = null
     /**
@@ -88,11 +93,6 @@ class Jev(
     private val target: Lang = Lang.ZH,
     /** monotonic ms for pauses; the app passes one that keeps counting in deep sleep (elapsedRealtime) */
     private val clock: () -> Long = ::monoMs,
-    /**
-     * A 429 of this service was installed (by this client's request): what [paused] and [lastLimit] say changed. Not a
-     * request result; called on an OkHttp thread, no lock held.
-     */
-    private val onChange: () -> Unit = {},
     private val wall: () -> Long = System::currentTimeMillis,
     dns: okhttp3.Dns = okhttp3.Dns.SYSTEM,
 ) : Judge {
@@ -111,6 +111,10 @@ class Jev(
         svc.limit?.takeIf { clock() < it.untilMs } ?: if (svc.installing > 0) JevLimit.INSTALLING else null
     }
     override fun lastLimit(): JevLimit? = synchronized(svc) { svc.limit }
+    override fun watch(onChange: () -> Unit): AutoCloseable {
+        synchronized(svc) { svc.watchers += onChange }
+        return AutoCloseable { synchronized(svc) { svc.watchers -= onChange } }
+    }
     override fun limitedAfter(gen: Int): Boolean = synchronized(svc) { gen >= 0 && svc.gen > gen }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {
@@ -153,7 +157,8 @@ class Jev(
                     svc.installing--
                 }
             }
-            onChange() // after the monitor: what the service's pause looks like changed
+            // after the monitor: what the service's pause looks like changed, for every client watching it
+            synchronized(svc) { svc.watchers.toList() }.forEach { it() }
         }
         // a deadline that came while the 429 was being installed (its status not yet published): still that 429
         val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit).let {
@@ -191,7 +196,11 @@ class Jev(
          * One Jev service with its credentials: its pause, its limit generation, and how many 429s are being installed
          * (nothing is let out meanwhile). Guarded by itself.
          */
-        private class Service { var gen = 0; var limit: JevLimit? = null; var installing = 0 }
+        private class Service {
+            var gen = 0; var limit: JevLimit? = null; var installing = 0
+            /** told after a 429 was installed (any client's request), no lock held; see [Judge.watch] */
+            val watchers = LinkedHashSet<() -> Unit>()
+        }
         /** by service and credentials, for the whole process (a new session still waits) */
         private val SERVICES = java.util.concurrent.ConcurrentHashMap<String, Service>()
         /** a 429 without a usable Retry-After: tried again after this */
@@ -220,9 +229,10 @@ class Jev(
                     .toInstant().toEpochMilli()
             }
             // RFC 850's two-digit year: the century whose date is no more than 50 years ahead, the weekday checked after
-            Regex("""(?i)([a-z]+), (\d{2})-([a-z]{3})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT""").matchEntire(v)?.let { m ->
+            // case-sensitive like the other forms (RFC 9110): "Tuesday", "Oct", "GMT"
+            Regex("""([A-Z][a-z]+), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT""").matchEntire(v)?.let { m ->
                 val (wd, d, mon, yy, time) = m.destructured
-                val fmt = java.time.format.DateTimeFormatterBuilder().parseCaseInsensitive()
+                val fmt = java.time.format.DateTimeFormatterBuilder()
                     .appendPattern("dd-MMM-uuuu HH:mm:ss").toFormatter(us).withResolverStyle(strict)
                 val limit = java.time.Instant.ofEpochMilli(nowWall).atZone(utc).plusYears(50)
                 val century = limit.year / 100 * 100
@@ -232,7 +242,7 @@ class Jev(
                     }
                 }.getOrNull() ?: return null
                 val day = t.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, us)
-                return if (day.equals(wd, ignoreCase = true)) t.toInstant(utc).toEpochMilli() else null
+                return if (day == wd) t.toInstant(utc).toEpochMilli() else null
             }
             // asctime: a one-digit day is padded with a space ("Oct  3")
             if (!Regex("""[A-Z][a-z]{2} [A-Z][a-z]{2} ( \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}""").matches(v)) return null

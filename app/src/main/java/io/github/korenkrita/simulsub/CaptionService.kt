@@ -63,12 +63,29 @@ class CaptionService : Service() {
     private val lastUpdateMs = HashMap<Pair<Long, Int>, Long>()
     @Volatile private var backlog = 0
     @Volatile private var overloaded = false
-    /** the Jev client of the setup published last; its pause shows without a new request. Main thread only. */
+    /**
+     * The Jev client of the setup published last; its pause shows without a new request, and a 429 of its service
+     * installed by any client (also one of an earlier session, or after the last result) refreshes. Main thread only.
+     */
     private var activeJudge: Judge? = null
+        set(j) {
+            if (j === field) return
+            jevWatch?.close()
+            jevWatch = j?.watch { refresh() }
+            field = j
+        }
+    private var jevWatch: AutoCloseable? = null
     /** Jev's light state now ([jevShown]); main thread only. */
     private fun jevNow(): ServiceCall? = jevShown(jevState, activeJudge?.paused(), activeJudge?.lastLimit(), jevFrom)
     /** shows a pause that just ended as such; scheduled by [refresh] for the pause on screen */
     private val pauseOver: Runnable = Runnable { refresh() }
+    /**
+     * The screen came on: [pauseOver]'s delay does not count deep sleep, so a pause that ended while the phone slept
+     * is shown as over now.
+     */
+    private val screenOn = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) { refresh() }
+    }
     /** the translator in use: BYOK by the service its probe accepted, others by model */
     private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
@@ -98,6 +115,7 @@ class CaptionService : Service() {
         if (projection != null) return START_NOT_STICKY
 
         startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        registerReceiver(screenOn, android.content.IntentFilter(Intent.ACTION_SCREEN_ON))
         @Suppress("DEPRECATION")
         val data: Intent? = intent?.getParcelableExtra(EXTRA_DATA)
         val code = intent?.getIntExtra(EXTRA_CODE, 0) ?: 0
@@ -284,9 +302,7 @@ class CaptionService : Service() {
                 // one Jev client for both features; no key = both paused until one is entered
                 // pauses count deep sleep: one kept across sessions ends at the time the service named
                 val judge = s.jevKey?.let {
-                    // a 429 installed after its request's results were shown (or in silence) shows without a new event
-                    Jev(s.provider, it, source = s.source, target = s.target, clock = android.os.SystemClock::elapsedRealtime,
-                        onChange = { refresh() })
+                    Jev(s.provider, it, source = s.source, target = s.target, clock = android.os.SystemClock::elapsedRealtime)
                 }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
                 return Built(Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version),
@@ -736,6 +752,8 @@ class CaptionService : Service() {
         // notices `stopping`, finishes, waits for the pipeline workers and releases everything itself.
         stopping = true
         main.removeCallbacks(pauseOver)
+        activeJudge = null // stops watching its service
+        runCatching { unregisterReceiver(screenOn) }
         running = false
         // Only flags + an atomic store into a still-alive translator (the session thread detaches it under the
         // same lock before freeing). The session thread notices `stopping` within ~10 ms (non-blocking reads).

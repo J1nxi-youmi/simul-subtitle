@@ -655,6 +655,10 @@ class JevTest {
         // impossible dates are no date (the short backoff), not the nearest real one
         for (d in listOf("Sun, 31 Feb 2027 19:00:00 GMT", "Sunday, 31-Feb-27 19:00:00 GMT", "Sun Feb 31 19:00:00 2027", "Sun Feb 29 19:00:00 2027"))
             assertNull(d, Jev.retrySeconds(d, base))
+        // HTTP-dates are case-sensitive: other spellings are no date
+        for (d in listOf("tuesday, 13-oct-26 19:00:00 gmt", "TUESDAY, 13-OCT-26 19:00:00 GMT", "Tuesday, 13-oct-26 19:00:00 GMT",
+                "tue, 13 oct 2026 19:00:00 GMT", "Tue oct 13 19:00:00 2026"))
+            assertNull(d, Jev.retrySeconds(d, base))
         // not the HTTP syntax (no seconds, no weekday, another zone, a sign, a one-digit IMF day): the short backoff
         for (d in listOf("Tue, 13 Oct 2026 19:00 GMT", "13 Oct 2026 19:00:00 GMT", "Tue, 13 Oct 2026 19:00:00 +0100", "+259200", "-5",
                 "Tue, 3 Nov 2026 19:00:00 GMT"))
@@ -796,13 +800,16 @@ class JevTest {
         extraHeaders = "Retry-After: ${header(wallNow)}\r\n"
         val receivedAt = now; val receivedWall = wallNow
         val changes = java.util.concurrent.atomic.AtomicInteger()
-        val j = Jev(JevProvider.ZEN, "sk-${header(0).length}-$receivedAt", 600, url = "http://127.0.0.1:$port/v1/systemone",
+        val key = "sk-${header(0).length}-$receivedAt"
+        val j = Jev(JevProvider.ZEN, key, 600, url = "http://127.0.0.1:$port/v1/systemone",
             clock = { now }, wall = {
                 if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
                     inCallback.countDown(); release.await()
                 }
                 wallNow
-            }, onChange = { changes.incrementAndGet() })
+            })
+        val oldWatch = java.util.concurrent.atomic.AtomicInteger()
+        val stopOld = j.watch { oldWatch.incrementAndGet() }
         val first = AtomicReference<JevCall>()
         val t0 = monoMs()
         val t1 = Thread { first.set(j.unfinished("a")) }.apply { start() }
@@ -820,12 +827,18 @@ class JevTest {
             assertEquals(429, first.get().status)
             assertEquals(1, hits.get())
             assertEquals(0, changes.get())
+            // the session stops, a new one (its own client of the same service) watches before the 429 is installed
+            stopOld.close()
+            val next = Jev(JevProvider.ZEN, key, 600, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = { wallNow })
+            next.watch { changes.incrementAndGet() }
+            assertEquals(JevLimit.INSTALLING, next.paused())
             now += 2_000; wallNow += 2_000
         } finally { release.countDown(); t1.join(3_000) }
         val deadline = monoMs() + 2_000
         while (changes.get() == 0 && monoMs() < deadline) Thread.sleep(5)
-        // the installation says so, once, after its monitor (no request result)
+        // the installation tells the new client's watcher, once, after its monitor (no request result); not the old one
         assertEquals(1, changes.get())
+        assertEquals(0, oldWatch.get())
         assertEquals(1, hits.get())
         check(j, receivedAt, receivedWall)
         // one generation: a request let out after the pause is current

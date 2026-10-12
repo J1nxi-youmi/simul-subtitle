@@ -71,6 +71,10 @@ class Prefs(ctx: Context) {
     /** Source to continue [path] from after its download was rejected (-1 none): survives DownloadManager cleanup. */
     fun pendingSource(path: String) = sp.getInt("dlNext:$path", -1)
     fun setPendingSource(path: String, source: Int) = sp.edit().putInt("dlNext:$path", source).apply()
+    /** The tier ([ModelSpec.tiers]) this download batch chose, -1 none yet: a file switching source stays on it. */
+    var downloadTier: Int
+        get() = sp.getInt("dlTier", -1)
+        set(v) = sp.edit().putInt("dlTier", v).apply()
     /** The user cancelled the model download: no automatic switch to another source until 下载 / 重试. */
     var downloadCancelled: Boolean
         get() = sp.getBoolean("dlCancelled", false)

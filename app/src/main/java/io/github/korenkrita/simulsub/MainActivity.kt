@@ -300,7 +300,8 @@ class MainActivity : Activity() {
                 secondary.visibility = View.GONE
             }
             st.running -> {
-                status(R.color.brand, "正在下载模型", "${gb(st.doneBytes)} / ${gb(st.totalBytes)} · 可以切到后台，系统会继续下载。")
+                if (st.choosing) status(R.color.brand, "正在选择下载线路…", "同时试官方、GitHub 和国内镜像，最多约 15 秒。")
+                else status(R.color.brand, "正在下载模型", "${gb(st.doneBytes)} / ${gb(st.totalBytes)} · 可以切到后台，系统会继续下载。")
                 primary.text = "下载中 ${st.doneBytes * 100 / st.totalBytes}%"; busy()
                 secondary.visibility = View.VISIBLE; secondary.text = "取消下载"
                 secondary.setOnClickListener { dl.cancel(); render() }

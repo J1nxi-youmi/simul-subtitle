@@ -21,14 +21,15 @@ APK 在 `app/build/outputs/apk/release/app-release.apk`（约 13 MB，原生库�
 
 ## 模型
 
-App 里点「下载模型」时，由系统 DownloadManager 在后台下载，每个文件按顺序尝试多个地址：
+App 里点「下载模型」时，由系统 DownloadManager 在后台下载。每个文件有三层地址，内容完全相同：
 
-| 文件 | 下载地址（依次尝试） |
-|---|---|
-| 语音识别（4 个文件）、静音检测 | 官方来源（固定版本的 Hugging Face 仓库 / sherpa-onnx 的 GitHub Release）→ 本项目 Release [`models-v1`](https://github.com/KorenKrita/simul-subtitle/releases/tag/models-v1) 的备份 → 通过 GitHub 下载代理（gh-proxy.com、gh.llkk.cc）访问同一份备份 |
-| 手机上翻译的模型 | Hugging Face 官方仓库 → 魔搭 ModelScope 上的官方仓库 `IndexTeam/Index-Translate-2B-GGUF` |
+| 文件 | ① 官方 | ② 本项目 GitHub | ③ 国内镜像 |
+|---|---|---|---|
+| 语音识别（4 个文件）、静音检测 | 固定版本的 Hugging Face 仓库 / sherpa-onnx 的 GitHub Release | 本项目 Release [`models-v1`](https://github.com/KorenKrita/simul-subtitle/releases/tag/models-v1) 的备份 | GitHub 下载代理 gh-proxy.com、gh.llkk.cc 访问同一份备份 |
+| 手机上翻译的模型 | Hugging Face 官方仓库 | `models-v1` 的备份（随附 Apache-2.0 许可证） | 魔搭 ModelScope 上的官方仓库 `IndexTeam/Index-Translate-2B-GGUF`，再到两个 GitHub 代理 |
 
-- 一个地址下载失败、60 秒几乎没有进展（已开始下载后为 3 分钟），或者下回来的文件校验不通过，就换下一个地址；所有地址都失败才提示错误，点「重试」从官方来源重新开始。换地址只在 App 打开着时进行：切到后台后，系统会继续下载当前地址，回到 App 时再判断要不要换。
+- **先选线路**：开始下载时，三层的所有地址同时下载最小的那个文件（识别用的 tokens.txt，约 26 KB，核对大小和 SHA-256 后丢弃）。官方一层能用就走官方；官方不通就用能用的最低一层，下层能不能用，一知道就决定，不等上层超时。最多等 15 秒；都不成功就按完整顺序从官方开始（例如还没联网）。之后这一批的所有文件都从选中的那一层开始下，上面的层不再试；同一层里，检查时没连上的代理排到后面。点「下载」或「重试」会重新选。
+- 一个地址下载失败、15 秒一个字节都没收到，或者下回来的文件校验不通过，就换路线上的下一个地址；所有地址都失败才提示错误。**已经开始收数据的下载，中途卡住不换地址**，等网络恢复后由系统接着下（换地址要从头下）。换地址只在 App 打开着时进行：切到后台后，系统会继续下载当前地址，回到 App 时再判断要不要换。
 - 存储空间不足等手机本身的问题不会换地址。
 - 每个文件使用前都校验大小和 SHA-256，不论从哪个地址下载，内容都必须与官方文件完全一致；下载不完整或损坏的文件不会被加载。
 

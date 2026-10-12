@@ -5,8 +5,12 @@ import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * Process-wide owner of model download → verify → publish (see [get]), so a recreated activity never runs a
@@ -29,9 +33,15 @@ class ModelDownloader private constructor(ctx: Context) {
     private val failed = HashSet<String>() // guarded by this
 
     /** UI snapshot. [verifying] = file name currently being hash-checked. */
-    class State(val doneBytes: Long, val totalBytes: Long, val running: Boolean, val verifying: String?, val errors: List<String>)
+    class State(val doneBytes: Long, val totalBytes: Long, val running: Boolean, val verifying: String?, val errors: List<String>,
+        val choosing: Boolean = false)
 
     @Volatile private var verifying: String? = null
+    /** [start] is checking which tier to download from; [chooseGen] tells a stale check apart. Guarded by this. */
+    private var choosing = false
+    private var chooseGen = 0
+    /** hosts the last route check could not use; only reorders sources (process memory: lost on restart) */
+    private var slowHosts = emptySet<String>()
     private val errors = LinkedHashMap<String, String>() // path → message, guarded by this
     /** path → (bytes, when they last changed) of the running transfer, for [stalled]; guarded by this */
     private val progress = HashMap<String, Pair<Long, Long>>()
@@ -57,6 +67,7 @@ class ModelDownloader private constructor(ctx: Context) {
         // copies kept by older versions after a failed check: free the space before downloading again
         maintenanceWarning = store.removeRejected()
         maintenanceWarning?.let { errors["bad"] = it; return }
+        val fresh = ArrayList<ModelSpec>()
         for (s in store.missing()) {
             if (s.path in queued) continue
             // already at the final path but unmarked (e.g. marker write failed after the rename): verify, don't refetch
@@ -66,8 +77,61 @@ class ModelDownloader private constructor(ctx: Context) {
                 DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED -> continue
                 DownloadManager.STATUS_SUCCESSFUL -> { submitPublish(s); continue } // finished, just not verified yet
             }
-            enqueue(s, 0) // failed earlier (or never started): start over from the official source
+            // failed earlier (or never started): start over, on the route chosen below
+            prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
+            fresh += s
         }
+        if (fresh.isEmpty() || choosing) return
+        // Choose this batch's route first: every tier tries the smallest file at once (a few KB, thrown away). The
+        // official tier wins if it answers within the check, otherwise the lowest tier that answered; all files then
+        // start there. Nothing answered (e.g. no network yet): the full route, which DownloadManager waits out.
+        prefs.downloadTier = -1
+        choosing = true
+        val gen = ++chooseGen
+        val probe = store.specs.minBy { it.size }
+        Thread({
+            val worked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val tier = bestTier(probe.tiers, CHOOSE_MS) { url -> fetches(url, probe).also { if (it) worked += url } } ?: 0
+            synchronized(this) {
+                if (gen != chooseGen) return@Thread // cancelled, or a newer start
+                choosing = false
+                prefs.downloadTier = tier
+                // within the tier, hosts the check found unusable (or still silent) go last, e.g. a proxy that failed
+                slowHosts = probe.urls.filter { it !in worked }.map(::host).toSet() - worked.map(::host).toSet()
+                for (s in fresh) {
+                    if (store.isInstalled(s) || s.path in queued || recorded(s) != null) continue
+                    enqueue(s, route(s).first())
+                }
+            }
+        }, "jpsub-route").apply { isDaemon = true }.start()
+    }
+
+    /** The probe file comes back whole and right from [url] (a proxy may answer with an error page). */
+    private fun fetches(url: String, probe: ModelSpec): Boolean = try {
+        PROBE_CLIENT.newCall(Request.Builder().url(url).build()).execute().use { r ->
+            val body = r.body
+            if (!r.isSuccessful || body == null) false
+            else {
+                // at most one byte more than expected (readNBytes needs API 33)
+                val bytes = java.io.ByteArrayOutputStream()
+                body.byteStream().use { input ->
+                    val buf = ByteArray(16 * 1024)
+                    while (bytes.size() <= probe.size) { val n = input.read(buf); if (n < 0) break; bytes.write(buf, 0, n) }
+                }
+                bytes.size().toLong() == probe.size && MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())
+                    .joinToString("") { "%02x".format(it) } == probe.sha256
+            }
+        }
+    } catch (_: Exception) { false }
+
+    /** This batch's order of [s]'s sources: from the chosen tier on, sources on [slowHosts] after the others. */
+    private fun route(s: ModelSpec) = s.route(prefs.downloadTier.coerceAtLeast(0)).sortedBy { host(s.urls[it]) in slowHosts }
+
+    /** The source to try after [source] for [s] on this batch's route (null: none left). */
+    private fun next(s: ModelSpec, source: Int): Int? {
+        val route = route(s)
+        val i = route.indexOf(source)
+        return if (i < 0) route.firstOrNull() else route.getOrNull(i + 1)
     }
 
     /**
@@ -138,11 +202,11 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /**
-     * A transfer that is connecting or waiting to retry while its byte count does not move for [STALL_MS]
-     * ([STALL_STARTED_MS] once bytes arrived) counts as unreachable; DownloadManager itself would keep retrying
-     * the same host for minutes. The count only moves in steps of 64 KiB, so a source slower than about 1 KiB/s
-     * at the start (0.35 KiB/s later) is treated the same. Queued jobs and jobs waiting for the network are never
-     * cut off. Only checked while the app is open (the UI polls [state]).
+     * A transfer that is connecting or waiting to retry while it has received nothing for [STALL_MS] counts as
+     * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once bytes arrived it is
+     * never cut off: it waits for the connection to come back (switching would start the file over). The count only
+     * moves in steps of 64 KiB, so a source slower than about 4 KiB/s at the start is treated the same. Queued jobs and
+     * jobs waiting for the network are never cut off. Only checked while the app is open (the UI polls [state]).
      */
     private fun stalled(s: ModelSpec, j: Job): Boolean {
         val trying = j.status == DownloadManager.STATUS_RUNNING ||
@@ -150,8 +214,7 @@ class ModelDownloader private constructor(ctx: Context) {
         val now = SystemClock.elapsedRealtime()
         val last = progress[s.path]
         if (!trying || last == null || last.first != j.bytes) { progress[s.path] = j.bytes to now; return false }
-        // nothing received yet: the host is probably unreachable; already started: allow a longer gap
-        return now - last.second > if (j.bytes == 0L) STALL_MS else STALL_STARTED_MS
+        return j.bytes == 0L && now - last.second > STALL_MS
     }
 
     /** Failures that another copy of the same file can fix; full storage or a file error cannot. */
@@ -159,13 +222,12 @@ class ModelDownloader private constructor(ctx: Context) {
         DownloadManager.ERROR_DEVICE_NOT_FOUND, DownloadManager.ERROR_FILE_ERROR, DownloadManager.ERROR_FILE_ALREADY_EXISTS)
 
     /**
-     * Moves [s] from job [j] to the next of its sources, unless the user cancelled or the file is no longer needed
+     * Moves [s] from job [j] to the next source on the route, unless the user cancelled or the file is no longer needed
      * (switched to online translation). Each source is tried once per [start]; false when there is none left.
      */
     private fun nextSource(s: ModelSpec, j: Job): Boolean {
         if (prefs.downloadCancelled || store.required().none { it.path == s.path }) return false
-        if (j.source + 1 >= s.urls.size) return false
-        enqueue(s, j.source + 1)
+        enqueue(s, next(s, j.source) ?: return false)
         return true
     }
 
@@ -178,6 +240,7 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun cancel() {
         prefs.downloadCancelled = true; store.specs.forEach { prefs.setPendingSource(it.path, -1) } // remembered across process death: no source switch until 下载 / 重试
+        chooseGen++; choosing = false // a route check still running starts nothing
         for (s in store.specs) {
             if (s.path in queued) continue // already downloaded; let verification finish
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
@@ -227,7 +290,7 @@ class ModelDownloader private constructor(ctx: Context) {
                     else if (!prefs.downloadCancelled) exhausted(s, j, "所有下载地址都连不上，请检查网络后重试")
             }
         }
-        return State(done, store.totalBytes(), running || queued.isNotEmpty(), verifying, errors.values.toList())
+        return State(done, store.totalBytes(), running || choosing || queued.isNotEmpty(), verifying, errors.values.toList(), choosing)
     }
 
     private fun submitPublish(s: ModelSpec) {
@@ -250,7 +313,8 @@ class ModelDownloader private constructor(ctx: Context) {
             // wrong bytes (e.g. a proxy answering with an HTML page): not an error yet. Keep the finished record;
             // [state] tries the next source from the main thread
             val bad = r is ModelStore.Result.WrongSize || r is ModelStore.Result.WrongHash
-            if (bad && j.source + 1 < s.urls.size) { prefs.setPendingSource(s.path, j.source + 1); rejected += j.id; return ModelStore.Result.Missing }
+            val then = if (bad) next(s, j.source) else null
+            if (then != null) { prefs.setPendingSource(s.path, then); rejected += j.id; return ModelStore.Result.Missing }
             dm.remove(j.id); prefs.setDownloadId(s.path, -1)
         }
         return r
@@ -315,8 +379,39 @@ class ModelDownloader private constructor(ctx: Context) {
     companion object {
         /** "来源 <1-based source>：<part file name>", the job description that identifies an attempt */
         private val DESCRIPTION = Regex("来源 (\\d+)：(.+\\.part)")
-        private const val STALL_MS = 60_000L
-        private const val STALL_STARTED_MS = 180_000L
+        private const val STALL_MS = 15_000L
+        /** how long the route check waits for a tier that has not answered yet */
+        private const val CHOOSE_MS = 15_000L
+        private val PROBE_CLIENT = OkHttpClient.Builder().connectTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS)
+            .callTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS).build()
+
+        fun host(url: String): String = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+
+        /**
+         * Tries every source of every tier at once ([fetch] blocks). The answer is the lowest tier with a source that
+         * worked, decided as soon as every lower tier failed, or after [timeoutMs] among those that worked by then;
+         * null when none did. Late answers are ignored.
+         */
+        fun bestTier(tiers: List<List<String>>, timeoutMs: Long, fetch: (String) -> Boolean): Int? {
+            val lock = Object()
+            val ok = BooleanArray(tiers.size)
+            val left = IntArray(tiers.size) { tiers[it].size } // sources not answered yet
+            for ((t, sources) in tiers.withIndex()) for (url in sources) Thread({
+                val good = fetch(url)
+                synchronized(lock) { if (good) ok[t] = true; left[t]--; lock.notifyAll() }
+            }, "jpsub-probe").apply { isDaemon = true }.start()
+            val end = System.nanoTime() / 1_000_000 + timeoutMs
+            synchronized(lock) {
+                while (true) {
+                    // the first tier not known to have failed: it decides once it worked
+                    val first = tiers.indices.firstOrNull { ok[it] || left[it] > 0 } ?: return null
+                    if (ok[first]) return first
+                    val wait = end - System.nanoTime() / 1_000_000
+                    if (wait <= 0) return tiers.indices.firstOrNull { ok[it] }
+                    lock.wait(wait)
+                }
+            }
+        }
         @Volatile private var instance: ModelDownloader? = null
         fun get(ctx: Context): ModelDownloader =
             instance ?: synchronized(this) { instance ?: ModelDownloader(ctx).also { instance = it } }

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fades the palette row into the card it sits on, so a chip cut off at the right edge reads as "scroll for more" -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="0"
+        android:startColor="@android:color/transparent"
+        android:endColor="@color/card" />
+</shape>

@@ -965,6 +965,11 @@ class MainActivity : Activity() {
         val lKeepC = findViewById<TextView>(R.id.labelKeepChars)
         val keepHint = findViewById<TextView>(R.id.keepHint)
         val paletteRow = findViewById<LinearLayout>(R.id.paletteRow)
+        // the fade says "there is more to the right"; once scrolled to the end there is nothing left to hint at
+        val paletteScroll = findViewById<android.widget.HorizontalScrollView>(R.id.paletteScroll)
+        val paletteFade = findViewById<View>(R.id.paletteFade)
+        fun updatePaletteFade() { paletteFade.visibility = if (paletteScroll.canScrollHorizontally(1)) View.VISIBLE else View.GONE }
+        paletteScroll.setOnScrollChangeListener { _, _, _, _, _ -> updatePaletteFade() }
         val dpx = resources.displayMetrics.density
         // one chip per palette (magpie's .chip): a round sample of its background and text colour, then its name;
         // the chosen one gets an ink outline
@@ -994,6 +999,7 @@ class MainActivity : Activity() {
                     setOnClickListener { prefs.palette = p.id; renderPalettes(); preview.setColors(p) }
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = (8 * dpx).toInt() })
             }
+            paletteScroll.post { updatePaletteFade() } // the row's real width is known only after this layout pass
         }
 
         var loading = false // programmatic updates must not be written back

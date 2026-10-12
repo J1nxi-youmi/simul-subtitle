@@ -276,19 +276,34 @@
                             android:layout_marginTop="14dp"
                             android:text="字幕配色" />
 
-                        <HorizontalScrollView
+                        <!-- More than fits scrolls sideways; the fade on the right says so (hidden at the end) -->
+                        <FrameLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:clipToPadding="false"
-                            android:scrollbars="none">
+                            android:layout_marginTop="8dp">
 
-                            <LinearLayout
-                                android:id="@+id/paletteRow"
-                                android:layout_width="wrap_content"
+                            <HorizontalScrollView
+                                android:id="@+id/paletteScroll"
+                                android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:orientation="horizontal" />
-                        </HorizontalScrollView>
+                                android:clipToPadding="false"
+                                android:scrollbars="none">
+
+                                <LinearLayout
+                                    android:id="@+id/paletteRow"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal" />
+                            </HorizontalScrollView>
+
+                            <View
+                                android:id="@+id/paletteFade"
+                                android:layout_width="28dp"
+                                android:layout_height="match_parent"
+                                android:layout_gravity="end"
+                                android:background="@drawable/palette_fade"
+                                android:importantForAccessibility="no" />
+                        </FrameLayout>
 
                         <TextView
                             android:id="@+id/labelSize"

@@ -1114,6 +1114,18 @@ class PipelineTest {
     }
 
     @Test
+    fun withoutAJudgeTheSegmenterIsToldFinishedBeforeRecognition() {
+        val asr = GateAsr() // blocks: nothing is recognised during this test
+        val p = Pipeline(asr, FakeMt(1), {}, judge = null, judgeEnds = true)
+        p.start()
+        p.submit(AsrJob(1, 1, false, FloatArray(10), monoMs(), endOfSpeech = true))
+        assertEquals(false, p.holdHint(1, 1)) // the pause ends as without Jev, not after the Jev wait
+        assertTrue(p.setSetup(Setup(FakeMt(1), judge = FakeJudge(), version = 1)))
+        assertEquals(null, p.holdHint(2, 1)) // with a judge: no answer until it is asked
+        asr.gate.countDown(); p.stop(); p.awaitStopped()
+    }
+
+    @Test
     fun stopCancelsAnOldSetupStillTranslating() {
         val old = GateMt()
         val asrSeen = Collections.synchronizedList(ArrayList<Long>())

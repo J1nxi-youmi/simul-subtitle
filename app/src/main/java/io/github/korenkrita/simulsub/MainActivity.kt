@@ -684,9 +684,9 @@ class MainActivity : Activity() {
                 k.isNotEmpty() && !Jev.validKey(k) -> { result.text = "⚠ key 里有空格、换行或特殊字符，请重新复制"; return null }
                 k.isEmpty() && saved == null -> { result.text = "⚠ 还没填 API Key"; return null }
             }
-            prefs.byokUrl = u; prefs.byokModel = m
-            if (k.isNotEmpty()) { prefs.byokKey = k; key.setText("") }
-            prefs.byokSaved() // a running session switches to the saved service now, as one change
+            // one edit; a running session switches to the saved service from the next sentence, as one change
+            prefs.saveByok(u, m, k.ifEmpty { null })
+            if (k.isNotEmpty()) key.setText("")
             return ByokTranslator.chatUrl(u).second
         }
         val testing = byokTest != null

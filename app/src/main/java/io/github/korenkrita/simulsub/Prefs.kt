@@ -150,8 +150,21 @@ class Prefs(ctx: Context) {
     var byokKey: String?
         get() = sp.getString("byokKey", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
         set(v) = sp.edit().apply { if (v.isNullOrBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(v.trim())) }.apply()
-    /** Written after "保存" stored all BYOK fields: a running session switches to them as one (see CaptionService). */
-    fun byokSaved() = sp.edit().putLong("byokSaved", System.nanoTime()).apply()
+    /**
+     * "保存": all BYOK fields in one edit (null key = keep the saved one), plus the byokSaved marker a running session
+     * switches on. One edit, so a reader never sees the new address with the old key.
+     */
+    fun saveByok(url: String, model: String, key: String?) = sp.edit().apply {
+        putString("byokUrl", url.trim()); putString("byokModel", model.trim())
+        if (!key.isNullOrBlank()) putString("byokKey", KeyBox.seal(key.trim()))
+        putLong("byokSaved", System.nanoTime())
+    }.apply()
+    /** URL, model and key read together (one copy of the preferences), for a session building its translator. */
+    fun byokTriple(): Triple<String, String, String?> {
+        val all = sp.all
+        return Triple((all["byokUrl"] as? String).orEmpty(), (all["byokModel"] as? String).orEmpty(),
+            (all["byokKey"] as? String)?.let { runCatching { KeyBox.open(it) }.getOrNull() })
+    }
     /**
      * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and
      * model; null = not found yet. Kept per URL + model, so switching back and forth does not probe again.

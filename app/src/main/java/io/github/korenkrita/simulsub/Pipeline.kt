@@ -167,8 +167,14 @@ class Pipeline(
     /** The newest endOfSpeech draft waiting for Jev; an older one that has not started is replaced. */
     private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Judge>?>(null)
 
-    /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
+    /**
+     * For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. No Jev for this
+     * segment (its key is missing for now): "finished" at once, so the segmenter does not wait for an answer that
+     * cannot come.
+     */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
+        // asking fixes the segment's setup (as its first recognition would), so the answer and the ASR thread agree
+        if (setupOf(segmentId).judge == null) return false
         val h = hints[segmentId to revision] ?: return null
         // the segmenter asks on every frame: log only the first read, which is when the answer took effect
         if (hintsUsed.add(segmentId to revision)) log(mapOf("ev" to "hint_used", "seg" to segmentId, "rev" to revision, "hold" to h))

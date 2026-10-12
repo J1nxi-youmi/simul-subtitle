@@ -531,6 +531,12 @@ class CaptionService : Service() {
         // settings changed on the home screen while subtitles run
         prefListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             when (key) {
+                // a newer BYOK save makes an unfinished probe of the previous one pointless (and billed): stop it
+                "byokSaved" -> {
+                    setupWanted.incrementAndGet()
+                    if (onSetupChange != null) synchronized(cancelLock) { probing?.cancel() }
+                    onSetupChange?.invoke()
+                }
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
@@ -607,9 +613,11 @@ class CaptionService : Service() {
         val dedupe = prefs.dedupeJoin
         val contextN = if (prefs.contextOn) prefs.contextSentences else 0
         val online = if (mode == MtMode.INDEX) prefs.onlineModel else null
-        val byokUrl = if (mode == MtMode.BYOK) ByokTranslator.chatUrl(prefs.byokUrl).second else null
-        val byokModel = if (mode == MtMode.BYOK) prefs.byokModel else ""
-        val byokKey = if (mode == MtMode.BYOK) prefs.byokKey else null
+        // the three BYOK fields from one read, so the address of one save never goes out with the key of another
+        private val byok = if (mode == MtMode.BYOK) prefs.byokTriple() else null
+        val byokUrl = byok?.let { ByokTranslator.chatUrl(it.first).second }
+        val byokModel = byok?.second.orEmpty()
+        val byokKey = byok?.third
         val provider = prefs.jevProvider
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
@@ -628,7 +636,7 @@ class CaptionService : Service() {
          * then bumps byokSaved, so a half-saved address or model never becomes a setup. jevKey:* is matched apart.
          */
         private val setupKeys = setOf("scene", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
-            "sourceLang", "targetLang", "onlineModel", "byokSaved")
+            "sourceLang", "targetLang", "onlineModel")
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"

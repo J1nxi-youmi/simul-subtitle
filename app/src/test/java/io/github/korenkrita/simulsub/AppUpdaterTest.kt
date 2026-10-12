@@ -41,12 +41,6 @@ class AppUpdaterTest {
         assertTrue(release.copy(versionCode = 5).shouldOffer(3, false, true, 0, 4, 2000, 1999))
     }
 
-    @Test fun automaticCheckIsThrottledAndRecoversFromClockRollback() {
-        assertTrue(UpdateRelease.checkDue(0, 100))
-        assertFalse(UpdateRelease.checkDue(100, 100 + UpdateRelease.CHECK_INTERVAL - 1))
-        assertTrue(UpdateRelease.checkDue(100, 100 + UpdateRelease.CHECK_INTERVAL))
-        assertTrue(UpdateRelease.checkDue(100, 99))
-    }
 
     @Test fun directFirstThenTheExistingDownloadProxies() {
         assertEquals(listOf(UpdateRelease.LATEST, "https://gh-proxy.com/${UpdateRelease.LATEST}",

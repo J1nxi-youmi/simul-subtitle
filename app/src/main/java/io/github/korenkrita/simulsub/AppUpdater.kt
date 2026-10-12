@@ -59,14 +59,12 @@ internal data class UpdateRelease(
     companion object {
         const val REPO = "https://github.com/KorenKrita/simul-subtitle"
         const val LATEST = "$REPO/releases/latest/download/update.json"
-        const val CHECK_INTERVAL = 12 * 60 * 60 * 1000L
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024
         const val MAX_NOTES = 8_000 // characters shown in the dialog
         // Same order as ModelStore.GH_PROXIES. Never send api.github.com through these download proxies.
         fun sources(url: String) = listOf(url, "https://gh-proxy.com/$url", "https://gh.llkk.cc/$url")
 
-        fun checkDue(last: Long, now: Long) = last == 0L || now < last || now - last >= CHECK_INTERVAL
 
         fun parse(text: String): UpdateRelease {
             require(text.toByteArray(Charsets.UTF_8).size <= MAX_MANIFEST)
@@ -116,9 +114,10 @@ internal class AppUpdater(private val activity: Activity) {
         checkButton.setOnClickListener { check(manual = true) }
     }
 
-    fun start() {
-        if (auto && !prefs.contains("pendingInstall") && !prefs.contains("pendingDownload") && !prefs.contains("pendingOffer") &&
-            UpdateRelease.checkDue(prefs.getLong("lastCheck", 0), System.currentTimeMillis())) check(manual = false)
+    /** Each launch of the app checks once ([fresh]: a new activity, not one recreated by a rotation or theme change). */
+    fun start(fresh: Boolean) {
+        if (fresh && auto && !prefs.contains("pendingInstall") && !prefs.contains("pendingDownload") && !prefs.contains("pendingOffer"))
+            check(manual = false)
     }
 
     fun resume() {
@@ -143,8 +142,7 @@ internal class AppUpdater(private val activity: Activity) {
             }
             return
         }
-        // nothing unfinished: a reopened (retained) activity also checks again once the interval has passed
-        val pending = prefs.getString("pendingInstall", null) ?: return start()
+        val pending = prefs.getString("pendingInstall", null) ?: return
         val release = runCatching { UpdateRelease.parse(pending) }.getOrNull()
         if (release == null || !release.isNewer(BuildConfig.VERSION_CODE)) {
             prefs.edit().remove("pendingInstall").apply()
@@ -180,7 +178,6 @@ internal class AppUpdater(private val activity: Activity) {
 
     private fun check(manual: Boolean) {
         if (job?.isActive == true) return
-        prefs.edit().putLong("lastCheck", System.currentTimeMillis()).apply()
         checkButton.isEnabled = false
         checkButton.text = "正在检查更新…"
         job = scope.launch {

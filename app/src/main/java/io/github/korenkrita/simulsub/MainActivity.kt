@@ -116,7 +116,8 @@ class MainActivity : Activity() {
         showSettings(savedInstanceState?.getBoolean("settings") == true)
         if (inSettings && savedInstanceState?.getBoolean("sizePage") == true) showSize(true)
         updater = AppUpdater(this)
-        updater.start()
+        // each launch checks once; a rotation or theme change (savedInstanceState) does not
+        updater.start(fresh = savedInstanceState == null)
     }
 
     private var inSettings = false

@@ -186,18 +186,18 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <LinearLayout
+            <!-- back on the left, the title centred on the page (not between back and the edge) -->
+            <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:minHeight="52dp"
-                android:orientation="horizontal">
+                android:minHeight="52dp">
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/closeSettings"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_gravity="start|center_vertical"
                     android:layout_marginStart="-8dp"
                     android:minWidth="0dp"
                     android:minHeight="48dp"
@@ -211,17 +211,20 @@
                     app:iconSize="20dp"
                     app:iconTint="@color/text2" />
 
+                <!-- side margins clear the back button, so a long sub-page title never runs under it -->
                 <TextView
                     android:id="@+id/settingsTitle"
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:layout_weight="1"
+                    android:layout_gravity="center_vertical"
+                    android:layout_marginStart="72dp"
+                    android:layout_marginEnd="72dp"
+                    android:gravity="center"
                     android:text="设置"
                     android:textColor="@color/text"
                     android:textSize="18sp"
                     android:textStyle="bold" />
-            </LinearLayout>
+            </FrameLayout>
 
             <!-- categories; filled in code (same segmented control as the options) -->
             <FrameLayout

@@ -795,13 +795,14 @@ class JevTest {
         reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }
         extraHeaders = "Retry-After: ${header(wallNow)}\r\n"
         val receivedAt = now; val receivedWall = wallNow
+        val changes = java.util.concurrent.atomic.AtomicInteger()
         val j = Jev(JevProvider.ZEN, "sk-${header(0).length}-$receivedAt", 600, url = "http://127.0.0.1:$port/v1/systemone",
             clock = { now }, wall = {
                 if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
                     inCallback.countDown(); release.await()
                 }
                 wallNow
-            })
+            }, onChange = { changes.incrementAndGet() })
         val first = AtomicReference<JevCall>()
         val t0 = monoMs()
         val t1 = Thread { first.set(j.unfinished("a")) }.apply { start() }
@@ -818,10 +819,14 @@ class JevTest {
             assertTrue("returned after ${monoMs() - t0} ms", monoMs() - t0 < 1_200)
             assertEquals(429, first.get().status)
             assertEquals(1, hits.get())
+            assertEquals(0, changes.get())
             now += 2_000; wallNow += 2_000
         } finally { release.countDown(); t1.join(3_000) }
         val deadline = monoMs() + 2_000
-        while (j.paused()?.untilMs == Long.MAX_VALUE && monoMs() < deadline) Thread.sleep(5)
+        while (changes.get() == 0 && monoMs() < deadline) Thread.sleep(5)
+        // the installation says so, once, after its monitor (no request result)
+        assertEquals(1, changes.get())
+        assertEquals(1, hits.get())
         check(j, receivedAt, receivedWall)
         // one generation: a request let out after the pause is current
         now += 61_000; wallNow += 61_000

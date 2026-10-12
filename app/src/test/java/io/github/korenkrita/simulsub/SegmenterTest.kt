@@ -364,6 +364,33 @@ class SegmenterTest {
     }
 
     @Test
+    fun aPauseHoldThatTookOverAndTurnsStaleCutsAtItsOwnPlace() {
+        // forced cut at 3 s held ("unfinished") → a pause candidate takes over, also held, speech resumes → both turn
+        // stale (a 429): cut at once, at the pause candidate, not at the old forced cut and not at the hard limit
+        val jobs = ArrayList<AsrJob>()
+        val stale = java.util.concurrent.atomic.AtomicBoolean(false)
+        var pauseCut: AsrJob? = null
+        var cutCandidates = 0
+        val s = Segmenter({ jobs.add(it); if (it.endOfSpeech && !it.isFinal && ++cutCandidates == 2) pauseCut = it },
+            maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> !stale.get() })
+        var idx = 0
+        fun feed(speech: Boolean, ms: Int) = repeat(ms / 32) {
+            idx++; s.accept(FloatArray(frame) { idx.toFloat() }, if (speech) 0.9f else 0.1f, idx * 32L)
+        }
+        feed(true, 3200); feed(false, 512); feed(true, 320)
+        assertTrue("a pause candidate took over", pauseCut != null)
+        assertTrue(jobs.none { it.isFinal })
+        stale.set(true)
+        feed(true, 64)
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(1, finals.size)
+        assertEquals(frameIds(pauseCut!!).last(), frameIds(finals[0]).last())
+        feed(true, 320); s.flush()
+        assertEquals((1..idx).toList(), jobs.filter { it.isFinal }.flatMap(::frameIds))
+    }
+
+    @Test
     fun aStaleForcedCutAnswerNeverCutsAtTheOldPlace() {
         // forced-cut candidate (unfinished) → long utterance continues → a pause candidate → speech resumes →
         // the judge now says "finished" about the *old* cut: that must not cut back at the old position

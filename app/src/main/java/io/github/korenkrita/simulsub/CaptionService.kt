@@ -67,6 +67,8 @@ class CaptionService : Service() {
     private var activeJudge: Judge? = null
     /** Jev's light state now ([jevShown]); main thread only. */
     private fun jevNow(): ServiceCall? = jevShown(jevState, activeJudge?.paused(), activeJudge?.lastLimit(), jevFrom)
+    /** shows a pause that just ended as such; scheduled by [refresh] for the pause on screen */
+    private val pauseOver: Runnable = Runnable { refresh() }
     /** the translator in use: BYOK by the service its probe accepted, others by model */
     private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
@@ -282,7 +284,9 @@ class CaptionService : Service() {
                 // one Jev client for both features; no key = both paused until one is entered
                 // pauses count deep sleep: one kept across sessions ends at the time the service named
                 val judge = s.jevKey?.let {
-                    Jev(s.provider, it, source = s.source, target = s.target, clock = android.os.SystemClock::elapsedRealtime)
+                    // a 429 installed after its request's results were shown (or in silence) shows without a new event
+                    Jev(s.provider, it, source = s.source, target = s.target, clock = android.os.SystemClock::elapsedRealtime,
+                        onChange = { refresh() })
                 }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
                 return Built(Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version),
@@ -562,6 +566,13 @@ class CaptionService : Service() {
         v.setServices(light(mtState, true), light(jevNow, jevEndsOn || jevCheckOn),
             mtState?.let { reason(it, false, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) },
             if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) } else "未开启")
+        // a pause on screen says "下一句重试" once it is over: show that then, without a request. The delay does not count
+        // deep sleep; any refresh after it reads the clock again
+        main.removeCallbacks(pauseOver)
+        jevNow?.limit?.untilMs?.takeIf { it != Long.MAX_VALUE }?.let { until ->
+            val left = until - android.os.SystemClock.elapsedRealtime()
+            if (left > 0) main.postDelayed(pauseOver, left + 50)
+        }
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {
@@ -724,6 +735,7 @@ class CaptionService : Service() {
         // Never block the main thread and never free native objects here: the session thread
         // notices `stopping`, finishes, waits for the pipeline workers and releases everything itself.
         stopping = true
+        main.removeCallbacks(pauseOver)
         running = false
         // Only flags + an atomic store into a still-alive translator (the session thread detaches it under the
         // same lock before freeing). The session thread notices `stopping` within ~10 ms (non-blocking reads).
@@ -795,20 +807,20 @@ class CaptionService : Service() {
 
         fun light(c: ServiceCall?, on: Boolean): CaptionOverlayView.Light = when {
             !on || c == null -> CaptionOverlayView.Light.GREY
-            c.limit != null || c.http == 429 -> CaptionOverlayView.Light.YELLOW
+            c.limited -> CaptionOverlayView.Light.YELLOW
             c.ok -> CaptionOverlayView.Light.GREEN
             else -> CaptionOverlayView.Light.RED
         }
 
         /**
          * Jev's light state: a pause the client is in ([paused]) wins (also one from before this session, or newer than
-         * the last result's). Otherwise the last real result ([last]); when that was a limit, with the service's
-         * installed one ([installed]): the result may have been taken while it was still being installed.
+         * the last result's). Otherwise the last real result ([last]); when that was limited, with the service's
+         * installed limit ([installed]): the result may have been taken while it was still being installed.
          */
         fun jevShown(last: ServiceCall?, paused: JevLimit?, installed: JevLimit?, from: Int): ServiceCall? {
             if (paused != null) return ServiceCall(false, 429, "paused", paused, from)
-            if (last == null || (last.limit == null && last.http != 429)) return last
-            return ServiceCall(last.ok, last.http, last.error, installed ?: last.limit, last.setup)
+            if (last == null || !last.limited) return last
+            return ServiceCall(last.ok, last.http, last.error, installed ?: last.limit, last.setup, true)
         }
 
         /** Why a light is not green, short; null for a working one. */
@@ -825,7 +837,7 @@ class CaptionService : Service() {
             if (c.ok) return null
             return when {
                 c.http == 401 || c.http == 403 -> "key 无效或没有权限"
-                c.http == 429 -> "请求受限"
+                c.limited -> "请求受限，稍后重试".takeIf { jev } ?: "请求受限"
                 c.http >= 500 -> "服务出错（HTTP ${c.http}）"
                 c.http in 400..499 -> "请求被拒绝（HTTP ${c.http}）"
                 c.http == 200 -> if (jev) "回答无法使用" else "没有得到译文"

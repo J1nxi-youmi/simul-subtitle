@@ -88,6 +88,11 @@ class Jev(
     private val target: Lang = Lang.ZH,
     /** monotonic ms for pauses; the app passes one that keeps counting in deep sleep (elapsedRealtime) */
     private val clock: () -> Long = ::monoMs,
+    /**
+     * A 429 of this service was installed (by this client's request): what [paused] and [lastLimit] say changed. Not a
+     * request result; called on an OkHttp thread, no lock held.
+     */
+    private val onChange: () -> Unit = {},
     private val wall: () -> Long = System::currentTimeMillis,
     dns: okhttp3.Dns = okhttp3.Dns.SYSTEM,
 ) : Judge {
@@ -148,6 +153,7 @@ class Jev(
                     svc.installing--
                 }
             }
+            onChange() // after the monitor: what the service's pause looks like changed
         }
         // a deadline that came while the 429 was being installed (its status not yet published): still that 429
         val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit).let {

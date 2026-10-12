@@ -768,6 +768,33 @@ class PipelineTest {
     }
 
     @Test
+    fun aValidAnswerDuringAnInstallingLimitIsLimitedNotUnusable() {
+        val judge = LateJudge()
+        val services = Collections.synchronizedList(ArrayList<ServiceCall>())
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = judge, onService = { j, c -> if (j) services.add(c) })
+        p.start()
+        try {
+            assertTrue(p.judged(1))
+            p.submit(AsrJob(1, 2, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            assertTrue(judge.entered.await(2, TimeUnit.SECONDS))
+            judge.limit = JevLimit.INSTALLING; judge.gen = 1 // a 429 arrived, its end not read yet
+            judge.gate.countDown() // the older question's valid 200
+            val deadline = monoMs() + 2000
+            while (services.isEmpty() && monoMs() < deadline) Thread.sleep(5)
+        } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
+        val c = services.single()
+        assertEquals(200, c.http)
+        assertTrue(c.limited && !c.ok)
+        assertNull(c.limit) // the placeholder is not kept
+        assertEquals(CaptionOverlayView.Light.YELLOW, CaptionService.light(c, true))
+        // installed later and over: the warning says the next sentence tries again, not "回答无法使用"
+        val shown = CaptionService.jevShown(c, null, JevLimit(0, null, false), 0)!!
+        assertEquals("请求受限，下一句重试", CaptionService.reason(shown, true, 1, System.currentTimeMillis()))
+        // not installed by the time it is shown (no limit known): still limited
+        assertEquals("请求受限，稍后重试", CaptionService.reason(CaptionService.jevShown(c, null, null, 0)!!, true, 1, 0))
+    }
+
+    @Test
     fun aLimitWhileAQuestionIsOutCutsAtOnceAndItsLateHoldIsNotUsed() {
         val judge = LateJudge()
         val services = Collections.synchronizedList(ArrayList<ServiceCall>())

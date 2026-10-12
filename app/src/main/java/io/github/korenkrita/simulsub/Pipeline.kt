@@ -83,8 +83,11 @@ class Setup(
 /**
  * The outcome of one real request to the translator or Jev (not a reused translation), for the overlay's lights.
  * [http] 0 = no HTTP status (local model, network failure); [limit]: Jev is paused after a 429; [setup] its version.
+ * [limited]: the result came with a 429 or while one was on (its answer, also a valid one, not used); its limit's end
+ * may not be known yet ([limit] null) and is read from the service when shown.
  */
-class ServiceCall(val ok: Boolean, val http: Int, val error: String?, val limit: JevLimit?, val setup: Int)
+class ServiceCall(val ok: Boolean, val http: Int, val error: String?, val limit: JevLimit?, val setup: Int,
+                  val limited: Boolean = limit != null || http == 429)
 
 /**
  * Two worker threads (ASR, MT) connected by small queues.
@@ -423,7 +426,8 @@ class Pipeline(
         val paused = judge.paused()
         // a 429 still being installed has no end yet: kept as "limited", its end read from the judge when shown
         val limit = c.limit ?: paused?.takeIf { it !== JevLimit.INSTALLING }
-        onService(true, ServiceCall(c.answer != null && c.limit == null && paused == null, c.status, c.error, limit, setup.version))
+        val limited = c.limit != null || paused != null || c.status == 429
+        onService(true, ServiceCall(c.answer != null && !limited, c.status, c.error, limit, setup.version, limited))
     }
 
     /** Japanese of the last [MAX_PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */

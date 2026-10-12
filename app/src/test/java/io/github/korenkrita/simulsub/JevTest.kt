@@ -596,7 +596,7 @@ class JevTest {
 
     private val zenLimit = """{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded. Please try again later."}}"""
     private var now = 1_000_000L
-    private val wallNow = 1_760_000_000_000L
+    private var wallNow = 1_760_000_000_000L
     private fun timedJev(key: String = "sk-secret", provider: JevProvider = JevProvider.ZEN, deadline: Long = 2_000) =
         Jev(provider, key, deadline, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = { wallNow })
 
@@ -644,10 +644,16 @@ class JevTest {
             assertEquals(d, 86_400L, Jev.retrySeconds(d, base))
         for (d in listOf("Sun, 11 Oct 2026 19:00:00 GMT", "Sunday, 11-Oct-26 19:00:00 GMT", "Sun Oct 11 19:00:00 2026"))
             assertEquals(d, 0L, Jev.retrySeconds(d, base))
-        assertEquals(86_400L, Jev.retrySeconds("Tue Oct  13 19:00:00 2026", base)) // asctime pads the day with a space
+        // asctime pads a one-digit day with a space
+        val nov3 = (java.time.Instant.parse("2026-11-03T19:00:00Z").toEpochMilli() - base) / 1000
+        assertEquals(nov3, Jev.retrySeconds("Tue Nov  3 19:00:00 2026", base))
+        assertNull(Jev.retrySeconds("Tue Oct  13 19:00:00 2026", base))
         assertNull(Jev.retrySeconds("13 Oct 2026", base))
         // impossible dates are no date (the short backoff), not the nearest real one
         for (d in listOf("Sun, 31 Feb 2027 19:00:00 GMT", "Sunday, 31-Feb-27 19:00:00 GMT", "Sun Feb 31 19:00:00 2027", "Sun Feb 29 19:00:00 2027"))
+            assertNull(d, Jev.retrySeconds(d, base))
+        // not the HTTP syntax (no seconds, no weekday, another zone, a sign): the short backoff, not a long wait
+        for (d in listOf("Tue, 13 Oct 2026 19:00 GMT", "13 Oct 2026 19:00:00 GMT", "Tue, 13 Oct 2026 19:00:00 +0100", "+259200", "-5"))
             assertNull(d, Jev.retrySeconds(d, base))
         // RFC 850: a two-digit year more than 50 years ahead is the century before
         assertEquals(0L, Jev.retrySeconds("Wednesday, 13-Oct-76 19:00:00 GMT", base)) // 1976, past
@@ -775,12 +781,15 @@ class JevTest {
     }
 
     @Test
-    fun one429IsInstalledOnceAtItsHeadersTimeAlsoWhenTheDeadlineComesFirst() {
-        // the headers' callback is held (in its wall-clock read, after its monotonic one) past the caller's deadline
+    fun one429IsInstalledOnceAndNeverEndsBeforeTheNamedTime() {
+        // the headers' callback is held in its first clock read (inside the service's monitor) past the caller's deadline
         val inCallback = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
         val callbackThread = AtomicReference<Thread>()
-        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }; extraHeaders = "Retry-After: 60\r\n"
+        reply = { if (it == 1) 429 to zenLimit else 200 to """{"answers":{"x":{"noul":0.2}}}""" }
+        // an HTTP-date 60 s after the headers arrive
+        extraHeaders = "Retry-After: ${java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(
+            java.time.Instant.ofEpochMilli(wallNow + 60_000).atZone(java.time.ZoneOffset.UTC))}\r\n"
         val headersAt = now
         val j = Jev(JevProvider.ZEN, "sk-secret", 600, url = "http://127.0.0.1:$port/v1/systemone", clock = { now }, wall = {
             if (Thread.currentThread().name.startsWith("OkHttp") && callbackThread.compareAndSet(null, Thread.currentThread())) {
@@ -788,25 +797,25 @@ class JevTest {
             }
             wallNow
         })
-        val first = j.unfinished("a")
+        val first = AtomicReference<JevCall>()
+        val t1 = Thread { first.set(j.unfinished("a")) }.apply { start() }
         assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
-        // not yet installed, so not published: the caller does not install it with its own, later clock
-        assertTrue(first.status != 429)
         // the other question meets the 429 being installed: it waits for it, and is then not sent
         val other = AtomicReference<JevCall>()
-        val t = Thread { other.set(j.unfinished("c")) }.apply { start() }
-        Thread.sleep(200)
+        val t2 = Thread { other.set(j.unfinished("c")) }.apply { start() }
+        Thread.sleep(800) // past the first caller's deadline too
         assertEquals(1, hits.get())
-        now += 900
+        now += 2_000; wallNow += 2_000
         release.countDown()
-        t.join(3_000)
+        t1.join(3_000); t2.join(3_000)
+        // the caller that gave up at its deadline still reports the 429 it got
+        assertEquals(429, first.get().status)
         assertEquals("paused", other.get().error)
         assertEquals(1, hits.get())
-        val deadline = monoMs() + 2_000
-        while (j.paused() == null && monoMs() < deadline) Thread.sleep(5)
-        assertEquals(headersAt + 60_000, j.paused()!!.untilMs)
+        // the time read late can only make the pause longer, never end it before the named time
+        assertTrue(j.paused()!!.untilMs >= headersAt + 60_000)
         // once: a request let out after the pause is current
-        now += 61_000
+        now += 61_000; wallNow += 61_000
         val fresh = j.unfinished("b")
         assertEquals(200, fresh.status)
         Thread.sleep(100)

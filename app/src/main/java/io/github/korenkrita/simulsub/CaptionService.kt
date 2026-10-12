@@ -544,7 +544,7 @@ class CaptionService : Service() {
             if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
             // a failing service stays shown, also with timings off; one that works says nothing here
-            serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, monoMs(), System.currentTimeMillis())?.let {
+            serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, realtimeMs(), System.currentTimeMillis())?.let {
                 append("${if (isNotEmpty()) "  ·  " else ""}$it")
             }
             // an operational status (stopped, error) must never be pushed out of the capped area by timings
@@ -563,8 +563,8 @@ class CaptionService : Service() {
         else v.setLines(lines, diag.ifEmpty { null })
         val jevNow = jevNow()
         v.setServices(light(mtState, true), light(jevNow, jevEndsOn || jevCheckOn),
-            mtState?.let { reason(it, false, monoMs(), System.currentTimeMillis()) },
-            if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, monoMs(), System.currentTimeMillis()) } else "未开启")
+            mtState?.let { reason(it, false, realtimeMs(), System.currentTimeMillis()) },
+            if (jevEndsOn || jevCheckOn) jevNow?.let { reason(it, true, realtimeMs(), System.currentTimeMillis()) } else "未开启")
         // Record capture → text-update latency once per (segment, revision), right after it was set.
         val now = monoMs()
         for (c in shown) {

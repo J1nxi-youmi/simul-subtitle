@@ -41,11 +41,18 @@ class JevCall(val request: String, val status: Int, val response: String?, val m
 }
 
 /**
- * A 429 from a Jev service: no request is sent to it before [untilMs] (monotonic). [resumeAt] is the wall time
+ * A 429 from a Jev service: no request is sent to it before [untilMs] ([realtimeMs]). [resumeAt] is the wall time
  * its Retry-After named, null when it named none (then a short backoff, retried by the next request). [free]:
  * OpenCode Zen's free usage limit (FreeUsageLimitError). [gen]: the generation this 429 started.
  */
 class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean, val gen: Int = 0)
+
+/**
+ * Monotonic ms that keep counting in deep sleep (Android's elapsedRealtime), for pauses that outlive a session; on the
+ * JVM of unit tests, which has no Android clock, [monoMs].
+ */
+val realtimeMs: () -> Long = runCatching { android.os.SystemClock.elapsedRealtime(); { android.os.SystemClock.elapsedRealtime() } }
+    .getOrElse { ::monoMs }
 
 /** What the pipeline asks; an interface so tests can answer without a network. */
 interface Judge {
@@ -79,7 +86,7 @@ class Jev(
     private val source: Lang? = Lang.JA,
     private val target: Lang = Lang.ZH,
     /** tests */
-    private val clock: () -> Long = ::monoMs,
+    private val clock: () -> Long = realtimeMs,
     private val wall: () -> Long = System::currentTimeMillis,
     dns: okhttp3.Dns = okhttp3.Dns.SYSTEM,
 ) : Judge {
@@ -112,9 +119,10 @@ class Jev(
         val myGen = java.util.concurrent.atomic.AtomicInteger(-1)
         val on429 = { retryAfter: String? ->
             // all under the monitor, from the first clock read on: admission waits for an arriving 429 instead of
-            // slipping past it while it is read, and both clocks are read together
+            // slipping past it while it is read. Wall time first, then the monotonic one: time passing between the
+            // two can only move the end later, never before the time the service named
             synchronized(svc) {
-                val at = clock(); val atWall = wall()
+                val atWall = wall(); val at = clock()
                 val secs = retrySeconds(retryAfter, atWall)?.coerceAtMost(1_000_000_000_000L) // only overflow is bounded
                 if (myGen.get() < 0) {
                     svc.gen++; myGen.set(svc.gen)
@@ -125,7 +133,11 @@ class Jev(
                 }
             }
         }
-        val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit)
+        // a deadline that came while the 429 was being installed (its status not yet published): still that 429
+        val r = calls.post(url, body, auth, beforeSend, on429 = on429, admit = admit).let {
+            if (it.status == 0 && it.error?.startsWith("deadline") == true && synchronized(svc) { myGen.get() >= 0 })
+                HttpResult(429, null, it.ms, it.error, it.firstContentMs) else it
+        }
         if (r.error == "paused") return JevCall(body, 0, null, r.ms, "paused", null, paused())
         val answer = if (r.status == 200 && r.body != null)
             runCatching { ((Json.parse(r.body) as? Map<*, *>)?.get("answers") as? Map<*, *>)?.get("x") as? Map<*, *> }.getOrNull()
@@ -166,7 +178,8 @@ class Jev(
          */
         fun retrySeconds(h: String?, nowWall: Long): Long? {
             val v = h?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-            v.toLongOrNull()?.let { return it.takeIf { s -> s >= 0 } }
+            // delay-seconds: digits only (no sign); more than a Long holds is "very long", bounded by the caller
+            if (v.all { it in '0'..'9' }) return v.toLongOrNull() ?: Long.MAX_VALUE
             val at = httpDate(v, nowWall) ?: return null
             return maxOf(0, (at - nowWall + 999) / 1000)
         }
@@ -176,7 +189,8 @@ class Jev(
             val us = java.util.Locale.US
             val utc = java.time.ZoneOffset.UTC
             val strict = java.time.format.ResolverStyle.STRICT
-            runCatching {
+            // the exact shapes only (a weekday, seconds, "GMT"); the parsers alone accept looser forms
+            if (Regex("""[A-Z][a-z]{2}, \d{1,2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT""").matches(v)) runCatching {
                 return java.time.ZonedDateTime.parse(v, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.withResolverStyle(strict))
                     .toInstant().toEpochMilli()
             }
@@ -195,8 +209,10 @@ class Jev(
                 val day = t.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, us)
                 return if (day.equals(wd, ignoreCase = true)) t.toInstant(utc).toEpochMilli() else null
             }
+            // asctime: a one-digit day is padded with a space ("Oct  3")
+            if (!Regex("""[A-Z][a-z]{2} [A-Z][a-z]{2} ( \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}""").matches(v)) return null
             val asctime = java.time.format.DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss uuuu", us).withResolverStyle(strict)
-            runCatching { return java.time.LocalDateTime.parse(v.replace(Regex("\\s+"), " "), asctime).toInstant(utc).toEpochMilli() }
+            runCatching { return java.time.LocalDateTime.parse(v.replace("  ", " "), asctime).toInstant(utc).toEpochMilli() }
             return null
         }
 

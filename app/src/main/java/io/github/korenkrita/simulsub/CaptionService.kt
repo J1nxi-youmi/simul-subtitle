@@ -471,6 +471,9 @@ class CaptionService : Service() {
         v.onStop = { stopSelf() }
         v.setFinalOnly(prefs.finalOnly)
         v.onToggleMode = { prefs.finalOnly = !prefs.finalOnly } // the listener below updates the button and captions
+        v.setShown(prefs.showJa, prefs.showStats)
+        v.onToggleJa = { prefs.showJa = !prefs.showJa }
+        v.onToggleStats = { prefs.showStats = !prefs.showStats }
         // taller text / toolbar / rotation: pull the window back on screen once the new height is known
         v.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop) v.post { layout() }
@@ -482,7 +485,7 @@ class CaptionService : Service() {
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
                 "heightFrac" -> if (captionH == 0) { applyHeight(); layout() }
-                "showJa", "showStats" -> refresh()
+                "showJa", "showStats" -> { v.setShown(prefs.showJa, prefs.showStats); refresh() }
                 "palette" -> v.setColors(CaptionOverlayView.palette(prefs.palette))
                 "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
                 "finalOnly" -> { v.setFinalOnly(prefs.finalOnly); refresh() }

@@ -60,7 +60,7 @@
 
 Subtitle size, colours and translation options are in Settings: the gear at the top right of the home screen.
 
-On the subtitle: **drag** to move · **tap** for the toolbar (text size, background, display mode, lock, stop); while it is shown, **drag a corner mark** to resize · **locked**: position and size are fixed, a tap only shows an unlock button.
+On the subtitle: **drag** to move · **tap** for the toolbar (text size, background, display mode, original text and timings on/off, lock, stop); while it is shown, **drag a corner mark** to resize · **locked**: position and size are fixed, a tap only shows an unlock button.
 
 The app's interface is in Chinese.
 

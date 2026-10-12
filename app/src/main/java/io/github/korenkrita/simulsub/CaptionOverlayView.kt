@@ -37,7 +37,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** resize marks, one per corner: top-left, top-right, bottom-right, bottom-left */
     private val corners = List(4) { android.widget.ImageView(ctx) }
     private val unlockBtn = ImageButton(ctx)
-    private val lockBadge = TextView(ctx)
     private val toolbar = LinearLayout(ctx)
     private val bg = GradientDrawable().apply { cornerRadius = dp(12f) }
 
@@ -60,14 +59,40 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private val modeBtn = TextView(ctx).apply {
         setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
-        setPadding(dp(8f).toInt(), 0, dp(8f).toInt(), 0)
-        minHeight = dp(36f).toInt(); minWidth = dp(36f).toInt()
+        setPadding(dp(6f).toInt(), 0, dp(6f).toInt(), 0)
+        minWidth = dp(36f).toInt()
         setOnClickListener { onToggleMode(); bumpToolbarTimer() }
     }
     /** Shows the current mode on the toolbar button; the label is what is on screen now. */
     fun setFinalOnly(v: Boolean) {
         modeBtn.text = if (v) "说完再出" else "边听边出"
         modeBtn.contentDescription = if (v) "现在每句说完才显示，点一下改为边听边出" else "现在边听边出，点一下改为每句说完再显示"
+    }
+    /** 原文 / 用时 tapped: the host flips the pref; [setShown] shows the new state. */
+    var onToggleJa: () -> Unit = {}
+    var onToggleStats: () -> Unit = {}
+    private fun switchBtn(label: String, onClick: () -> Unit) = TextView(context).apply {
+        text = label; setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER; minWidth = dp(36f).toInt()
+        compoundDrawablePadding = dp(4f).toInt()
+        setPadding(dp(4f).toInt(), 0, dp(4f).toInt(), 0)
+        setOnClickListener { onClick(); bumpToolbarTimer() }
+    }
+    private val jaBtn = switchBtn("原文") { onToggleJa() }
+    private val statsBtn = switchBtn("用时") { onToggleStats() }
+    /** A switch on the toolbar: a lit dot and white label when on, a hollow grey one when off. */
+    private fun showSwitch(b: TextView, on: Boolean, what: String) {
+        val dot = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL; setSize(dp(7f).toInt(), dp(7f).toInt())
+            if (on) setColor(0xFFA5B4FC.toInt()) else { setColor(0); setStroke(dp(1f).toInt().coerceAtLeast(1), 0xFF8B8B94.toInt()) }
+        }
+        b.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null)
+        b.setTextColor(if (on) Color.WHITE else 0xFF8B8B94.toInt())
+        b.contentDescription = if (on) "${what}：开，点一下关掉" else "${what}：关，点一下打开"
+    }
+    /** The 原文 / 用时 switches show these states. */
+    fun setShown(ja: Boolean, stats: Boolean) {
+        showSwitch(jaBtn, ja, "显示原文"); showSwitch(statsBtn, stats, "显示识别和翻译用时")
     }
     /** Toolbar opened/closed: the host widens the window while it is open so the toolbar is never clipped. */
     var onToolbarShown: (Boolean) -> Unit = {}
@@ -180,12 +205,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                 val m = dp(3f).toInt(); setMargins(m, m, m, m)
             })
         }
-        lockBadge.apply {
-            text = "🔒"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); visibility = GONE
-        }
-        card.addView(lockBadge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
-            setMargins(0, dp(4f).toInt(), dp(8f).toInt(), 0)
-        })
         // locked: a tap shows this in the bottom-right corner for a few seconds; tapping it unlocks
         unlockBtn.apply {
             setImageResource(R.drawable.ic_lock_open); contentDescription = "解锁位置和大小"
@@ -261,11 +280,15 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         stats.visibility = if (statsLine.isNullOrEmpty()) GONE else VISIBLE
     }
 
-    /** Two compact rows: font and background −/+ on top; mode, lock and stop below. As small as a finger allows. */
+    /**
+     * Two rows, both as wide as the wider one, every cell sharing that width (no gaps):
+     *   字号  A−  A+   │  背景  −  +
+     *   边听边出 │ ● 原文 │ ● 用时 │ 🔒 │ ✕
+     * The two switches carry a dot that is lit when on, so they read as switches. As small as a finger allows.
+     */
     private fun buildToolbar() {
         toolbar.apply {
             orientation = VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
             background = GradientDrawable().apply { cornerRadius = dp(10f); setColor(0xF526262B.toInt()); setStroke(dp(0.5f).toInt().coerceAtLeast(1), 0x1AFFFFFF) }
             setPadding(dp(4f).toInt(), dp(2f).toInt(), dp(4f).toInt(), dp(2f).toInt())
             elevation = dp(6f)
@@ -276,40 +299,52 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             visibility = GONE
         }
         val size = dp(36f).toInt() // smallest comfortable tap target
+        // a cell takes its share of the row (weight); its natural size is the minimum
+        fun cell(weight: Float = 1f) = LayoutParams(LayoutParams.WRAP_CONTENT, size, weight)
         fun btn(icon: Int, label: String, onClick: () -> Unit) = ImageButton(context).apply {
             setImageResource(icon); contentDescription = label
             background = null; val p = dp(9f).toInt(); setPadding(p, p, p, p)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            layoutParams = LayoutParams(size, size)
+            minimumWidth = size
+            layoutParams = cell()
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun tag(t: String) = TextView(context).apply {
             text = t; setTextColor(0xFF8B8B94.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            gravity = Gravity.CENTER; setPadding(dp(6f).toInt(), 0, dp(2f).toInt(), 0)
+            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, size)
         }
-        fun sep() = View(context).apply { setBackgroundColor(0x1AFFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(16f).toInt()).apply { marginStart = dp(4f).toInt(); marginEnd = dp(4f).toInt() } }
+        fun sep() = View(context).apply { setBackgroundColor(0x1AFFFFFF); layoutParams = LayoutParams(dp(1f).toInt(), dp(16f).toInt()).apply { marginStart = dp(2f).toInt(); marginEnd = dp(2f).toInt() } }
         fun tbtn(label: String, desc: String, onClick: () -> Unit) = TextView(context).apply {
             text = label; contentDescription = desc
             setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER; minWidth = size; minHeight = size
-            setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER; minWidth = size
+            setPadding(dp(2f).toInt(), 0, dp(2f).toInt(), 0)
+            layoutParams = cell()
             setOnClickListener { onClick(); bumpToolbarTimer() }
         }
         fun row() = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val full = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        // two halves, each a label with its −/+ kept together (the spare width goes around a group, not inside it)
+        fun group(label: String, minus: View, plus: View) = LinearLayout(context).apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER
+            addView(tag(label)); addView(minus.apply { layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, size) })
+            addView(plus.apply { layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, size) })
+        }
         toolbar.addView(row().apply {
-            addView(tbtn("A−", "字号减小") { setSize(textSp - 2) })
-            addView(tag("字号"))
-            addView(tbtn("A+", "字号增大") { setSize(textSp + 2) })
+            addView(group("字号", tbtn("A−", "字号减小") { setSize(textSp - 2) }, tbtn("A+", "字号增大") { setSize(textSp + 2) }), cell())
             addView(sep())
-            addView(tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) })
-            addView(tag("背景"))
-            addView(tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) })
-        })
+            addView(group("背景", tbtn("−", "背景更透明") { setAlphaStep(bgAlpha - 0.15f) }, tbtn("+", "背景更不透明") { setAlphaStep(bgAlpha + 0.15f) }), cell())
+        }, full)
         toolbar.addView(row().apply {
-            addView(modeBtn)
+            modeBtn.layoutParams = cell(1.4f); addView(modeBtn)
+            addView(sep())
+            jaBtn.layoutParams = cell(); addView(jaBtn)
+            statsBtn.layoutParams = cell(); addView(statsBtn)
             addView(sep())
             addView(btn(R.drawable.ic_lock, "锁定位置和大小") { toggleLock() })
             addView(btn(R.drawable.ic_close, "停止字幕") { onStop() }.apply { setColorFilter(0xFFF28B82.toInt()) })
-        })
+        }, full)
     }
 
     private fun setSize(v: Float) { applyStyle(v.coerceIn(MIN_SP, MAX_SP), bgAlpha); onStyleChanged() }
@@ -317,7 +352,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
 
     fun setLocked(v: Boolean) {
         locked = v
-        lockBadge.visibility = if (v) VISIBLE else GONE
         hideUnlock()
         showCorners()
     }

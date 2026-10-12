@@ -1,4 +1,4 @@
-# AI 辅助（Jev）
+# 在线 Decisions 模型辅助（Jev）
 
 [Jev](https://typesafe.ai) 是 TypeSafe 的云端判断模型：它不生成文字，只回答带概率的结构化问题。App 用它做两件可选的事，都默认关闭，彼此独立。
 

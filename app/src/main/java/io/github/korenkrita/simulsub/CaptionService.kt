@@ -154,7 +154,7 @@ class CaptionService : Service() {
                 "mt_model" to (online?.id ?: if (mode == MtMode.BYOK) byokModel else files.mt.name),
                 "mt_url" to (online?.let { OnlineTranslator.URL } ?: byokUrl),
                 "load_ms" to (t3 - t0), "device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
-            if (wantJev && judge == null) setStatus("⚠ AI 辅助需要 ${provider.label} 的 key，这次先不用")
+            if (wantJev && judge == null) setStatus("⚠ 在线 Decisions 模型辅助需要 ${provider.label} 的 key，这次先不用")
             if (mode == MtMode.BYOK) {
                 val system = byokSystem(scene, source, target)
                 val stored = prefs.byokVariant(byokUrl!!, byokModel)

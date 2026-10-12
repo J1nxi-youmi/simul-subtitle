@@ -592,9 +592,9 @@ class MainActivity : Activity() {
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
 
         // -- Jev (optional cloud judge)
-        box = group(root, "AI 辅助（可选，需要联网）")
-        val jev = switchRow(box, "智能断句", "由 Jev 判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) {}
-        val jevCheck = switchRow(box, "检查译文", "由 Jev 检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
+        box = group(root, "在线 Decisions 模型辅助（可选，需要联网）")
+        val jev = switchRow(box, "智能断句", "由 Jev 模型判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) {}
+        val jevCheck = switchRow(box, "检查译文", "由 Jev 模型检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
         val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(jevBox)
         fun renderJev() {
@@ -603,7 +603,7 @@ class MainActivity : Activity() {
             jevBox.visibility = if (used) View.VISIBLE else View.GONE
             if (!used) return
             val p = prefs.jevProvider
-            jevBox.addView(label("Jev 服务"))
+            jevBox.addView(label("Jev 在线模型服务"))
             // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names
             jevBox.addView(dropdown(JevProvider.entries.map { "${it.label}（${it.note}）" }, p.ordinal, true) {
                 if (prefs.jevProvider.ordinal != it) { prefs.jevProvider = JevProvider.entries[it]; main.post { renderJev() } }
@@ -1038,7 +1038,7 @@ class MainActivity : Activity() {
         keepS.addOnChangeListener { _, v, user -> if (user) { prefs.keepSentences = v.toInt(); apply() } }
         keepC.addOnChangeListener { _, v, user -> if (user) { prefs.keepChars = v.toInt(); apply() } }
         findViewById<MaterialButton>(R.id.resetStyle).setOnClickListener {
-            prefs.setStyle(20f, CaptionOverlayView.DEFAULT_ALPHA); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = false; prefs.showStats = false
+            prefs.setStyle(13f, CaptionOverlayView.DEFAULT_ALPHA); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = true; prefs.showStats = true
             prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS; prefs.heightFrac = 0f
             prefs.palette = CaptionOverlayView.PALETTES[0].id; renderPalettes()
             prefs.overlayX = -1; prefs.overlayY = -1

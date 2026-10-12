@@ -69,14 +69,14 @@
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机上运行语音识别和静音检测（Silero VAD）。
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)**：在手机上运行翻译模型。
 
-可选的 AI 辅助（智能断句、检查译文）使用 **[TypeSafe Jev](https://typesafe.ai)**。它是 TypeSafe 的闭源商业云服务，不是开源项目，默认关闭。开启后通过网络调用，用付费接口时会按用量产生费用（每小时约 0.04 美元，见 [Jev 说明](docs/jev.md)）。
+可选的 在线 Decisions 模型辅助（智能断句、检查译文）使用 **[TypeSafe Jev](https://typesafe.ai)**。它是 TypeSafe 的闭源商业云服务，不是开源项目，默认关闭。开启后通过网络调用，用付费接口时会按用量产生费用（每小时约 0.04 美元，见 [Jev 说明](docs/jev.md)）。
 
 ## 技术文档
 
 - [整体架构](docs/architecture.md)：声音从哪来、怎么变成字幕
 - [语音识别](docs/asr.md)：模型选择与对比测试
 - [翻译](docs/translation.md)：Index-Translate、提示词、上下文、支持的语言
-- [AI 辅助（Jev）](docs/jev.md)：智能断句与译文检查
+- [在线 Decisions 模型辅助（Jev）](docs/jev.md)：智能断句与译文检查
 - [隐私说明](docs/privacy.md)：哪些数据会离开手机
 - [使用记录与调试](docs/logs.md)：记录格式、性能数据
 - [构建与开发](docs/build.md)：编译、Mac 端到端测试

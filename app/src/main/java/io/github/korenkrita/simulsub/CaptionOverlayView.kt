@@ -39,7 +39,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private val toolbar = LinearLayout(ctx)
     private val bg = GradientDrawable().apply { cornerRadius = dp(12f) }
 
-    var textSp = 20f; private set
+    var textSp = 13f; private set
     var bgAlpha = DEFAULT_ALPHA; private set
     var colors = PALETTES[0]; private set
     private var lastLines: List<Line> = emptyList()

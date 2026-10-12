@@ -8,7 +8,7 @@ class Prefs(ctx: Context) {
 
     /** Chinese caption size in sp */
     var textSp: Float
-        get() = sp.getFloat("textSp", 20f)
+        get() = sp.getFloat("textSp", 13f)
         set(v) = sp.edit().putFloat("textSp", v).apply()
 
     /** Background opacity 0..1 */
@@ -41,12 +41,12 @@ class Prefs(ctx: Context) {
 
     /** Show the recognised Japanese above the Chinese line */
     var showJa: Boolean
-        get() = sp.getBoolean("showJa", false)
+        get() = sp.getBoolean("showJa", true)
         set(v) = sp.edit().putBoolean("showJa", v).apply()
 
     /** Show the small timing line under the captions */
     var showStats: Boolean
-        get() = sp.getBoolean("showStats", false)
+        get() = sp.getBoolean("showStats", true)
         set(v) = sp.edit().putBoolean("showStats", v).apply()
 
     /** Overlay position (top-left, px); -1 = default */

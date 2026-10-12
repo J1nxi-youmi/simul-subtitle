@@ -24,6 +24,8 @@
     <color name="warn_soft">#FF3F3220</color>
     <color name="err">#FFF28B82</color>
     <color name="err_soft">#FF45272A</color>
+    <!-- the stop button at night: magpie's light red itself, dark text on it 7.6:1 -->
+    <color name="err_fill">#FFF28B82</color>
     <!-- light red at night: dark text (≥ 7:1) -->
     <color name="on_err">#FF14142A</color>
 </resources>

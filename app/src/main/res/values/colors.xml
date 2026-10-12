@@ -27,6 +27,7 @@
     <color name="warn_soft">#FFFBF0DF</color>
     <color name="err">#FFD64545</color>
     <color name="err_soft">#FFFBE9E9</color>
-    <!-- text on the red stop button (white on #d64545: 4.6:1) -->
+    <!-- the stop button: a deeper red than magpie's #d64545 so white text on it is 5.5:1 (on #d64545 only 4.4:1) -->
+    <color name="err_fill">#FFC53030</color>
     <color name="on_err">#FFFFFFFF</color>
 </resources>

@@ -242,7 +242,7 @@ class MainActivity : Activity() {
         if (CaptionService.running) {
             status(R.color.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止。")
             primary.text = "停止字幕"; primary.setIconResource(R.drawable.ic_stop)
-            primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err))
+            primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.err_fill))
             onPrimary(R.color.on_err)
             primary.setOnClickListener { CaptionService.stop(this); main.postDelayed({ render() }, 300) }
         } else {
@@ -444,7 +444,13 @@ class MainActivity : Activity() {
                 (super.getView(p, c, g) as TextView).apply {
                     textSize = 14f; setTextColor(getColor(R.color.text)); minHeight = (48 * dpx).toInt()
                     setPadding((12 * dpx).toInt(), (6 * dpx).toInt(), (8 * dpx).toInt(), (6 * dpx).toInt())
-                    if (wrap) { isSingleLine = false; maxLines = Int.MAX_VALUE; ellipsize = null }
+                    if (wrap) {
+                        // the platform item has a fixed list-item height: let a wrapped value grow it
+                        isSingleLine = false; maxLines = Int.MAX_VALUE; ellipsize = null
+                        layoutParams = (layoutParams ?: android.view.ViewGroup.LayoutParams(0, 0)).apply {
+                            width = android.view.ViewGroup.LayoutParams.MATCH_PARENT; height = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                        }
+                    }
                 }
             override fun getDropDownView(p: Int, c: View?, g: android.view.ViewGroup) =
                 (super.getDropDownView(p, c, g) as TextView).apply { textSize = 15f; minHeight = (48 * dpx).toInt() }
@@ -990,7 +996,10 @@ class MainActivity : Activity() {
         }
         fun apply() {
             lSize.text = "文字大小  ${size.value.toInt()}"
-            lAlpha.text = "背景浓淡  ${alpha.value.toInt()}%"
+            // the slider moves in 5% steps; until the user drags it, the label and preview keep the stored value
+            // (the 78% default sits between two steps)
+            val shownAlpha = if (Math.abs(prefs.bgAlpha * 100f - alpha.value) < 2.5f) prefs.bgAlpha else alpha.value / 100f
+            lAlpha.text = "背景浓淡  ${Math.round(shownAlpha * 100)}%"
             lWidth.text = "字幕宽度  ${width.value.toInt()}%"
             lHeight.text = if (prefs.heightFrac <= 0f) "字幕高度  自动（跟着内容变）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%"
             lKeepS.text = "屏幕上至少留  ${keepS.value.toInt()} 句"
@@ -1001,7 +1010,7 @@ class MainActivity : Activity() {
                 (if (prefs.heightFrac <= 0f) "自动" else "${Math.round(prefs.heightFrac * 100)}%") +
                 " · 至少留 ${keepS.value.toInt()} 句 · ${keepC.value.toInt()} 字"
             preview.setColors(CaptionOverlayView.palette(prefs.palette))
-            preview.applyStyle(size.value, alpha.value / 100f)
+            preview.applyStyle(size.value, shownAlpha)
             // same caption height as the overlay will get (the stage grows with it)
             preview.setMaxContentHeight((resources.displayMetrics.heightPixels * CaptionService.MAX_CAPTION_FRAC).toInt(), Int.MAX_VALUE)
             preview.setCaptionHeight((resources.displayMetrics.heightPixels * prefs.heightFrac).toInt())

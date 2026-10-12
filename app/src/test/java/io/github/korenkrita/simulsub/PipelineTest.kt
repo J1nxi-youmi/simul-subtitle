@@ -1052,6 +1052,101 @@ class PipelineTest {
         p.stop(); release.countDown(); p.awaitStopped()
         assertEquals(listOf(25_600, 76_800), calls.toList())
     }
+
+    // --- settings changed while running (Setup) ---
+
+    @Test
+    fun aChangeDuringRecognitionAppliesFromTheNextSegment() {
+        val asr = GateAsr()
+        val old = FakeMt(1); val new = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(2)
+        val p = Pipeline(asr, old, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, true, 10))
+        assertTrue(asr.entered.await(2, TimeUnit.SECONDS)) // segment 1 is being recognised with the old setup
+        assertTrue(p.setSetup(Setup(new, version = 1)))
+        asr.gate.countDown()
+        p.submit(job(2, 1, true, 20))
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(listOf("ja10"), old.calls.map { source(it) })
+        assertEquals(listOf("ja20"), new.calls.map { source(it) })
+    }
+
+    @Test
+    fun aSegmentKeepsItsSetupForTheCheckAndTheRetranslation() {
+        val oldMt = FakeMt(1); val newMt = FakeMt(1)
+        val oldJudge = FakeJudge(choice = "negation", delayMs = 200); val newJudge = FakeJudge(choice = "negation")
+        val events = Collections.synchronizedList(ArrayList<Map<String, Any?>>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(FakeAsr(), oldMt, { if (it.isFinal) done.countDown() }, judge = oldJudge, checkTranslations = true,
+            log = { events.add(it) })
+        p.start()
+        p.submit(job(1, 3, true, 10))
+        // the first translation is done and the (slow) check is running when the settings change
+        while (oldMt.calls.isEmpty()) Thread.sleep(5)
+        assertTrue(p.setSetup(Setup(newMt, judge = newJudge, version = 1)))
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(2, oldMt.calls.size) // first try and the retranslation
+        assertTrue(newMt.calls.isEmpty())
+        assertEquals(1, oldJudge.asked.size); assertTrue(newJudge.asked.isEmpty())
+        assertEquals(listOf(0, 0), events.filter { it["ev"] == "mt" }.map { it["setup"] })
+    }
+
+    @Test
+    fun aKeyAddedWhileRunningStartsTheJudgeAndRemovingItPausesIt() {
+        val judge = FakeJudge(unfinishedP = 0.1)
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = null, judgeEnds = true)
+        p.start()
+        fun ask(seg: Long): Boolean? {
+            p.submit(AsrJob(seg, 1, false, FloatArray(10), monoMs(), endOfSpeech = true))
+            val until = monoMs() + 2_000
+            while (monoMs() < until) { p.holdHint(seg, 1)?.let { return it }; Thread.sleep(5) }
+            return null
+        }
+        // started without a key: answered "finished" at once, nobody asked
+        assertEquals(false, ask(1)); assertTrue(judge.asked.isEmpty())
+        assertTrue(p.setSetup(Setup(FakeMt(1), judge = judge, version = 1)))
+        assertEquals(false, ask(2)); assertEquals(1, judge.asked.size)
+        assertTrue(p.setSetup(Setup(FakeMt(1), judge = null, version = 2)))
+        assertEquals(false, ask(3)); assertEquals(1, judge.asked.size)
+        p.stop(); p.awaitStopped()
+    }
+
+    @Test
+    fun stopCancelsAnOldSetupStillTranslating() {
+        val old = GateMt()
+        val asrSeen = Collections.synchronizedList(ArrayList<Long>())
+        val p = Pipeline(FakeAsr(), old, {}, log = { e -> if (e["ev"] == "asr") asrSeen.add(e["seg"] as Long) })
+        p.start()
+        p.submit(job(1, 1, true, 10))
+        assertTrue(old.entered.await(2, TimeUnit.SECONDS))
+        // many later segments with newer setups: the old one must still be cancelled on stop
+        for (i in 1..12) { assertTrue(p.setSetup(Setup(FakeMt(1), version = i))); p.submit(job(1L + i, 1, true, 10 + i)) }
+        // wait until the ASR thread has taken all of them (MT is still blocked on segment 1)
+        val until = monoMs() + 2_000
+        while (monoMs() < until && asrSeen.none { it == 13L }) Thread.sleep(5)
+        assertTrue(asrSeen.contains(13L))
+        p.stop()
+        assertEquals(0L, old.gate.count) // GateMt.cancel opens the gate
+        p.awaitStopped()
+        assertFalse(p.setSetup(Setup(FakeMt(1), version = 99)))
+    }
+
+    @Test
+    fun theContextCountFollowsTheSetupOfEachSegment() {
+        val mt = FakeMt(1)
+        val done = AtomicInteger()
+        val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.incrementAndGet() }, previousSentences = 0)
+        p.start()
+        for (i in 1..3) { p.submit(job(i.toLong(), 1, true, 10 + i)); while (done.get() < i) Thread.sleep(5) }
+        assertTrue(p.setSetup(Setup(mt, previousSentences = 2, version = 1)))
+        p.submit(job(4, 1, true, 14)); while (done.get() < 4) Thread.sleep(5)
+        p.stop(); p.awaitStopped()
+        // the first three had no context; the fourth gets the two sentences before it, kept while the count was 0
+        assertFalse(mt.calls[2].contains("ja12"))
+        assertTrue(mt.calls[3].contains("ja12") && mt.calls[3].contains("ja13") && !mt.calls[3].contains("ja11"))
+    }
 }
 
 class CaptionBoardTest {

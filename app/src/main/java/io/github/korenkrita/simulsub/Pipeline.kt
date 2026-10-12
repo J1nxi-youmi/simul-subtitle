@@ -156,10 +156,9 @@ class Pipeline(
         return true
     }
     private fun setupOf(seg: Long): Setup = segSetup.getOrPut(seg) {
-        // keep the setups of the last few segments only; one no segment uses any more is dropped from [live]
+        // only the lookup table is trimmed; [live] keeps every setup of the session (one per settings change), since a
+        // slow MT or check may still be using an old one when stop() must cancel it
         segSetup.keys.removeIf { it < seg - 8 }
-        val keep = segSetup.values.toSet() + current
-        live.retainAll(keep)
         current
     }
 
@@ -290,7 +289,7 @@ class Pipeline(
      * an exact prefix, fp32 does the same). If the newest earlier draft that is long enough to be real content is
      * mostly missing from the new result, its text is kept and only the audio after it is recognized.
      */
-    private fun recognizeKeepingLostDraft(job: AsrJob): String {
+    private fun recognizeKeepingLostDraft(job: AsrJob, setup: Setup): String {
         val whole = asr.recognize(job.samples).trim()
         val hist = segDrafts.getOrPut(job.segmentId) { ArrayList() }
         segDrafts.keys.removeIf { it < job.segmentId - 4 }
@@ -303,7 +302,7 @@ class Pipeline(
             val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
             log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
                 "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            if (setupOf(job.segmentId).dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
+            if (setup.dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
         }
         // the history holds what was shown, so a second loss keeps the text an earlier repair saved
         if (!job.isFinal) hist += job.samples.size to text
@@ -314,15 +313,17 @@ class Pipeline(
         while (running && !failed) {
             val q = take(asrQueue) { it.job.isFinal } ?: continue
             if (!q.job.isFinal && !q.job.endOfSpeech && skipDisplayDraft()) continue
+            // the segment's settings are fixed before its first recognition, so a change during it applies to the next one
+            val setup = setupOf(q.job.segmentId)
             val start = clock()
-            val ja = recognizeKeepingLostDraft(q.job)
+            val ja = recognizeKeepingLostDraft(q.job, setup)
             val end = clock()
             if (!running) return
             val job = q.job
             log(mapOf("ev" to "asr", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal,
                 "eos" to job.endOfSpeech, "audio_ms" to audioMs(job), "ms" to end - start, "text" to ja))
-            val setup = setupOf(job.segmentId)
-            if (judge != null && judgeEnds && job.endOfSpeech) {
+            // judgeEnds alone: a session may start without a key and get one later (the setup then has a judge)
+            if (judgeEnds && job.endOfSpeech) {
                 // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent.
                 // No judge in this segment's setup (key missing for now): no question, the segmenter waits as without Jev
                 if (ja.isEmpty() || setup.judge == null) hints[job.segmentId to job.revision] = false

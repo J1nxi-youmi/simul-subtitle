@@ -426,22 +426,29 @@ class CaptionService : Service() {
         // drags start from where the card is on screen (it may sit clamped away from cardX / cardY)
         fun shownCardX() = lp.x + (lp.width - cardW) / 2
         v.onMove = { dx, dy -> cardX = shownCardX() + dx; cardY = lp.y + dy; layout() }
-        // a corner drag moves that corner; the opposite edges stay where they are (measured on the clamped size)
+        // a corner drag moves that corner; the opposite edges stay where they are, so the new size is bounded by the
+        // room between them and the screen edges (the toolbar is closed while dragging: card = window)
         v.onResize = { dx, dy, left, top ->
             val a = area(); val oldW = cardW
             cardX = shownCardX(); cardY = lp.y
-            cardW = (cardW + if (left) -dx else dx).coerceIn((a.width() * Prefs.MIN_WIDTH).toInt(), a.width())
+            val roomW = if (left) cardX + oldW else a.width() - cardX
+            cardW = (cardW + if (left) -dx else dx).coerceIn((a.width() * Prefs.MIN_WIDTH).toInt(), roomW.coerceAtLeast((a.width() * Prefs.MIN_WIDTH).toInt()))
             if (left) cardX -= cardW - oldW
             if (dy != 0) {
                 if (captionH == 0) captionH = v.captionHeightPx() // start from what is on screen (also when auto)
                 val oldH = captionH
-                captionH = (captionH + if (top) -dy else dy).coerceIn(v.minCaptionPx(), (a.height() * MAX_CAPTION_FRAC).toInt())
+                // room above (top corner) or below (bottom corner) the card
+                val room = if (top) cardY else a.height() - (cardY + v.height)
+                val maxH = minOf((a.height() * MAX_CAPTION_FRAC).toInt(), oldH + room.coerceAtLeast(0))
+                captionH = (captionH + if (top) -dy else dy).coerceIn(v.minCaptionPx(), maxH.coerceAtLeast(v.minCaptionPx()))
                 if (top) cardY -= captionH - oldH
                 v.setCaptionHeight(captionH)
             }
             layout()
         }
         v.onMoveEnd = {
+            // what is on screen, not the unclamped drag target (a card dragged past the top would save a negative y)
+            cardX = shownCardX(); cardY = lp.y
             prefs.overlayX = cardX; prefs.overlayY = cardY; prefs.widthFrac = cardW.toFloat() / area().width()
             if (captionH > 0) { prefs.heightFrac = captionH.toFloat() / area().height(); captionH = 0 }
         }

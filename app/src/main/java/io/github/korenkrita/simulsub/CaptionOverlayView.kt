@@ -335,7 +335,12 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                     corner = if (locked) -1 else when { t && l -> 0; t && r -> 1; b && r -> 2; b && l -> 3; else -> -1 }
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) moved = true
+                    if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) {
+                        moved = true
+                        // the open toolbar widens the window around the card; closed, card and window coincide, so
+                        // a move or resize puts the card exactly where the finger takes it
+                        if (!locked) hideToolbar()
+                    }
                     if (moved && !locked) {
                         // whole pixels only: keep the fraction for the next move, or slow drags would not move at all
                         val dx = (e.rawX - lastX).toInt(); val dy = (e.rawY - lastY).toInt()

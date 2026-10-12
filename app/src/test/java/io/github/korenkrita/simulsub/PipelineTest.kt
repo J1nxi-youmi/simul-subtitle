@@ -1130,6 +1130,22 @@ class PipelineTest {
     }
 
     @Test
+    fun afterAForcedCutTheNextSentenceTakesTheSettingsOfWhenItStarts() {
+        // a forced cut of nonstop speech leaves no tail; the next sentence starts only after a silence
+        val old = FakeMt(1); val new = FakeMt(1)
+        val done = CountDownLatch(2)
+        val p = Pipeline(FakeAsr(), old, { if (it.isFinal) done.countDown() }, judgeEnds = false, drafts = { false })
+        p.start()
+        val seg = Segmenter({ p.submit(it) }, judged = p::judged)
+        fun feed(speech: Boolean, ms: Int) = repeat(ms / 32) { seg.accept(FloatArray(512), if (speech) 0.9f else 0.1f, monoMs()) }
+        feed(true, 7_008); feed(false, 640)
+        assertTrue(p.setSetup(Setup(new, version = 1))) // changed in the silence, before the next sentence
+        feed(true, 1_280); feed(false, 416)
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertEquals(1, old.calls.size); assertEquals(1, new.calls.size)
+    }
+
+    @Test
     fun judgedFollowsTheSetupTheUtteranceStartedWith() {
         val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = null, judgeEnds = true)
         p.start()

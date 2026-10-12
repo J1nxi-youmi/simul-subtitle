@@ -75,6 +75,10 @@ class SetupOrderTest {
         assertTrue(o.isProbing("B"))
         assertTrue(o.endProbe("B", t, null))
         assertTrue(o.knows("B")); assertNull(o.result("B")) // inconclusive, still known
+        // a rebuild that saw B unknown before the probe ended does not probe it again
+        assertNull(o.beginProbe("B", o.version()))
+        o.changed() // the finished probe's own rebuild trigger, after that
+        assertNull(o.beginProbe("B", o.version()))
     }
 
     @Test

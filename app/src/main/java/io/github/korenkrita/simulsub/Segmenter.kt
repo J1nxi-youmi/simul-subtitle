@@ -219,7 +219,9 @@ class Segmenter(
         cutClosed = false
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
-        if (continueSpeech) {
+        // A cut that leaves nothing behind ends the utterance: the next one starts with its first speech frame, and only
+        // then fixes its settings (a change made in the silence after a forced cut applies to it).
+        if (continueSpeech && tail.isNotEmpty()) {
             segmentId++; beginUtterance()
             revision = 0
             frames.addAll(tail)

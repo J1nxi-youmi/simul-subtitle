@@ -220,23 +220,27 @@ class CaptionService : Service() {
                 var (ready, variant) = known(t)
                 if (!ready) {
                     val keep = inUse
-                    if (wait || keep == null) {
-                        val token = order.beginProbe(t, version) ?: return null
-                        if (!runProbe(t, token, system, s.target)) return null
-                        variant = known(t).second
-                    } else {
-                        val token = order.beginProbe(t, version)
-                        if (token != null) {
-                            val started = runCatching {
-                                probeExec.execute {
-                                    if (runProbe(t, token, system, s.target) && order.changed())
-                                        onSetupChange?.invoke() // now build with the tested service
-                                }
-                            }.isSuccess
-                            if (!started) return null // the session is ending
-                        } else if (!order.isProbing(t)) return null // overtaken: the newer change builds again
-                        notices += "正在测试新保存的模型，测好之前先用原来的"
-                        return use(keep, known(keep).second)
+                    val token = order.beginProbe(t, version)
+                    when {
+                        // refused because its probe finished since known() above: use that result
+                        token == null && order.knows(t) -> variant = known(t).second
+                        wait || keep == null -> {
+                            if (token == null || !runProbe(t, token, system, s.target)) return null
+                            variant = known(t).second
+                        }
+                        else -> {
+                            if (token != null) {
+                                val started = runCatching {
+                                    probeExec.execute {
+                                        if (runProbe(t, token, system, s.target) && order.changed())
+                                            onSetupChange?.invoke() // now build with the tested service
+                                    }
+                                }.isSuccess
+                                if (!started) return null // the session is ending
+                            } else if (!order.isProbing(t)) return null // overtaken: the newer change builds again
+                            notices += "正在测试新保存的模型，测好之前先用原来的"
+                            return use(keep, known(keep).second)
+                        }
                     }
                 }
                 order.trouble(t)?.let { notices += it }

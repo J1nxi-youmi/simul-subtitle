@@ -49,10 +49,11 @@ class SetupOrder<K, R>(private val lock: Any = Any()) {
 
     /**
      * Registers a probe of [key] as the only one, for the settings of version [v]. Null: the session ended, [v] was
-     * overtaken by a newer change (that one builds again), or [key] is already being probed (no second attempt).
+     * overtaken by a newer change (that one builds again), [key] is already being probed (no second attempt), or it was
+     * probed meanwhile (see [knows]; the check and the registration are one step, so a finished probe is never repeated).
      */
     fun beginProbe(key: K, v: Int): Long? = synchronized(lock) {
-        if (closed || v != wanted || probing == key) return null
+        if (closed || v != wanted || probing == key || results.containsKey(key)) return null
         token++
         probing = key
         token

@@ -349,6 +349,15 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         if (toolbar.visibility == VISIBLE) hideToolbar() else showToolbar()
     }
 
+    // the toolbar stays while a finger is down anywhere on the overlay (card or toolbar button), and its timer
+    // restarts when the finger lifts
+    override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+        if (interactive) when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> removeCallbacks(hideRunnable)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (toolbar.visibility == VISIBLE) bumpToolbarTimer()
+        }
+        return super.dispatchTouchEvent(e)
+    }
     private fun installGestures() {
         val slop = dp(8f)
         val grab = dp(28f)
@@ -363,7 +372,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                     val gx = minOf(grab, card.width / 2f); val gy = minOf(grab, card.height / 2f)
                     val l = e.x < gx; val r = e.x > card.width - gx; val t = e.y < gy; val b = e.y > card.height - gy
                     corner = if (locked || toolbar.visibility != VISIBLE) -1 else when { t && l -> 0; t && r -> 1; b && r -> 2; b && l -> 3; else -> -1 }
-                    removeCallbacks(hideRunnable) // the toolbar stays while the finger is down
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (!moved && (abs(e.rawX - downX) > slop || abs(e.rawY - downY) > slop)) moved = true
@@ -378,11 +386,9 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) tap() else if (!locked) onMoveEnd()
-                    if (toolbar.visibility == VISIBLE) bumpToolbarTimer()
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     if (moved && !locked) onMoveEnd()
-                    if (toolbar.visibility == VISIBLE) bumpToolbarTimer()
                 }
             }
             true

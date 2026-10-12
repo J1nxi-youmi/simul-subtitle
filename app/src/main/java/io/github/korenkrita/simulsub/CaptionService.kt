@@ -274,11 +274,14 @@ class CaptionService : Service() {
                 if (change) sl?.write(mapOf("ev" to "config_change", "setup" to b.setup.version) + s.log() +
                     (b.byokEv?.filterKeys { it == "mt_url" || it == "mt_model" } ?: emptyMap()))
             }
-            // A save during the start probe overtakes it: build again from the newest settings (stop ends the loop).
+            // A change during the start probe overtakes it: build again from the newest settings (stop ends the loop).
+            // Taken only while its version is still the newest, under the lock every change bumps it under, like a
+            // setup published while running; a dropped one is not cancelled (a Capped shares the native model).
             var firstSnap = s0
+            var v = v0
             var built = make(s0, v0, wait = true)
-            while (built == null && !stopping) {
-                val v = order.version()
+            while (!stopping && (built == null || !order.publish(v) { true })) {
+                v = order.version()
                 val s = Snap(prefs, mode, wantJev, files.mt.name)
                 if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return
                 firstSnap = s

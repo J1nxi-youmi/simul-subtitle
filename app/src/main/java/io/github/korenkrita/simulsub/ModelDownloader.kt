@@ -40,8 +40,6 @@ class ModelDownloader private constructor(ctx: Context) {
     /** [start] is checking which tier to download from; [chooseGen] tells a stale check apart. Guarded by this. */
     private var choosing = false
     private var chooseGen = 0
-    /** hosts the last route check could not use; only reorders sources (process memory: lost on restart) */
-    private var slowHosts = emptySet<String>()
     private val errors = LinkedHashMap<String, String>() // path → message, guarded by this
     /** path → (bytes, when they last changed) of the running transfer, for [stalled]; guarded by this */
     private val progress = HashMap<String, Pair<Long, Long>>()
@@ -64,6 +62,7 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun start() {
         errors.clear(); failed.clear(); rejected.clear(); store.specs.forEach { prefs.setPendingSource(it.path, -1) }; prefs.downloadCancelled = false
+        if (!choosing) prefs.downloadChoosing = false // set again below if a check starts
         // copies kept by older versions after a failed check: free the space before downloading again
         maintenanceWarning = store.removeRejected()
         maintenanceWarning?.let { errors["bad"] = it; return }
@@ -86,20 +85,21 @@ class ModelDownloader private constructor(ctx: Context) {
         // official tier wins if it answers within the check, otherwise the lowest tier that answered; all files then
         // start there. Nothing answered (e.g. no network yet): the full route, which DownloadManager waits out.
         prefs.downloadTier = -1
+        prefs.downloadChoosing = true // the process may end during the check: [state] starts it again
         choosing = true
         val gen = ++chooseGen
         val probe = store.specs.minBy { it.size }
         Thread({
-            val worked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-            val tier = bestTier(probe.tiers, CHOOSE_MS) { url -> fetches(url, probe).also { if (it) worked += url } } ?: 0
+            val tier = bestTier(probe.tiers, CHOOSE_MS) { url -> fetches(url, probe) } ?: 0
             synchronized(this) {
                 if (gen != chooseGen) return@Thread // cancelled, or a newer start
                 choosing = false
                 prefs.downloadTier = tier
-                // within the tier, hosts the check found unusable (or still silent) go last, e.g. a proxy that failed
-                slowHosts = probe.urls.filter { it !in worked }.map(::host).toSet() - worked.map(::host).toSet()
+                prefs.downloadChoosing = false
+                // what is needed now: the mode may have changed to online translation during the check
+                val needed = store.required().map { it.path }.toSet()
                 for (s in fresh) {
-                    if (store.isInstalled(s) || s.path in queued || recorded(s) != null) continue
+                    if (s.path !in needed || store.isInstalled(s) || s.path in queued || recorded(s) != null) continue
                     enqueue(s, route(s).first())
                 }
             }
@@ -124,8 +124,8 @@ class ModelDownloader private constructor(ctx: Context) {
         }
     } catch (_: Exception) { false }
 
-    /** This batch's order of [s]'s sources: from the chosen tier on, sources on [slowHosts] after the others. */
-    private fun route(s: ModelSpec) = s.route(prefs.downloadTier.coerceAtLeast(0)).sortedBy { host(s.urls[it]) in slowHosts }
+    /** This batch's order of [s]'s sources: the chosen tier, then the later ones (fixed, so it survives process death). */
+    private fun route(s: ModelSpec) = s.route(prefs.downloadTier.coerceAtLeast(0))
 
     /** The source to try after [source] for [s] on this batch's route (null: none left). */
     private fun next(s: ModelSpec, source: Int): Int? {
@@ -159,9 +159,10 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /** One of this app's DownloadManager jobs for a model file, with the source and file it was started with. */
-    private class Job(val id: Long, val status: Int, val reason: Int, val bytes: Long, val source: Int, val file: File)
+    /** [answered]: the server sent its response headers (the size is known), so the source is reachable */
+    private class Job(val id: Long, val status: Int, val reason: Int, val bytes: Long, val answered: Boolean, val source: Int, val file: File)
 
-    private fun describe(source: Int, part: File) = "来源 ${source + 1}：${part.name}"
+    private fun describe(source: Int, part: File) = "线路 ${source + 1}：${part.name}"
 
     /**
      * Every job of this app for [s]. New jobs carry their source and file in the description (set at enqueue,
@@ -176,20 +177,27 @@ class ModelDownloader private constructor(ctx: Context) {
             val stCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
             val rsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
             val byCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+            val tsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
             val dsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_DESCRIPTION)
             val urCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
             while (c.moveToNext()) {
-                val m = DESCRIPTION.matchEntire(c.getString(dsCol).orEmpty())
+                val desc = c.getString(dsCol).orEmpty()
+                val current = DESCRIPTION.matchEntire(desc)
+                val m = current ?: LEGACY_DESCRIPTION.matchEntire(desc)
                 val source: Int; val file: File
                 if (m != null) {
                     if (!m.groupValues[2].startsWith("$name.")) continue
-                    source = m.groupValues[1].toInt() - 1; file = File(store.file(s).parentFile, m.groupValues[2])
+                    source = m.groupValues[1].toInt() - 1
+                        // up to 0.6.3 the translation model had no GitHub copy: its source 2 (ModelScope) is now 3
+                        .let { if (current == null && s.path.startsWith("mt/") && it >= 1) it + 1 else it }
+                    file = File(store.file(s).parentFile, m.groupValues[2])
                 } else {
                     if (c.getString(urCol) != s.urls[0]) continue
                     source = 0; file = store.partFile(s)
                 }
                 if (source !in s.urls.indices) continue
-                out += Job(c.getLong(idCol), c.getInt(stCol), c.getInt(rsCol), c.getLong(byCol).coerceAtLeast(0), source, file)
+                out += Job(c.getLong(idCol), c.getInt(stCol), c.getInt(rsCol), c.getLong(byCol).coerceAtLeast(0),
+                    c.getLong(tsCol) > 0, source, file)
             }
         }
         return out
@@ -202,11 +210,12 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /**
-     * A transfer that is connecting or waiting to retry while it has received nothing for [STALL_MS] counts as
-     * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once bytes arrived it is
-     * never cut off: it waits for the connection to come back (switching would start the file over). The count only
-     * moves in steps of 64 KiB, so a source slower than about 4 KiB/s at the start is treated the same. Queued jobs and
-     * jobs waiting for the network are never cut off. Only checked while the app is open (the UI polls [state]).
+     * A transfer that is connecting or waiting to retry while the server has not answered for [STALL_MS] counts as
+     * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once the server answered (its
+     * headers gave the size) or bytes arrived it is never cut off: it waits for the connection to come back
+     * (switching would start the file over). The byte count alone cannot tell: it only moves in steps of 64 KiB.
+     * Queued jobs and jobs waiting for the network are never cut off. Only checked while the app is open (the UI
+     * polls [state]).
      */
     private fun stalled(s: ModelSpec, j: Job): Boolean {
         val trying = j.status == DownloadManager.STATUS_RUNNING ||
@@ -214,7 +223,7 @@ class ModelDownloader private constructor(ctx: Context) {
         val now = SystemClock.elapsedRealtime()
         val last = progress[s.path]
         if (!trying || last == null || last.first != j.bytes) { progress[s.path] = j.bytes to now; return false }
-        return j.bytes == 0L && now - last.second > STALL_MS
+        return j.bytes == 0L && !j.answered && now - last.second > STALL_MS
     }
 
     /** Failures that another copy of the same file can fix; full storage or a file error cannot. */
@@ -240,7 +249,7 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun cancel() {
         prefs.downloadCancelled = true; store.specs.forEach { prefs.setPendingSource(it.path, -1) } // remembered across process death: no source switch until 下载 / 重试
-        chooseGen++; choosing = false // a route check still running starts nothing
+        chooseGen++; choosing = false; prefs.downloadChoosing = false // a route check still running starts nothing
         for (s in store.specs) {
             if (s.path in queued) continue // already downloaded; let verification finish
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
@@ -259,6 +268,8 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun state(): State {
         var done = 0L; var running = false
+        // a route check the process did not live to finish: check again (nothing was enqueued for it yet)
+        if (prefs.downloadChoosing && !choosing && !prefs.downloadCancelled) start()
         // a download of a file the mode no longer needs keeps running (cancel() stops it), it just is not counted
         for (s in store.required()) {
             if (store.isInstalled(s)) { done += s.size; continue }
@@ -377,15 +388,15 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     companion object {
-        /** "来源 <1-based source>：<part file name>", the job description that identifies an attempt */
-        private val DESCRIPTION = Regex("来源 (\\d+)：(.+\\.part)")
+        /** "线路 <1-based source>：<part file name>", the job description that identifies an attempt */
+        private val DESCRIPTION = Regex("线路 (\\d+)：(.+\\.part)")
+        /** the same up to 0.6.3, numbering the sources of that version */
+        private val LEGACY_DESCRIPTION = Regex("来源 (\\d+)：(.+\\.part)")
         private const val STALL_MS = 15_000L
         /** how long the route check waits for a tier that has not answered yet */
         private const val CHOOSE_MS = 15_000L
         private val PROBE_CLIENT = OkHttpClient.Builder().connectTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS)
             .callTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS).build()
-
-        fun host(url: String): String = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
 
         /**
          * Tries every source of every tier at once ([fetch] blocks). The answer is the lowest tier with a source that

@@ -415,4 +415,33 @@ class SegmenterTest {
         s.flush()
         assertEquals(1, jobs.count { it.isFinal })
     }
+
+    @Test
+    fun anUtteranceWithoutAJudgeIsCutAsWithoutJev() {
+        // Jev configured for the session but paused for segment 1 (no key), back for segment 2
+        val asked = ArrayList<Long>()
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, minFinalMs = 1200, maxHoldSilenceMs = 1500, maxUtteranceMs = 5_000, hintWaitMs = 1_000,
+            holdHint = { _, _ -> null }, judged = { seg -> asked += seg; seg != 1L }, plainMaxUtteranceMs = 7_000)
+        // segment 1: 1.5 s of speech, a pause: final at the normal end silence, no candidate for Jev
+        run(listOf(true to 1504, false to 608), s)
+        assertTrue(jobs.none { it.endOfSpeech })
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+        // segment 2 (judged): the same pause emits a candidate and waits for its answer instead
+        run(listOf(true to 1504, false to 608), s)
+        assertTrue(jobs.any { it.segmentId == 2L && it.endOfSpeech })
+        assertEquals(1, jobs.count { it.isFinal })
+        assertEquals(listOf(1L, 2L), asked) // asked once per utterance, when it starts
+    }
+
+    @Test
+    fun anUnjudgedUtteranceUsesThePlainLengthLimit() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 5_000, hintWaitMs = 1_000, judged = { false }, plainMaxUtteranceMs = 7_000)
+        run(listOf(true to 6400), s)
+        assertTrue(jobs.none { it.isFinal }) // 6.4 s: past the Jev limit (5 s), still under the plain one (7 s)
+        run(listOf(true to 800), s)
+        assertEquals(1, jobs.count { it.isFinal })
+        assertTrue(jobs.none { it.endOfSpeech })
+    }
 }

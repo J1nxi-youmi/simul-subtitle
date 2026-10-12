@@ -155,26 +155,32 @@ class Pipeline(
         if (!running) { s.mt.cancel(); s.judge?.cancel() } // stop() ran meanwhile and did not see it
         return true
     }
-    private fun setupOf(seg: Long): Setup = segSetup.getOrPut(seg) {
-        // only the lookup table is trimmed; [live] keeps every setup of the session (one per settings change), since a
-        // slow MT or check may still be using an old one when stop() must cancel it
-        segSetup.keys.removeIf { it < seg - 8 }
-        current
+    /**
+     * The setup of [seg], fixed by whichever asks first: the audio thread when the utterance starts ([judged]) or the
+     * ASR thread at its first recognition. An entry stays until the segment's final is delivered ([forget]); [live]
+     * keeps every setup of the session, since a slow MT or check may still use an old one when stop() cancels it.
+     */
+    private fun setupOf(seg: Long): Setup = segSetup.getOrPut(seg) { current }
+    /** The final of [seg] was delivered: nothing asks for its setup any more (its jobs carry their own). */
+    private fun forget(seg: Long) {
+        segSetup.remove(seg)
+        // a segment that ended without a final (empty, dropped by stop) would otherwise stay: keep the table bounded
+        if (segSetup.size > 64) segSetup.keys.removeIf { it < seg - 32 }
     }
+
+    /**
+     * For the [Segmenter] when an utterance starts (audio thread, never blocks): true = it may wait for Jev answers.
+     * Fixes the segment's setup now, so its sentence ends and its translation use the same one.
+     */
+    fun judged(segmentId: Long): Boolean = judgeEnds && setupOf(segmentId).judge != null
 
     /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished. */
     private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Boolean>()
     /** The newest endOfSpeech draft waiting for Jev; an older one that has not started is replaced. */
     private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Judge>?>(null)
 
-    /**
-     * For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. No Jev for this
-     * segment (its key is missing for now): "finished" at once, so the segmenter does not wait for an answer that
-     * cannot come.
-     */
+    /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
-        // asking fixes the segment's setup (as its first recognition would), so the answer and the ASR thread agree
-        if (setupOf(segmentId).judge == null) return false
         val h = hints[segmentId to revision] ?: return null
         // the segmenter asks on every frame: log only the first read, which is when the answer took effect
         if (hintsUsed.add(segmentId to revision)) log(mapOf("ev" to "hint_used", "seg" to segmentId, "rev" to revision, "hold" to h))
@@ -345,6 +351,8 @@ class Pipeline(
                 mtQueue.addLast(MtJob(q, ja, start, end, setup))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
             }
+            // the final carries its setup on (MtJob): the segment needs no lookup any more
+            if (q.job.isFinal) forget(q.job.segmentId)
         }
     }
 

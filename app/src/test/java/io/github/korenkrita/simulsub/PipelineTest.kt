@@ -1114,15 +1114,36 @@ class PipelineTest {
     }
 
     @Test
-    fun withoutAJudgeTheSegmenterIsToldFinishedBeforeRecognition() {
-        val asr = GateAsr() // blocks: nothing is recognised during this test
-        val p = Pipeline(asr, FakeMt(1), {}, judge = null, judgeEnds = true)
+    fun judgedFollowsTheSetupTheUtteranceStartedWith() {
+        val p = Pipeline(FakeAsr(), FakeMt(1), {}, judge = null, judgeEnds = true)
         p.start()
-        p.submit(AsrJob(1, 1, false, FloatArray(10), monoMs(), endOfSpeech = true))
-        assertEquals(false, p.holdHint(1, 1)) // the pause ends as without Jev, not after the Jev wait
+        assertFalse(p.judged(1)) // no key: segment 1 is cut as without Jev
         assertTrue(p.setSetup(Setup(FakeMt(1), judge = FakeJudge(), version = 1)))
-        assertEquals(null, p.holdHint(2, 1)) // with a judge: no answer until it is asked
-        asr.gate.countDown(); p.stop(); p.awaitStopped()
+        assertFalse(p.judged(1)) // fixed when it started
+        assertTrue(p.judged(2))
+        p.stop(); p.awaitStopped()
+        val off = Pipeline(FakeAsr(), FakeMt(1), {}, judge = FakeJudge(), judgeEnds = false)
+        assertFalse(off.judged(1)) // smart sentence ends off for the session
+    }
+
+    @Test
+    fun aSegmentKeepsTheSetupItStartedWithWhileManyLaterOnesStart() {
+        // ASR is blocked on segment 1 while the audio thread starts 12 more utterances and the settings change
+        val asr = GateAsr()
+        val old = FakeMt(1); val new = FakeMt(1)
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, old, { if (it.isFinal && it.segmentId == 1L) done.countDown() }, judgeEnds = true)
+        p.start()
+        assertFalse(p.judged(1)) // segment 1 starts (and takes the old setup) on the audio thread
+        p.submit(job(1, 1, false, 10))
+        assertTrue(asr.entered.await(2, TimeUnit.SECONDS))
+        assertTrue(p.setSetup(Setup(new, version = 1)))
+        for (i in 2L..13L) p.judged(i)
+        p.submit(job(1, 2, true, 20))
+        asr.gate.countDown()
+        assertTrue(done.await(3, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
+        assertTrue(old.calls.map { source(it) }.contains("ja20"))
+        assertTrue(new.calls.none { source(it) == "ja20" })
     }
 
     @Test

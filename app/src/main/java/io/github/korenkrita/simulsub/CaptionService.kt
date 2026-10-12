@@ -53,6 +53,8 @@ class CaptionService : Service() {
     private var translator: Mt? = null
     /** A BYOK first-use probe in progress (at start or after "保存" while running), so stop can cancel it. */
     private var probing: ByokTranslator? = null
+    /** The session takes no new setup or probe any more (set under [cancelLock] when it ends). */
+    private var setupClosed = false
 
     /** Bumped by every settings change a running session takes from the next sentence (see [setupKeys]). */
     private val setupWanted = java.util.concurrent.atomic.AtomicInteger()
@@ -113,6 +115,7 @@ class CaptionService : Service() {
             val jevEnds = prefs.jevOn; val jevCheck = prefs.jevCheck
             val wantJev = jevEnds || jevCheck
             setupWanted.set(0) // a change from here on is seen by the snapshot below or rebuilt after the start
+            synchronized(cancelLock) { setupClosed = false }
             val s0 = Snap(prefs, mode, wantJev, files.mt.name)
             if (mode == MtMode.BYOK && (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null)) {
                 setStatus("⚠ 自己的模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
@@ -150,9 +153,10 @@ class CaptionService : Service() {
 
             /**
              * The translator for BYOK. A URL + model used for the first time is first probed for the switch that turns
-             * thinking off (logged like any MT call; cancelled by stop). null: stopped meanwhile.
+             * thinking off (logged like any MT call; cancelled by stop and by a newer save). null: stopped meanwhile, or
+             * [version] was overtaken by a newer change (that one builds again).
              */
-            fun byok(s: Snap, notices: MutableList<String>): ByokTranslator? {
+            fun byok(s: Snap, version: Int, notices: MutableList<String>): ByokTranslator? {
                 val url = s.byokUrl!!; val model = s.byokModel; val key = s.byokKey!!
                 val system = byokSystem(s.scene, s.source, s.target)
                 val stored = prefs.byokVariant(url, model)
@@ -162,15 +166,21 @@ class CaptionService : Service() {
                     val before = status
                     setStatus(asking)
                     val probe = ByokTranslator(url, model, key, system, null, maxTokens = mtMaxTokens(s.target))
-                    synchronized(cancelLock) { probing = probe }
-                    if (stopping) return null
+                    // registered and checked under the lock a newer save or the session end cancels under, so neither
+                    // can slip in between the check and the registration
+                    synchronized(cancelLock) {
+                        if (stopping || setupClosed || version < setupWanted.get()) return null
+                        probing = probe
+                    }
                     val steps = mutableListOf<ByokTranslator.Step>()
                     variant = probe.probe(steps)
-                    synchronized(cancelLock) { probing = null }
+                    synchronized(cancelLock) { if (probing === probe) probing = null }
+                    // cancelled by a newer save: a partial result says nothing about this model (no switch stored)
+                    if (version < setupWanted.get()) return null
                     steps.forEach { st -> sl?.write(mapOf("ev" to "byok_probe", "variant" to st.variant.name, "request" to st.result.request,
                         "http" to st.result.http, "response" to st.result.response, "error" to st.result.error, "usable" to st.result.usable,
                         "thinking" to st.result.thinking, "first_content_ms" to st.result.firstContentMs)) }
-                    if (stopping) return null
+                    if (stopping || setupClosed) return null
                     val none = variant == null && probe.exhausted(steps)
                     when {
                         variant != null -> prefs.setByokVariant(url, model, variant.name)
@@ -191,7 +201,7 @@ class CaptionService : Service() {
                 val mt: Mt = when (mode) {
                     MtMode.INDEX -> OnlineTranslator(s.online!!, maxTokens = mtMaxTokens(s.target))
                     MtMode.LOCAL -> LlamaTranslator.Capped(local!!, mtMaxTokens(s.target))
-                    MtMode.BYOK -> byok(s, notices) ?: return null
+                    MtMode.BYOK -> byok(s, version, notices) ?: return null
                 }
                 // one Jev client for both features; no key = both paused until one is entered
                 val judge = s.jevKey?.let { Jev(s.provider, it, source = s.source, target = s.target) }
@@ -199,9 +209,17 @@ class CaptionService : Service() {
                 return Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version) to
                     notices.joinToString("  ·  ")
             }
-            val (first, firstNotice) = make(s0, 0) ?: return
+            // A save during the start probe overtakes it: build again from the newest settings (stop ends the loop).
+            var built = make(s0, 0)
+            while (built == null && !stopping) {
+                val v = setupWanted.get()
+                val s = Snap(prefs, mode, wantJev, files.mt.name)
+                if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return
+                built = make(s, v)
+            }
+            if (stopping || built == null) return
+            val (first, firstNotice) = built
             notice = firstNotice
-            if (stopping) return
             val pl = Pipeline(
                 asr, first.mt,
                 onCaption = { onCaption(it, sl) },
@@ -234,7 +252,7 @@ class CaptionService : Service() {
             // Settings changed while running: one worker rebuilds the setup from a fresh snapshot, so a burst of changes
             // (a slider) makes one or two setups, and setups are published in order. A rebuild that a newer change
             // overtook is dropped; the newer one's own task builds again.
-            var published = 0
+            var published = first.version
             val rebuild = Runnable {
                 try {
                     val v = setupWanted.get()
@@ -243,7 +261,10 @@ class CaptionService : Service() {
                     // BYOK is only switched by "保存", which checks the fields; a half-filled one keeps the current setup
                     if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return@Runnable
                     val (setup, warn) = make(s, v) ?: return@Runnable
-                    if (v != setupWanted.get() || !pl.setSetup(setup)) return@Runnable
+                    // the version check and the publication under one lock: a newer change or the session end
+                    // either comes before (this setup is dropped) or after (it rebuilds again / cancels it)
+                    val ok = synchronized(cancelLock) { !setupClosed && v == setupWanted.get() && pl.setSetup(setup) }
+                    if (!ok) return@Runnable
                     published = v
                     notice = warn
                     sl?.write(mapOf("ev" to "config_change", "setup" to v) + s.log())
@@ -272,11 +293,13 @@ class CaptionService : Service() {
                     keepOverlay = true // models are released below; the captions stay until the user stops
                 }
             } finally {
-                // no new setup from here on: end the rebuild worker (a probe it runs is cancelled) before the pipeline
+                // No new setup or probe from here on (closed under the lock both check), then end the rebuild worker:
+                // it is either in a probe (cancelled now, returns within the request's cancel) or in quick local work,
+                // so the wait ends; only then the log is closed and the models are freed below.
                 onSetupChange = null
-                synchronized(cancelLock) { probing?.cancel() }
+                synchronized(cancelLock) { setupClosed = true; probing?.cancel() }
                 exec.shutdownNow()
-                exec.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)
+                while (!exec.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) Log.w(TAG, "waiting for the setup worker")
                 pl.stop()
                 pl.awaitStopped() // ASR/MT workers are out of native code after this
             }
@@ -323,9 +346,11 @@ class CaptionService : Service() {
             setStatus("")
             // with Jev the forced cut asks first and an "unfinished" head may grow to twice this (10 s); without Jev it
             // cuts at the default 7 s. The live log showed long waits were utterances that reached the forced cut.
+            // An utterance that starts while Jev is paused (its key is missing) is cut as without Jev.
             val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500,
-                maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else 7_000,
-                hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint)
+                maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
+                hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
+                judged = if (jevActive) pl::judged else null, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS)
             val frame = FloatArray(seg.frameSize)
             val ts = AudioTimestamp()
             var framesRead = 0L
@@ -533,8 +558,7 @@ class CaptionService : Service() {
             when (key) {
                 // a newer BYOK save makes an unfinished probe of the previous one pointless (and billed): stop it
                 "byokSaved" -> {
-                    setupWanted.incrementAndGet()
-                    if (onSetupChange != null) synchronized(cancelLock) { probing?.cancel() }
+                    synchronized(cancelLock) { setupWanted.incrementAndGet(); probing?.cancel() }
                     onSetupChange?.invoke()
                 }
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
@@ -647,6 +671,7 @@ class CaptionService : Service() {
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
         private const val JEV_MAX_UTTERANCE_MS = 5_000
+        private const val PLAIN_MAX_UTTERANCE_MS = 7_000
         /** captions never take more than this part of the usable height, so the toolbar always fits */
         const val MAX_CAPTION_FRAC = 0.4f
 

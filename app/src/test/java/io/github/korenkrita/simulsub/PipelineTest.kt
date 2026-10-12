@@ -553,7 +553,7 @@ class PipelineTest {
         // the longer recognition lost the kept draft: the kept text and the rest are joined with a space
         val asr = object : Asr {
             override fun recognize(samples: FloatArray) = when (samples.size) {
-                30_000 -> "THANK YOU FOR THE SUPER CHAT"; 50_000 -> "SEE YOU"; else -> "SEE YOU TOMORROW"
+                30_000 -> "THANK YOU FOR THE SUPER CHAT"; else -> "SEE YOU TOMORROW" // whole 80_000 and tail 50_000
             }
         }
         val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
@@ -565,7 +565,7 @@ class PipelineTest {
             p.submit(AsrJob(1, 2, true, FloatArray(80_000), monoMs()))
             assertTrue(done.await(3, TimeUnit.SECONDS))
         } finally { p.stop(); p.awaitStopped() }
-        assertEquals("THANK YOU FOR THE SUPER CHAT SEE YOU", out.last { it.isFinal }.ja)
+        assertEquals("THANK YOU FOR THE SUPER CHAT SEE YOU TOMORROW", out.last { it.isFinal }.ja)
     }
 
     @Test
@@ -952,6 +952,36 @@ class PipelineTest {
         p.stop(); p.awaitStopped()
         assertEquals("スパチャありがとうございますいや相当でかいと思うけど", out.last { it.isFinal }.ja)
         assertEquals(listOf(25_600, 76_800, 51_200), seen.toList())
+    }
+
+    /**
+     * Mac replay of a VTuber clip (seg 4): a repaired draft became the reference, so a later whole recognition that
+     * no longer matched it ("そうそう" where the draft had "祖父") was taken for a loss too and the old draft won.
+     * A real loss leaves little more than the new audio in the whole result; here it holds much more, so it is used.
+     */
+    @Test
+    fun aWholeRecognitionWithMoreThanTheNewAudioIsNotTakenForALoss() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                25_600 -> "居酒屋で会ってる祖父居酒屋だよだから見て"
+                40_000 -> "みんな何かさ" // the start is gone
+                40_000 - 25_600 -> "みんななんかさ"
+                56_000 -> "居酒屋で会ってるそうそう居酒屋だよ"
+                else -> "ああ" // 56_000 - 40_000: the audio after the repaired draft
+            }
+        }
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(4, 1, false, 25_600)); Thread.sleep(100)
+        p.submit(job(4, 2, false, 40_000)); Thread.sleep(100)
+        p.submit(job(4, 3, true, 56_000))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        // the real loss at 40_000 is still repaired; the final is the whole recognition
+        assertEquals("居酒屋で会ってる祖父居酒屋だよだから見てみんななんかさ", out.first { it.revision == 2 }.ja)
+        assertEquals("居酒屋で会ってるそうそう居酒屋だよ", out.last { it.isFinal }.ja)
     }
 
     @Test

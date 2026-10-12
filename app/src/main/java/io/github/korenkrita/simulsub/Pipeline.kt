@@ -302,7 +302,9 @@ class Pipeline(
      * ReazonSpeech sometimes drops everything before an internal pause when the same utterance is recognized again
      * with more audio (measured: "スパチありがとうございま" at 1.6 s became "いや相当でかいと思うけど" at 4.8 s; the audio is
      * an exact prefix, fp32 does the same). If the newest earlier draft that is long enough to be real content is
-     * mostly missing from the new result, its text is kept and only the audio after it is recognized.
+     * mostly missing from the new result, the audio after it is recognized on its own. Only when the new result is
+     * then little more than that part (the start really is gone) is the draft's text kept and joined with it; a new
+     * result that holds much more is a correction of the draft, not a loss, and is used as it is.
      */
     private fun recognizeKeepingLostDraft(job: AsrJob, setup: Setup): String {
         val whole = asr.recognize(job.samples).trim()
@@ -315,9 +317,14 @@ class Pipeline(
         val text = if (lost == null || !running) whole else {
             val rest = job.samples.copyOfRange(lost.first, job.samples.size)
             val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
-            log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
-                "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            if (setup.dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
+            // measured on two VTuber clips: a draft repaired once became the reference, and later whole results that
+            // corrected it ("そうそう" for its "祖父") were taken for losses too, so the old text reached the final
+            val common = lcsLength(whole, tail)
+            val real = tail.isNotEmpty() && common >= LOST_TAIL_SHARE * whole.length && common >= LOST_TAIL_SHARE * tail.length
+            log(mapOf("ev" to if (real) "asr_keep" else "asr_check", "seg" to job.segmentId, "rev" to job.revision,
+                "whole" to whole, "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
+            if (!real) whole
+            else if (setup.dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
         }
         // the history holds what was shown, so a second loss keeps the text an earlier repair saved
         if (!job.isFinal) hist += job.samples.size to text
@@ -586,6 +593,11 @@ class Pipeline(
         /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
         const val LOST_MIN_SAMPLES = 24_000
         const val LOST_MIN_CHARS = 5
+        /**
+         * A suspected loss is real when the whole result and the separately recognized new audio share at least this
+         * much of each (by characters in order). From one Mac A/B of two VTuber clips, not tuned on a reference.
+         */
+        const val LOST_TAIL_SHARE = 0.7
         /** finished sentences given to the translator as context (Index prompt 前文): default, and the most offered */
         const val PREVIOUS_SENTENCES = 2
         const val MAX_PREVIOUS_SENTENCES = 5
@@ -635,14 +647,15 @@ class Pipeline(
         private fun cjk(c: Char) = c.code >= 0x2E80 && !spacedLetter(c)
 
         /** share of [a]'s characters found, in order, in [b] */
-        fun keptRatio(a: String, b: String): Double {
-            // longest common subsequence; strings are a sentence long
+        fun keptRatio(a: String, b: String): Double = lcsLength(a, b).toDouble() / maxOf(a.length, 1)
+        /** longest common subsequence of [a] and [b]; strings are a sentence long */
+        fun lcsLength(a: String, b: String): Int {
             val dp = IntArray(b.length + 1)
             for (x in a) {
                 var prev = 0
                 for (j in 1..b.length) { val cur = dp[j]; dp[j] = if (x == b[j - 1]) prev + 1 else maxOf(dp[j], dp[j - 1]); prev = cur }
             }
-            return dp[b.length].toDouble() / maxOf(a.length, 1)
+            return dp[b.length]
         }
     }
 

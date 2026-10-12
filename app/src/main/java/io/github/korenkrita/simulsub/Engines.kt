@@ -86,8 +86,14 @@ class LlamaTranslator(m: ModelFiles, threads: Int, private val maxTokens: Int = 
     }
 
     /** Every sentence stands alone: cross-sentence context made finals worse with HY-MT and is untested with Index. */
-    override fun translate(prompt: String): MtResult? =
-        qwenChat(prompt).let { full -> nativeTranslate(handle, full, maxTokens)?.let { MtResult.parse(it, request = full) } }
+    override fun translate(prompt: String): MtResult? = translate(prompt, maxTokens)
+
+    /**
+     * [cap] is the caller's: the caption length follows the target language, which the user may change while
+     * subtitles run, so it cannot live in this shared instance (one native model serves the whole session).
+     */
+    fun translate(prompt: String, cap: Int): MtResult? =
+        qwenChat(prompt).let { full -> nativeTranslate(handle, full, cap)?.let { MtResult.parse(it, request = full) } }
 
     /** Safe from any thread until [release]; the owner must make sure no cancel() runs concurrently with release(). */
     override fun cancel() { val h = handle; if (h != 0L) nativeCancel(h) }
@@ -96,6 +102,15 @@ class LlamaTranslator(m: ModelFiles, threads: Int, private val maxTokens: Int = 
         val h = handle
         handle = 0
         if (h != 0L) nativeFree(h)
+    }
+
+    /**
+     * The local model with a caption-length cap of its own: the target language may change while subtitles run,
+     * and the cap follows it, so one shared [LlamaTranslator] (one native model) serves one [Mt] per setup.
+     */
+    class Capped(private val inner: LlamaTranslator, private val cap: Int) : Mt {
+        override fun translate(prompt: String): MtResult? = inner.translate(prompt, cap)
+        override fun cancel() = inner.cancel() // the shared model's own call; safe while it is not released
     }
 
     companion object {

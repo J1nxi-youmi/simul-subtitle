@@ -58,6 +58,29 @@ interface Mt {
 }
 
 /**
+ * What a segment is translated with: the translator, the Jev client and the prompt settings. Immutable; the
+ * session swaps in a new one when the user changes a setting while subtitles run ([Pipeline.setSetup]).
+ * A segment takes the setup current when its first job reaches the ASR thread and keeps it to the end, so its
+ * drafts, its final, the check and a retranslation never mix two settings. [version] tells setups apart (it
+ * is part of the translation reuse key, also when two setups share one translator instance).
+ */
+class Setup(
+    val mt: Mt,
+    val scene: Scene = Scene.GENERAL,
+    /** null = auto (Japanese or English) */
+    val source: Lang? = Lang.JA,
+    val target: Lang = Lang.ZH,
+    /** The translator's prompt format: false = Index ([indexPrompt]), true = BYOK ([byokUser]). */
+    val byokPrompt: Boolean = false,
+    /** null: no Jev for this setup (not configured, or paused because its key is missing) */
+    val judge: Judge? = null,
+    val dedupeJoin: Boolean = false,
+    /** finished sentences given as context; 0 = none */
+    val previousSentences: Int = Pipeline.PREVIOUS_SENTENCES,
+    val version: Int = 0,
+)
+
+/**
  * Two worker threads (ASR, MT) connected by small queues.
  *
  * "Draft then correct" contract:
@@ -71,7 +94,7 @@ interface Mt {
  */
 class Pipeline(
     private val asr: Asr,
-    private val mt: Mt,
+    mt: Mt,
     private val onCaption: (Caption) -> Unit,
     private val onBacklog: (pendingFinals: Int) -> Unit = {},
     private val onOverload: () -> Unit = {},
@@ -80,12 +103,12 @@ class Pipeline(
     private val maxPendingAudioMs: Long = 30_000,
     private val clock: () -> Long = ::monoMs,
     private val sampleRate: Int = 16_000,
-    private val scene: Scene = Scene.GENERAL,
+    scene: Scene = Scene.GENERAL,
     /** null = auto (Japanese or English); only the translator and the join of kept drafts use it */
-    private val source: Lang? = Lang.JA,
-    private val target: Lang = Lang.ZH,
+    source: Lang? = Lang.JA,
+    target: Lang = Lang.ZH,
     /** The translator's prompt format: false = Index ([indexPrompt]), true = BYOK ([byokUser]; its system message is fixed). */
-    private val byokPrompt: Boolean = false,
+    byokPrompt: Boolean = false,
     /**
      * Optional cloud judge (Jev). With it: endOfSpeech drafts are asked "unfinished?" on a separate thread and the
      * answer is offered to the segmenter through [holdHint]; every final translation is checked once and, for the
@@ -98,9 +121,9 @@ class Pipeline(
      * Where a kept draft and the recognition of the audio after it are joined, drop a repeat of the kept end at the
      * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
      */
-    private val dedupeJoin: Boolean = false,
+    dedupeJoin: Boolean = false,
     /** Finished sentences given to the translator as context (Index prompt 前文); 0 = none. */
-    private val previousSentences: Int = PREVIOUS_SENTENCES,
+    previousSentences: Int = PREVIOUS_SENTENCES,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
     private val checkTranslations: Boolean = false,
     /** Raw session events (asr / mt / jev) for the session log. Called on worker threads; must not block. */
@@ -109,12 +132,41 @@ class Pipeline(
     private val drafts: () -> Boolean = { true },
 ) {
     private class Queued(val job: AsrJob, val submittedAt: Long)
-    private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long)
+    private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long, val setup: Setup)
+
+    /** The setup new segments take; see [Setup]. The constructor's settings are the first one. */
+    @Volatile private var current = Setup(mt, scene, source, target, byokPrompt, judge, dedupeJoin, previousSentences)
+    /** Every setup a pipeline worker may still call (current + those of segments in flight), so [stop] cancels all. */
+    private val live: MutableSet<Setup> = java.util.concurrent.ConcurrentHashMap.newKeySet<Setup>().apply { add(current) }
+    /** The setup each recent segment took (ASR thread writes, MT / check threads read through their jobs). */
+    private val segSetup = java.util.concurrent.ConcurrentHashMap<Long, Setup>()
+
+    /**
+     * New segments use [s] from now on; a segment already started keeps its own. Settings fixed for the session
+     * ([judgeEnds], [checkTranslations], the drafts switch) are not part of a setup. Thread-safe; returns false
+     * once the pipeline is stopped (the caller then releases [s] itself).
+     */
+    fun setSetup(s: Setup): Boolean {
+        synchronized(lock) {
+            if (!running) return false
+            live.add(s)
+            current = s
+        }
+        if (!running) { s.mt.cancel(); s.judge?.cancel() } // stop() ran meanwhile and did not see it
+        return true
+    }
+    private fun setupOf(seg: Long): Setup = segSetup.getOrPut(seg) {
+        // keep the setups of the last few segments only; one no segment uses any more is dropped from [live]
+        segSetup.keys.removeIf { it < seg - 8 }
+        val keep = segSetup.values.toSet() + current
+        live.retainAll(keep)
+        current
+    }
 
     /** Jev answers for endOfSpeech drafts, by (segment, revision); true = unfinished. */
     private val hints = java.util.concurrent.ConcurrentHashMap<Pair<Long, Int>, Boolean>()
     /** The newest endOfSpeech draft waiting for Jev; an older one that has not started is replaced. */
-    private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Pair<AsrJob, String>?>(null)
+    private val pendingJudge = java.util.concurrent.atomic.AtomicReference<Triple<AsrJob, String, Judge>?>(null)
 
     /** For [Segmenter.holdHint]: never blocks; null until Jev answered for exactly this revision. */
     fun holdHint(segmentId: Long, revision: Int): Boolean? {
@@ -145,16 +197,17 @@ class Pipeline(
         threads = listOfNotNull(
             Thread(guarded(::asrLoop), "jpsub-asr"),
             Thread(guarded(::mtLoop), "jpsub-mt"),
-            if (judge != null && judgeEnds) Thread(guarded(::judgeLoop), "jpsub-jev") else null,
-            if (checking) Thread(guarded(::checkLoop), "jpsub-check") else null,
+            // The session switches decide whether these run at all (both are fixed for the session); a setup without
+            // a judge (its key is missing for now) simply finds nothing to ask and pauses the feature.
+            if (judgeEnds) Thread(guarded(::judgeLoop), "jpsub-jev") else null,
+            if (checkTranslations) Thread(guarded(::checkLoop), "jpsub-check") else null,
         ).onEach { it.start() }
     }
 
     /** Non-blocking. Results produced after this call are discarded. */
     fun stop() {
-        running = false
-        mt.cancel()
-        judge?.cancel()
+        synchronized(lock) { running = false }
+        live.forEach { it.mt.cancel(); it.judge?.cancel() }
         threads.forEach { it.interrupt() }
     }
 
@@ -250,7 +303,7 @@ class Pipeline(
             val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
             log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
                 "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            if (dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
+            if (setupOf(job.segmentId).dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
         }
         // the history holds what was shown, so a second loss keeps the text an earlier repair saved
         if (!job.isFinal) hist += job.samples.size to text
@@ -268,9 +321,12 @@ class Pipeline(
             val job = q.job
             log(mapOf("ev" to "asr", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal,
                 "eos" to job.endOfSpeech, "audio_ms" to audioMs(job), "ms" to end - start, "text" to ja))
+            val setup = setupOf(job.segmentId)
             if (judge != null && judgeEnds && job.endOfSpeech) {
-                // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent
-                if (ja.isEmpty()) hints[job.segmentId to job.revision] = false else pendingJudge.set(job to ja)
+                // nothing recognised = nothing to wait for; otherwise ask, replacing an older question not yet sent.
+                // No judge in this segment's setup (key missing for now): no question, the segmenter waits as without Jev
+                if (ja.isEmpty() || setup.judge == null) hints[job.segmentId to job.revision] = false
+                else pendingJudge.set(Triple(job, ja, setup.judge))
             }
             synchronized(lock) {
                 // A draft that already ran is kept even if a newer draft is queued: on a slow phone every
@@ -279,16 +335,15 @@ class Pipeline(
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 // a sentence-end candidate was recognized for Jev; it is only translated if drafts are wanted now
                 if (!q.job.isFinal && !drafts()) return@synchronized
-                mtQueue.addLast(MtJob(q, ja, start, end))
+                mtQueue.addLast(MtJob(q, ja, start, end, setup))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
             }
         }
     }
 
     private fun judgeLoop() {
-        val judge = judge!!
         while (running && !failed) {
-            val (job, ja) = pendingJudge.getAndSet(null) ?: run { Thread.sleep(10); null } ?: continue
+            val (job, ja, judge) = pendingJudge.getAndSet(null) ?: run { Thread.sleep(10); null } ?: continue
             val call = judge.unfinished(ja)
             if (!running) { logJev("unfinished", job.segmentId, job.revision, call, "stopped"); return }
             val p = call.noul
@@ -312,7 +367,7 @@ class Pipeline(
         "ev" to "jev", "kind" to kind, "seg" to seg, "rev" to rev, "request" to c.request, "status" to c.status,
         "response" to c.response, "ms" to c.ms, "error" to c.error, "action" to action))
 
-    /** Japanese of the last [previousSentences] non-empty finals translated, oldest first. MT thread only. */
+    /** Japanese of the last [MAX_PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */
     private val recentFinals = ArrayDeque<String>()
     /** newest segment whose final went through [rememberFinal] (MT thread only) */
     private var rememberedSeg = 0L
@@ -322,9 +377,9 @@ class Pipeline(
      * before the previous final) it is computed fresh and not kept. MT thread only.
      */
     private val contexts = HashMap<Long, List<String>>()
-    private fun previousFor(seg: Long): List<String> {
+    private fun previousFor(seg: Long, n: Int): List<String> {
         contexts[seg]?.let { return it }
-        val now = recentFinals.toList()
+        val now = recentFinals.toList().takeLast(n)
         if (rememberedSeg >= seg - 1) { contexts.keys.removeIf { it < seg - 8 }; contexts[seg] = now }
         return now
     }
@@ -332,48 +387,49 @@ class Pipeline(
         if (seg > rememberedSeg) rememberedSeg = seg
         if (ja.isBlank()) return
         recentFinals.addLast(ja)
-        while (recentFinals.size > previousSentences) recentFinals.removeFirst()
+        while (recentFinals.size > MAX_PREVIOUS_SENTENCES) recentFinals.removeFirst() // a later setup may ask for more
     }
 
     /** One MT call, logged with everything needed to replay it. */
-    private fun translate(job: AsrJob, attempt: Int, ja: String, notes: List<String>,
-                          previous: List<String> = previousFor(job.segmentId)): MtResult? {
-        val prompt = if (byokPrompt) byokUser(ja, notes, previous) else indexPrompt(ja, scene, notes, previous, source, target)
+    private fun translate(job: AsrJob, setup: Setup, attempt: Int, ja: String, notes: List<String>,
+                          previous: List<String>): MtResult? {
+        val prompt = if (setup.byokPrompt) byokUser(ja, notes, previous)
+            else indexPrompt(ja, setup.scene, notes, previous, setup.source, setup.target)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
-        val hit = lastMt?.takeIf { it.seg == job.segmentId && it.prompt == prompt }
+        val hit = lastMt?.takeIf { it.seg == job.segmentId && it.prompt == prompt && it.setup == setup.version }
         val t0 = clock()
-        val r = hit?.result ?: mt.translate(prompt)
+        val r = hit?.result ?: setup.mt.translate(prompt)
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
             "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
             "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs,
             "first_content_ms" to r?.firstContentMs, "cached_tokens" to r?.cachedTokens, "thinking" to r?.thinking, "ms" to clock() - t0,
             // reused: everything but ms is that of the earlier call (rev reused_from)
-            "reused" to (hit != null), "reused_from" to hit?.rev))
-        if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r)
+            "reused" to (hit != null), "reused_from" to hit?.rev, "setup" to setup.version))
+        if (hit == null && r != null && r.usable) lastMt = LastMt(job.segmentId, job.revision, prompt, r, setup.version)
         return r
     }
 
-    private class LastMt(val seg: Long, val rev: Int, val prompt: String, val result: MtResult)
+    private class LastMt(val seg: Long, val rev: Int, val prompt: String, val result: MtResult, val setup: Int)
     /** MT thread only. */
     private var lastMt: LastMt? = null
 
-    private val checking get() = judge != null && checkTranslations
     /**
      * Final only: ask Jev what is wrong with [zh]; for a class it names reliably, translate once more with the
      * matching note. Returns the text to show (the retry if it produced one, else [zh]).
      */
     private fun checked(j: MtJob, zh: String, previous: List<String>, judgeMs: (Long) -> Unit, retryMs: (Long) -> Unit): String {
-        val judge = judge?.takeIf { checkTranslations } ?: return zh
+        // the segment's setup: no judge there (key missing for now) = this final is not checked
+        val judge = j.setup.judge?.takeIf { checkTranslations } ?: return zh
         if (zh.isEmpty()) return zh
         val job = j.q.job
         val c0 = clock()
         val call = judge.mistranslation(j.ja, zh)
         judgeMs(clock() - c0) // the Jev call only; a retranslation below is translation time
         if (!running) { logJev("mistranslation", job.segmentId, job.revision, call, "stopped"); return zh }
-        val note = call.choice?.let { fixNote(it, source, target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
+        val note = call.choice?.let { fixNote(it, j.setup.source, j.setup.target) }?.takeIf { (call.confidence ?: 0.0) >= FIX_MIN_CONFIDENCE }
         if (note == null) {
             logJev("mistranslation", job.segmentId, job.revision, call, if (call.answer == null) "none" else "keep")
             return zh
@@ -436,7 +492,7 @@ class Pipeline(
             if (req != null) {
                 try {
                     val t0 = clock()
-                    req.result = translate(req.j.q.job, 2, req.j.ja, listOf(req.note), req.previous)
+                    req.result = translate(req.j.q.job, req.j.setup, 2, req.j.ja, listOf(req.note), req.previous)
                     req.ms = clock() - t0
                 } catch (t: Throwable) {
                     // visible to the waiting check thread before it wakes: it must not publish this final as checked
@@ -448,8 +504,8 @@ class Pipeline(
             if (!j.q.job.isFinal && skipDisplayDraft()) continue
             val job = j.q.job
             val start = clock()
-            val ctx = previousFor(job.segmentId)
-            val r = if (j.ja.isEmpty()) null else translate(job, 1, j.ja, emptyList(), ctx)
+            val ctx = previousFor(job.segmentId, j.setup.previousSentences)
+            val r = if (j.ja.isEmpty()) null else translate(job, j.setup, 1, j.ja, emptyList(), ctx)
             if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
             var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
@@ -458,7 +514,7 @@ class Pipeline(
                 zh = "[翻译失败] ${j.ja}"
             }
             val end = clock()
-            if (job.isFinal && checking) {
+            if (job.isFinal && checkTranslations) {
                 val real = r?.takeIf { it.usable } != null && zh.isNotEmpty()
                 // live mode shows the first translation while Jev checks it; "only finished sentences" hides it
                 if (real) onCaption(caption(j, false, job.revision, zh, start, end, end - start))

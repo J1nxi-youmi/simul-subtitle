@@ -420,8 +420,10 @@ class Pipeline(
     private fun reportJev(c: JevCall, judge: Judge, setup: Setup) {
         // a question skipped while paused asked nothing; the overlay reads the pause from the judge itself
         if (c.error == "cancelled" || c.error == "paused") return
-        val limit = c.limit ?: judge.paused()
-        onService(true, ServiceCall(c.answer != null && limit == null, c.status, c.error, limit, setup.version))
+        val paused = judge.paused()
+        // a 429 still being installed has no end yet: kept as "limited", its end read from the judge when shown
+        val limit = c.limit ?: paused?.takeIf { it !== JevLimit.INSTALLING }
+        onService(true, ServiceCall(c.answer != null && c.limit == null && paused == null, c.status, c.error, limit, setup.version))
     }
 
     /** Japanese of the last [MAX_PREVIOUS_SENTENCES] non-empty finals translated, oldest first. MT thread only. */

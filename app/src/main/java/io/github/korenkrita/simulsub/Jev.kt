@@ -41,11 +41,16 @@ class JevCall(val request: String, val status: Int, val response: String?, val m
 }
 
 /**
- * A 429 from a Jev service: no request is sent to it before [untilMs] ([realtimeMs]). [resumeAt] is the wall time
- * its Retry-After named, null when it named none (then a short backoff, retried by the next request). [free]:
- * OpenCode Zen's free usage limit (FreeUsageLimitError). [gen]: the generation this 429 started.
+ * A 429 from a Jev service: no request is sent to it before [untilMs] (the Jev client's monotonic clock). [resumeAt]
+ * is the wall time its Retry-After named, null when it named none (then a short backoff, retried by the next request).
+ * [free]: OpenCode Zen's free usage limit (FreeUsageLimitError). [gen]: the generation this 429 started.
  */
-class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean, val gen: Int = 0)
+class JevLimit(val untilMs: Long, val resumeAt: Long?, val free: Boolean, val gen: Int = 0) {
+    companion object {
+        /** [Judge.paused] while a 429 is being installed: its end is not known yet (never stored as a result's limit) */
+        val INSTALLING = JevLimit(Long.MAX_VALUE, null, false, -1)
+    }
+}
 
 
 /** What the pipeline asks; an interface so tests can answer without a network. */
@@ -56,6 +61,8 @@ interface Judge {
     fun mistranslation(ja: String, zh: String): JevCall
     /** Abort the request in progress (stop). */
     fun cancel()
+    /** The service's latest installed limit, also one that has ended (never a 429 still being installed). */
+    fun lastLimit(): JevLimit? = null
     /** The service limited requests and the pause has not ended: a question now is not sent. */
     fun paused(): JevLimit? = null
     /**
@@ -96,8 +103,9 @@ class Jev(
     override fun cancel() = calls.cancel()
     // a 429 still being installed already counts (its end is not known yet)
     override fun paused(): JevLimit? = synchronized(svc) {
-        svc.limit?.takeIf { clock() < it.untilMs } ?: if (svc.installing > 0) JevLimit(Long.MAX_VALUE, null, false, svc.gen) else null
+        svc.limit?.takeIf { clock() < it.untilMs } ?: if (svc.installing > 0) JevLimit.INSTALLING else null
     }
+    override fun lastLimit(): JevLimit? = synchronized(svc) { svc.limit }
     override fun limitedAfter(gen: Int): Boolean = synchronized(svc) { gen >= 0 && svc.gen > gen }
 
     private fun ask(state: Map<String, String>, question: Map<String, Any>): JevCall {

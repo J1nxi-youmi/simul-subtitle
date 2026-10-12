@@ -346,6 +346,24 @@ class SegmenterTest {
     }
 
     @Test
+    fun aForcedCutHoldMadeStaleLaterCutsAtOnceWhereItWouldHave() {
+        // "unfinished" first; once the segmenter has taken it the hint turns to "finished" (a 429 made it stale)
+        val jobs = ArrayList<AsrJob>()
+        var asked = 0
+        // "unfinished" while the segmenter takes it (a few frames), "finished" from then on
+        val s = Segmenter(jobs::add, maxUtteranceMs = 3000, minFinalMs = 1200, maxHoldSilenceMs = 1500, hintWaitMs = 900,
+            holdHint = { _, _ -> ++asked <= 3 })
+        val total = run(listOf(true to 3600), s)
+        val finals = jobs.filter { it.isFinal }
+        // cut soon after it turned stale (3 s + a few frames), not at the hard limit (6 s)
+        assertEquals(1, finals.size)
+        assertTrue(finals[0].samples.size <= 3000 * 16 + 512)
+        s.flush()
+        // every frame exactly once, in order
+        assertEquals((1..total).toList(), jobs.filter { it.isFinal }.flatMap(::frameIds))
+    }
+
+    @Test
     fun aStaleForcedCutAnswerNeverCutsAtTheOldPlace() {
         // forced-cut candidate (unfinished) → long utterance continues → a pause candidate → speech resumes →
         // the judge now says "finished" about the *old* cut: that must not cut back at the old position

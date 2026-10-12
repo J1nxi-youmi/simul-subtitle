@@ -61,4 +61,19 @@ class ServiceStateTest {
         // the translator not asked yet: nothing claimed about it
         assertEquals("⚠ Jev 请求受限，稍后重试 · 断句改按停顿", warn(null, limited(false, null)))
     }
+
+    @Test
+    fun aLimitReportedWhileBeingInstalledShowsTheInstalledOneLater() {
+        // the result was taken before the 429's end was known: no end of its own
+        val last = ServiceCall(false, 429, "deadline 2000ms", null, 0)
+        val installed = JevLimit(now - 1, null, false) // installed, and already over
+        val shown = CaptionService.jevShown(last, null, installed, 0)!!
+        assertEquals(Light.YELLOW, CaptionService.light(shown, true))
+        assertTrue(warn(ok, shown)!!.contains("下一句重试"))
+        // while still being installed (or live) the live pause wins
+        val live = JevLimit(now + 60_000, null, false)
+        assertEquals(live, CaptionService.jevShown(last, live, installed, 0)!!.limit)
+        // a working last result stays as it was
+        assertEquals(ok, CaptionService.jevShown(ok, null, installed, 0))
+    }
 }

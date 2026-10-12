@@ -78,6 +78,8 @@ class Segmenter(
     private var cutAtFrames = 0
     /** this utterance's forced cut was judged unfinished or superseded: no further cut question until the hard limit */
     private var cutClosed = false
+    /** the forced-cut revision whose "unfinished" answer keeps this utterance growing (-1: none); rechecked per frame */
+    private var heldRevision = -1
     // this utterance's judged-hold settings, fixed when it starts ([beginUtterance])
     private var waitMs = hintWaitMs
     private var maxMs = maxUtteranceMs
@@ -137,6 +139,7 @@ class Segmenter(
             inPause -> if (waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
                 // a newer candidate end replaces an open forced-cut question, and closes it for this utterance
                 if (cutRevision >= 0) { cutRevision = -1; cutClosed = true }
+                heldRevision = -1 // and a hold taken on the forced cut: this newer candidate decides now
                 resumedRevision = -1 // this newer candidate supersedes one the speaker talked past
                 tailRevision = ++revision
                 tailCut = speechEnd
@@ -170,6 +173,8 @@ class Segmenter(
      */
     private fun forcedCutStep(durMs: Int): Boolean {
         if (waitMs <= 0 || durMs >= hardMaxMs) { finalize(forcedCut(), continueSpeech = true); return true }
+        // a hold taken earlier is only as good as its answer: one a 429 made stale since cuts where it would have
+        if (heldRevision >= 0 && holdHint(segmentId, heldRevision) == false) { finalize(cutIndex, continueSpeech = true); return true }
         if (cutClosed) return false
         if (cutRevision < 0) {
             cutIndex = forcedCut()
@@ -180,7 +185,7 @@ class Segmenter(
             return true
         }
         when (holdHint(segmentId, cutRevision)) {
-            true -> { cutClosed = true; cutRevision = -1 }
+            true -> { cutClosed = true; heldRevision = cutRevision; cutRevision = -1 }
             false -> { finalize(cutIndex, continueSpeech = true); return true }
             null -> if ((frames.size - cutAtFrames) * frameMs >= waitMs) { finalize(cutIndex, continueSpeech = true); return true }
         }
@@ -217,6 +222,7 @@ class Segmenter(
         resumedRevision = -1
         cutRevision = -1
         cutClosed = false
+        heldRevision = -1
         val tail = frames.subList(count, frames.size).toList()
         frames.clear()
         // A cut that leaves nothing behind ends the utterance: the next one starts with its first speech frame, and only

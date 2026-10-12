@@ -65,14 +65,8 @@ class CaptionService : Service() {
     @Volatile private var overloaded = false
     /** the Jev client of the setup published last; its pause shows without a new request. Main thread only. */
     private var activeJudge: Judge? = null
-    /**
-     * Jev's light state: a pause the current client is in wins (also one from before this session, or newer than the
-     * last result's); otherwise the last real result.
-     */
-    private fun jevNow(): ServiceCall? {
-        val p = activeJudge?.paused() ?: return jevState
-        return ServiceCall(false, 429, "paused", p, jevFrom)
-    }
+    /** Jev's light state now ([jevShown]); main thread only. */
+    private fun jevNow(): ServiceCall? = jevShown(jevState, activeJudge?.paused(), activeJudge?.lastLimit(), jevFrom)
     /** the translator in use: BYOK by the service its probe accepted, others by model */
     private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
@@ -804,6 +798,17 @@ class CaptionService : Service() {
             c.limit != null || c.http == 429 -> CaptionOverlayView.Light.YELLOW
             c.ok -> CaptionOverlayView.Light.GREEN
             else -> CaptionOverlayView.Light.RED
+        }
+
+        /**
+         * Jev's light state: a pause the client is in ([paused]) wins (also one from before this session, or newer than
+         * the last result's). Otherwise the last real result ([last]); when that was a limit, with the service's
+         * installed one ([installed]): the result may have been taken while it was still being installed.
+         */
+        fun jevShown(last: ServiceCall?, paused: JevLimit?, installed: JevLimit?, from: Int): ServiceCall? {
+            if (paused != null) return ServiceCall(false, 429, "paused", paused, from)
+            if (last == null || (last.limit == null && last.http != 429)) return last
+            return ServiceCall(last.ok, last.http, last.error, installed ?: last.limit, last.setup)
         }
 
         /** Why a light is not green, short; null for a working one. */

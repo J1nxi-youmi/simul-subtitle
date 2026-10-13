@@ -2,6 +2,7 @@
 # Run the real pipeline (Silero VAD → Segmenter → Pipeline → ReazonSpeech → Index-Translate) on the Mac,
 # streaming a 16 kHz mono WAV in real time. Needs ../../models (./setup.sh) and network for the first run.
 #   tools/mac-e2e/run.sh [file.wav]     default: synthesise Japanese test sentences with `say -v Kyoko`
+#   tools/mac-capture/build/sysaudio 30 | tools/mac-e2e/run.sh -   live: what the Mac plays (see tools/mac-capture)
 #   JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh   negative check: must exit non-zero
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."

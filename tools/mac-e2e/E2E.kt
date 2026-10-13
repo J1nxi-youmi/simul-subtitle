@@ -73,6 +73,17 @@ fun main() {
            maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
            hintWaitMs = if (judgeEnds) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
            holdHint = p::holdHint)
+        if (System.getProperty("wav") == "-") {
+            // live: 16 kHz mono float32 LE on stdin (tools/mac-capture/build/sysaudio), until it ends
+            val input = java.io.DataInputStream(java.io.BufferedInputStream(System.`in`))
+            val b = ByteArray(512 * 4)
+            while (true) {
+                try { input.readFully(b) } catch (_: java.io.EOFException) { break }
+                val bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val f = FloatArray(512) { bb.getFloat() }
+                seg.accept(f, vad.compute(f), monoMs())
+            }
+        } else {
         // stream the wav in real time
         val ais = AudioSystem.getAudioInputStream(File(System.getProperty("wav")))
         val bytes = ais.readAllBytes()
@@ -83,6 +94,7 @@ fun main() {
             val due = start + i * 1_000_000_000L / 16000
             while (System.nanoTime() < due) Thread.sleep(1)
             seg.accept(f, vad.compute(f), monoMs())
+        }
         }
         seg.flush()
         // wait until every accepted final has been delivered (bounded), instead of a fixed sleep

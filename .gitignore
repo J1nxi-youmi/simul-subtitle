@@ -7,3 +7,4 @@ local.properties
 app/libs/
 models/
 tools/mac-e2e/build/
+tools/mac-capture/build/

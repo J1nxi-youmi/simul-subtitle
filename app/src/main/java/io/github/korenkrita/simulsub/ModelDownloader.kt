@@ -229,8 +229,9 @@ class ModelDownloader private constructor(ctx: Context) {
     /**
      * A transfer that is connecting or waiting to retry while its counted bytes stay 0 for [STALL_MS] counts as
      * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once bytes are counted it is
-     * never cut off: it waits for the connection to come back (switching would start the file over). The count moves
-     * in steps of 64 KiB, so a source stuck before that (a few KB at most) is switched too, as agreed. Queued jobs and
+     * never cut off: it waits for the connection to come back (switching would start the file over). The count is
+     * reported late (64 KiB steps, throttled), so a source that sent a little before stalling may be switched too, as
+     * agreed. Queued jobs and
      * jobs waiting for the network are never cut off. Only checked while the app is open (the UI polls [state]).
      */
     private fun stalled(s: ModelSpec, j: Job): Boolean {

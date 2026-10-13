@@ -154,7 +154,7 @@ class CaptionService : Service() {
             val v0 = order.version()
             val s0 = Snap(prefs, wantJev)
             if (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null) {
-                setStatus("⚠ 翻译模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
+                setStatus("⚠ LLM API 还没填完整（地址、key、模型 ID），请到设置「翻译」里填好"); Log.w(TAG, "byok incomplete"); return
             }
             val t0 = monoMs()
             // the models ship inside the APK: sherpa-onnx reads them from the assets

@@ -15,7 +15,7 @@
         android:paddingTop="8dp"
         android:paddingBottom="32dp">
 
-        <!-- ===== home page: one status row with the start button, permissions while missing, the two languages ===== -->
+        <!-- ===== home page: one card (status, the two languages, the start button, the translation service), permissions while missing ===== -->
         <LinearLayout
             android:id="@+id/homePage"
             android:layout_width="match_parent"
@@ -56,7 +56,7 @@
                 android:paddingHorizontal="4dp"
                 android:text="把视频、直播里的日语和英语，实时变成字幕" />
 
-            <!-- status + the one action -->
+            <!-- status, languages, the one action and the service it translates with -->
             <com.google.android.material.card.MaterialCardView
                 style="@style/ListCard"
                 android:layout_marginTop="12dp">
@@ -94,6 +94,21 @@
                         android:layout_marginTop="4dp"
                         android:paddingStart="16dp" />
 
+                    <!-- what is spoken → what the captions are in -->
+                    <LinearLayout
+                        android:id="@+id/langBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal" />
+
+                    <TextView
+                        android:id="@+id/langHint"
+                        style="@style/RowSub"
+                        android:layout_marginTop="6dp"
+                        android:paddingHorizontal="4dp" />
+
                     <com.google.android.material.progressindicator.LinearProgressIndicator
                         android:id="@+id/progress"
                         android:layout_width="match_parent"
@@ -127,6 +142,38 @@
                         android:layout_height="wrap_content"
                         android:minHeight="48dp"
                         android:visibility="gone" />
+
+                    <!-- the translation service in use; opens 设置 › 翻译 -->
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:background="@color/line" />
+
+                    <LinearLayout
+                        android:id="@+id/serviceRow"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="?attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp">
+
+                        <TextView
+                            android:id="@+id/serviceText"
+                            style="@style/RowSub"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:paddingStart="4dp" />
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_chevron_right"
+                            app:tint="@color/muted" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -151,31 +198,11 @@
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
 
-            <!-- the two language choices -->
-            <TextView
-                style="@style/SectionTitle"
-                android:text="语言" />
-
-            <com.google.android.material.card.MaterialCardView style="@style/ListCard">
-
-                <LinearLayout
-                    android:id="@+id/langBox"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical" />
-            </com.google.android.material.card.MaterialCardView>
-
-            <TextView
-                android:id="@+id/langHint"
-                style="@style/RowSub"
-                android:layout_marginTop="8dp"
-                android:paddingHorizontal="8dp" />
-
             <TextView
                 style="@style/RowSub"
                 android:layout_marginTop="16dp"
                 android:paddingHorizontal="8dp"
-                android:text="声音只在手机上识别，不会上传；翻译时只把识别出的文字发给你填的翻译服务。" />
+                android:text="声音只在手机上识别，不会上传；翻译时只把识别出的文字发给你填的 LLM API。" />
         </LinearLayout>
 
         <!-- ===== settings page: magpie's preferences — a category switch at the top, one list per category ===== -->
@@ -607,7 +634,7 @@
                     android:background="@drawable/tips_bg"
                     android:lineSpacingExtra="4dp"
                     android:padding="14dp"
-                    android:text="0. 第一次用：在「设置 → 翻译」里填好你自己的翻译模型服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个开锁按钮，点它就解锁。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。同时有别的 App 在放声音时，它的声音也可能出现在字幕里。\n5. 在「记录」里打开「记录每次使用」后，每次使用会留下一份文字记录（不含声音和 key），可以分享出去，帮助反馈问题。默认不记录。"
+                    android:text="0. 第一次用：在「设置 → 翻译 → LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个开锁按钮，点它就解锁。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。同时有别的 App 在放声音时，它的声音也可能出现在字幕里。\n5. 在「记录」里打开「记录每次使用」后，每次使用会留下一份文字记录（不含声音和 key），可以分享出去，帮助反馈问题。默认不记录。"
                     android:textColor="@color/text2"
                     android:textSize="14sp" />
 

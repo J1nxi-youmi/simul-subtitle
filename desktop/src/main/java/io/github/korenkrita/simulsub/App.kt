@@ -62,7 +62,7 @@ private fun sizeText(b: Long) = if (b >= 1e6) "%.1f MB".format(b / 1e6) else "%.
 
 /** Starts captions from the home screen, the menu bar or the toolbar; null when it cannot, with the reason. */
 private fun startCaptions(): String? {
-    if (!prefs.byokReady) return "翻译模型还没填完整：请在设置「翻译」里填好服务地址、模型 ID 和 API Key 并保存。"
+    if (!prefs.byokReady) return "LLM API 还没填完整：请在设置「翻译」里填好服务地址、模型 ID 和 API Key 并保存。"
     if (!sysaudioFile.canExecute()) return "找不到系统声音采集程序（${sysaudioFile.path}）"
     // a 测试连接 still running would probe the same service the session probes on first use (billed twice)
     byokTest.value?.cancel(); byokTest.value = null
@@ -126,6 +126,8 @@ private class TrayIcon(val on: Boolean) : Painter() {
 private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
     var settings by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(0) }
+    // 设置 › 翻译, where the LLM API is filled in (the home card's service row and its 去填写)
+    val openTranslate = { tab = 1; settings = true }
     Column(Modifier.fillMaxSize()) {
         if (!settings) {
             Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -133,7 +135,7 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
                 Grow()
                 TextBtn("设置") { settings = true }
             }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) { Home(startError, setStartError) }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) { Home(startError, setStartError, openTranslate) }
         } else {
             Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp)) {
                 TextBtn("‹ 返回") { settings = false }
@@ -152,53 +154,64 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
 // ---- home --------------------------------------------------------------------------------------------------
 
 @Composable
-private fun Home(startError: String?, setStartError: (String?) -> Unit) {
+private fun Home(startError: String?, setStartError: (String?) -> Unit, openTranslate: () -> Unit) {
     val running by CaptionService.runningState
     val ended by CaptionService.endedState
     Text("把视频、直播里的日语和英语，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
+    // one card: status, the two languages, the one action, and the LLM API it translates with
     Card {
         @Composable fun status(color: Color, title: String, body: String) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Dot(color); Spacer(Modifier.width(10.dp)); Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
-            Text(body, color = C.text2, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(start = 19.dp, top = 6.dp, bottom = 14.dp))
+            Text(body, color = C.text2, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(start = 19.dp, top = 6.dp, bottom = 12.dp))
         }
+        @Composable fun bigButton(fill: Color, onClick: () -> Unit, content: @Composable () -> Unit) =
+            Box(Modifier.fillMaxWidth().height(44.dp).background(fill, RoundedCornerShape(10.dp)).clickable { onClick() },
+                contentAlignment = Alignment.Center) { content() }
+        val ready = prefs.byokReady
         when {
-            running && ended -> {
-                status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
-                Btn("关掉字幕", modifier = Modifier.fillMaxWidth()) { CaptionService.stop() }
-            }
-            running -> {
-                status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，菜单栏图标里可以停止。")
-                Box(Modifier.fillMaxWidth().height(44.dp).background(C.errSoft, RoundedCornerShape(10.dp)).clickable { CaptionService.stop() },
-                    contentAlignment = Alignment.Center) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(12.dp).background(C.err, RoundedCornerShape(2.dp)))
-                        Spacer(Modifier.width(10.dp)); Text("停止字幕", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-            else -> {
-                if (startError != null) status(C.err, "还不能开始", startError)
-                else status(C.brand, "可以开始了", "点下面的按钮开始。第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
-                Box(Modifier.fillMaxWidth().height(44.dp).background(C.brand, RoundedCornerShape(10.dp))
-                    .clickable { setStartError(startCaptions()) }, contentAlignment = Alignment.Center) {
-                    Text("▶  开始字幕", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
+            running && ended -> status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
+            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，菜单栏图标里可以停止。")
+            !ready -> status(C.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
+            startError != null -> status(C.err, "还不能开始", startError)
+            else -> status(C.brand, "可以开始了", "点下面的按钮开始。第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
         }
-    }
-    GroupTitle("语言")
-    Card {
+        // what is spoken → what the captions are in (a running session: from the next sentence)
         val sources = Lang.SOURCES
-        PickRow("视频里说的是", sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0)) {
-            prefs.sourceLang = sources[it]
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Dropdown(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), modifier = Modifier.weight(1f)) {
+                prefs.sourceLang = sources[it]
+            }
+            Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
+            Dropdown(Lang.entries.map { it.zh }, prefs.targetLang.ordinal, modifier = Modifier.weight(1f)) { prefs.targetLang = Lang.entries[it] }
         }
-        Divider()
-        PickRow("字幕翻译成", Lang.entries.map { it.zh }, prefs.targetLang.ordinal) { prefs.targetLang = Lang.entries[it] }
+        Hint(if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。" else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。")
+        Spacer(Modifier.height(12.dp))
+        when {
+            running && ended -> Btn("关掉字幕", modifier = Modifier.fillMaxWidth()) { CaptionService.stop() }
+            running -> bigButton(C.errSoft, { CaptionService.stop() }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(12.dp).background(C.err, RoundedCornerShape(2.dp)))
+                    Spacer(Modifier.width(10.dp)); Text("停止字幕", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            !ready -> bigButton(C.brand, openTranslate) { Text("去填写", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+            else -> bigButton(C.brand, { setStartError(startCaptions()) }) {
+                Text("▶  开始字幕", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.height(12.dp)); Divider()
+        // the LLM API in use; opens 设置 › 翻译
+        val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { java.net.URI(it).host }
+        Row(Modifier.fillMaxWidth().clickable { openTranslate() }.padding(top = 10.dp, bottom = 2.dp, start = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(if (ready) "翻译：${prefs.byokModel} · $host" else "翻译：还没填 LLM API", color = C.text2, fontSize = 14.sp,
+                modifier = Modifier.weight(1f), maxLines = 1)
+            Text("›", color = C.muted, fontSize = 18.sp)
+        }
     }
-    Hint(if (running) "字幕运行中，改了从下一句开始生效。" else "知道是哪种语言就选上，翻译会更准。")
-    Hint("声音只在电脑上识别，不会上传；用在线翻译时，会把识别出的文字发给翻译接口。")
+    Hint("声音只在电脑上识别，不会上传；翻译时只把识别出的文字发给你填的 LLM API。")
 }
 
 // ---- 字幕 --------------------------------------------------------------------------------------------------
@@ -264,11 +277,8 @@ private val byokResult = mutableStateOf<String?>(null)
 @Composable
 private fun TranslateTab() {
     val running by CaptionService.runningState
-    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
-    Group("怎么翻译") {
-        Hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。")
-        Byok(running)
-    }
+    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
+    Group("LLM API") { Byok(running) }
     Group("内容") {
         Label("内容类型")
         Seg(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it }
@@ -325,7 +335,7 @@ private fun TranslateTab() {
 
 @Composable
 private fun Byok(running: Boolean) {
-    Hint("翻译用你自己的模型服务（OpenAI 兼容接口）。只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
+    Hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
     var url by remember { mutableStateOf(prefs.byokUrl) }
     var model by remember { mutableStateOf(prefs.byokModel) }
     var key by remember { mutableStateOf("") }
@@ -471,7 +481,8 @@ private fun LogsTab() {
 @Composable
 private fun AboutTab() {
     Group("使用说明") {
-        Text("1. 点首页的「开始字幕」。第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。\n" +
+        Text("0. 第一次用：在「设置 › 翻译 › LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n" +
+            "1. 点首页的「开始字幕」。第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。\n" +
             "2. 字幕浮在所有窗口上面：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n" +
             "3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个解锁按钮，点它就解锁。\n" +
             "4. 字幕听的是这台 Mac 播放出来的所有声音，不用麦克风；同时有别的 App 在放声音时，它的声音也会出现在字幕里。\n" +

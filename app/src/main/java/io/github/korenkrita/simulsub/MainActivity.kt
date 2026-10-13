@@ -198,22 +198,44 @@ class MainActivity : Activity() {
         if (!back()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    /** The home page's two questions: what is spoken, what the captions should be in. Next start, like the settings. */
+    /** The home card's two questions, side by side: what is spoken → what the captions should be in. Next sentence. */
     private fun renderLang() {
         val box = findViewById<LinearLayout>(R.id.langBox)
         box.removeAllViews()
         val running = CaptionService.running
         val sources = Lang.SOURCES
+        fun weighted(v: View) = v.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
         // a running session takes a new language from the next sentence
-        box.addView(pickRow("视频里说的是", sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), true) {
+        box.addView(weighted(dropdown(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), true, wrap = true) {
             if (prefs.sourceLang != sources[it]) { prefs.sourceLang = sources[it]; renderTranslate() }
+        }).apply { contentDescription = "视频里说的是" })
+        box.addView(TextView(this).apply {
+            text = "→"; textSize = 16f; setTextColor(getColor(R.color.muted)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0)
         })
-        box.addView(divider())
         val targets = Lang.entries
-        box.addView(pickRow("字幕翻译成", targets.map { it.zh }, prefs.targetLang.ordinal, true) {
+        box.addView(weighted(dropdown(targets.map { it.zh }, prefs.targetLang.ordinal, true, wrap = true) {
             if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate() }
-        })
-        findViewById<TextView>(R.id.langHint).text = if (running) "字幕运行中，改了从下一句开始生效。" else "知道是哪种语言就选上，翻译会更准。"
+        }).apply { contentDescription = "字幕翻译成" })
+        findViewById<TextView>(R.id.langHint).text = if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。"
+            else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。"
+    }
+
+    /** The home card's last row: the LLM API translations go to (or that none is set up yet); opens 设置 › 翻译. */
+    private fun renderService() {
+        val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { android.net.Uri.parse(it).host }
+        findViewById<TextView>(R.id.serviceText).text =
+            if (prefs.byokReady) "翻译：${prefs.byokModel} · $host" else "翻译：还没填 LLM API"
+        findViewById<View>(R.id.serviceRow).setOnClickListener { openTranslate() }
+    }
+
+    /** 设置 › 翻译, where the LLM API is filled in. */
+    private fun openTranslate() {
+        showSettings(true)
+        // through the category switch, so its checked button follows (its listener shows the tab)
+        val g = findViewById<android.widget.FrameLayout>(R.id.tabBox).getChildAt(0) as com.google.android.material.button.MaterialButtonToggleGroup
+        val want = TABS.indexOfFirst { it.first == R.id.tabTranslate }
+        (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == want }?.let { g.check(it.id) }
     }
 
     override fun onResume() {
@@ -276,8 +298,17 @@ class MainActivity : Activity() {
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
             val hint = if (missingPerm) "点下面的按钮，按提示允许下方两项，就能开始。" else "点下面的按钮，再在弹出的窗口里选你要看的 App。"
-            if (!prefs.byokReady) status(R.color.err, "翻译模型还没填完整", "请在设置的「怎么翻译」里填好服务地址、模型 ID 和 API Key 并保存。")
-            else if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
+            renderService()
+            if (!prefs.byokReady) {
+                // nothing else to set up: without an LLM API there is nothing to start, so the one action goes there
+                status(R.color.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
+                primary.text = "去填写"; primary.setIconResource(R.drawable.ic_settings)
+                primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
+                onPrimary(R.color.on_brand)
+                primary.setOnClickListener { openTranslate() }
+                return
+            }
+            if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
             else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
@@ -525,12 +556,11 @@ class MainActivity : Activity() {
         root.removeAllViews()
         val running = CaptionService.running
         translateRunning = running
-        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
+        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
-        // -- how it translates
-        var box = group(root, "怎么翻译")
-        box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
+        // -- the LLM API the captions are translated with
+        var box = group(root, "LLM API")
         renderByok(box, running)
 
         box = group(root, "内容")
@@ -626,8 +656,7 @@ class MainActivity : Activity() {
 
     /** BYOK: the user's OpenAI-compatible service; URL, key, model id and a test that also finds the thinking switch. */
     private fun renderByok(box: LinearLayout, running: Boolean) {
-        box.addView(hint("翻译用你自己的模型服务（OpenAI 兼容接口）。只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"),
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (10 * dpx).toInt() })
+        box.addView(hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"))
         fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
             box.addView(label(title))
             return android.widget.EditText(this).apply {

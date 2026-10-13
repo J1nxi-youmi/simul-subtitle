@@ -54,7 +54,7 @@
 
 ## Get started in three steps
 
-1. **Set up translation**: tap the gear at the top right of the home screen, go to Settings → 翻译, fill in the service address, model ID and API key, then tap 测试连接 (test). The model must be able to turn thinking off and should answer fast (see the FAQ).
+1. **Set up the LLM API**: on first launch the home screen asks for it; tap 去填写 (or go to Settings → 翻译), fill in the service address, model ID and API key, then tap 测试连接 (test). The model must be able to turn thinking off and should answer fast (see the FAQ).
 2. **Allow**: let the app hear other apps' sound and draw over other apps.
 3. **Start**: tap 开始字幕, pick the app you want to watch, and go back to your video.
 

@@ -24,7 +24,7 @@
     <td><img src="docs/images/screens/overlay.png" width="300" alt="悬浮字幕（点一下出工具栏）"></td>
     <td><img src="docs/images/screens/caption.png" width="200" alt="设置 · 字幕"></td>
     <td><img src="docs/images/screens/size.png" width="200" alt="字幕框大小和保留几句"></td>
-    <td><img src="docs/images/screens/translate.png" width="200" alt="设置 · 翻译"></td>
+    <td><img src="docs/images/screens/translate.png" width="200" alt="设置 · 翻译（LLM API）"></td>
     <td><img src="docs/images/screens/page-dark.png" width="200" alt="设置 · 页面（夜间）"></td>
     <td><img src="docs/images/screens/records.png" width="200" alt="设置 · 记录"></td>
     <td><img src="docs/images/screens/about.png" width="200" alt="设置 · 关于"></td>
@@ -35,7 +35,7 @@
     <td align="center">悬浮字幕（点一下出工具栏）</td>
     <td align="center">设置 · 字幕</td>
     <td align="center">字幕框大小和保留几句</td>
-    <td align="center">设置 · 翻译</td>
+    <td align="center">设置 · 翻译（LLM API）</td>
     <td align="center">设置 · 页面（夜间）</td>
     <td align="center">设置 · 记录</td>
     <td align="center">设置 · 关于</td>
@@ -50,11 +50,11 @@
 - **边听边出**：说话人一开口，字幕就开始出现；一句说完，再变成正式字幕。
 - **听写在手机上完成**：声音只在你的手机里识别成文字，**不会上传**。
 - **可以翻成 22 种语言**：中文、英语、日语、韩语、法语、德语、西班牙语、俄语、阿拉伯语、泰语、越南语……
-- **用你自己的翻译模型**：填上任意 OpenAI 兼容服务的地址、模型 ID 和 key（例如 DeepSeek、通义千问），按你自己的用量计费。
+- **用你自己的 LLM API 翻译**：填上任意 OpenAI 兼容服务的地址、模型 ID 和 key（例如 DeepSeek、通义千问），按你自己的用量计费。
 
 ## 三步开始
 
-1. **填翻译服务**：点首页右上角的齿轮，进入「设置 → 翻译」，填好服务地址、模型 ID 和 API Key，点「测试连接」。模型要能关闭思考，并且尽量选回复快的（见下面的常见问题）。
+1. **填 LLM API**：第一次打开，首页会提示「先填翻译用的 LLM API」，点「去填写」（或者「设置 → 翻译」），填好服务地址、模型 ID 和 API Key，点「测试连接」。模型要能关闭思考，并且尽量选回复快的（见下面的常见问题）。
 2. **允许**：按提示允许「听 App 的声音」和「在屏幕上显示字幕」。
 3. **开始**：点「开始字幕」，在弹出的窗口里选你要看的 App，回到视频就能看到字幕。
 
@@ -96,7 +96,7 @@
 现在能听日语和英语。在首页选好视频里说的语言，翻译会更准。
 
 **会上传我的声音吗？**
-不会。声音在手机上变成文字；翻译时只把识别出的文字发给你填的翻译服务。详见 [隐私说明](docs/privacy.md)。
+不会。声音在手机上变成文字；翻译时只把识别出的文字发给你填的 LLM API。详见 [隐私说明](docs/privacy.md)。
 
 **翻译模型怎么选？**
 必须是能关闭思考（深度思考 / reasoning）的模型，否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。第一次用某个模型时，App 会自动试出关闭思考的参数并记住。

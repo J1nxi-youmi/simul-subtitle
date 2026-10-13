@@ -18,7 +18,7 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
 }
 
 /**
- * The target languages offered (the 22 core languages of Index-Translate, technical report table 31), with the names
+ * The target languages offered (22 widely spoken languages), with the names
  * the translation prompt uses and English names for the Jev questions. Targets: all. Sources: [SOURCES].
  */
 enum class Lang(val code: String, val zh: String, val en: String) {

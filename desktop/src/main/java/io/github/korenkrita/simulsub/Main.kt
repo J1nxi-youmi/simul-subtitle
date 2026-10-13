@@ -24,5 +24,10 @@ fun main() {
     // Cmd-Q / SIGTERM: the helper only notices a lost reader when it next writes, so end it here (not via the UI
     // thread, which may already be gone)
     Runtime.getRuntime().addShutdownHook(Thread { CaptionService.killCapture() })
+    // Up to 0.6.5 the models were downloaded into the data folder (the local translation model 1.3 GB); they are
+    // inside the app now, so the old copies only take space: removed in the background (the models in use are
+    // elsewhere, unless -Dsimulsub.models points at that folder)
+    val old = File(dataDir, "models")
+    if (old.canonicalFile != modelsDir.canonicalFile) Thread { old.deleteRecursively() }.apply { isDaemon = true }.start()
     app()
 }

@@ -63,7 +63,7 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun start() {
         errors.clear(); failed.clear(); rejected.clear(); store.specs.forEach { prefs.setPendingSource(it.path, -1) }; prefs.downloadCancelled = false
-        if (!choosing) prefs.downloadChoosing = false // set again below if a check starts
+        if (!choosing) prefs.downloadBatch = emptySet() // set again below if a check starts
         // copies kept by older versions after a failed check: free the space before downloading again
         maintenanceWarning = store.removeRejected()
         maintenanceWarning?.let { errors["bad"] = it; return }
@@ -82,12 +82,19 @@ class ModelDownloader private constructor(ctx: Context) {
             fresh += s
         }
         if (fresh.isEmpty() || choosing) return
-        // Choose this batch's route first: every tier tries the smallest file at once (a few KB, thrown away). The
-        // official tier wins if it answers within the check, otherwise the lowest tier that answered; all files then
-        // start there. Nothing answered (e.g. no network yet): the full route, which DownloadManager waits out.
-        // [Prefs.downloadChoosing] stays set until every file is enqueued, so a process that ends in between resumes.
+        // [Prefs.downloadBatch] keeps these files until each is enqueued, so a process that ends in between resumes
+        // them, and only them (a file rejected meanwhile has its own continuation or error)
         prefs.downloadTier = -1
-        prefs.downloadChoosing = true
+        prefs.downloadBatch = fresh.map { it.path }.toSet()
+        choose()
+    }
+
+    /**
+     * Chooses this batch's route: every tier tries the smallest file at once (a few KB, thrown away). The official
+     * tier wins if it answers within the check, otherwise the lowest tier that answered; the batch's files then start
+     * there. Nothing answered (e.g. no network yet): the full route, which DownloadManager waits out.
+     */
+    private fun choose() {
         choosing = true
         val gen = ++chooseGen
         val probe = store.specs.minBy { it.size }
@@ -106,18 +113,18 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /**
-     * Enqueues, on the chosen tier, every file the mode needs now that has no job yet, then ends the batch's
-     * choosing phase. Main thread; run again after a process death in between (enqueued files are skipped).
+     * Enqueues, on the chosen tier, the batch's files the mode still needs and that have no job yet, then ends the
+     * batch. Main thread; run again after a process death in between (enqueued files are skipped).
      */
     private fun schedule() {
+        val batch = prefs.downloadBatch
         for (s in store.required()) {
-            if (store.isInstalled(s) || store.file(s).isFile || s.path in queued) continue
+            if (s.path !in batch || store.isInstalled(s) || store.file(s).isFile || s.path in queued) continue
             adoptOrphan(s)
-            // has a job, or a rejected one whose next source [state] continues from
-            if (recorded(s) != null || prefs.pendingSource(s.path) >= 0) continue
+            if (recorded(s) != null) continue
             enqueue(s, route(s).first())
         }
-        prefs.downloadChoosing = false
+        prefs.downloadBatch = emptySet()
     }
 
     /** The probe file comes back whole and right from [url] (a proxy may answer with an error page). */
@@ -258,7 +265,7 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun cancel() {
         prefs.downloadCancelled = true; store.specs.forEach { prefs.setPendingSource(it.path, -1) } // remembered across process death: no source switch until 下载 / 重试
-        chooseGen++; choosing = false; prefs.downloadChoosing = false // a route check still running starts nothing
+        chooseGen++; choosing = false; prefs.downloadBatch = emptySet() // a route check still running starts nothing
         for (s in store.specs) {
             if (s.path in queued) continue // already downloaded; let verification finish
             prefs.downloadId(s.path).takeIf { it >= 0 }?.let { dm.remove(it); prefs.setDownloadId(s.path, -1) }
@@ -277,9 +284,10 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun state(): State {
         var done = 0L; var running = false
-        // a batch the process did not live to set up: enqueue the rest on its tier, or check again if none was chosen
-        if (prefs.downloadChoosing && !choosing && !prefs.downloadCancelled) {
-            if (prefs.downloadTier >= 0) schedule() else start()
+        // a batch the process did not live to set up: enqueue the rest on its tier, or choose again if none was
+        // chosen. Not start(): that would reset continuations and errors saved meanwhile, which only 下载 / 重试 do.
+        if (prefs.downloadBatch.isNotEmpty() && !choosing && !prefs.downloadCancelled) {
+            if (prefs.downloadTier >= 0) schedule() else choose()
         }
         // a download of a file the mode no longer needs keeps running (cancel() stops it), it just is not counted
         for (s in store.required()) {

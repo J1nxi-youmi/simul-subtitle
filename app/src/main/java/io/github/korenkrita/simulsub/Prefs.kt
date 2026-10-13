@@ -78,10 +78,10 @@ class Prefs(ctx: Context) {
     var downloadTier: Int
         get() = sp.getInt("dlTier", -1)
         set(v) = sp.edit().putInt("dlTier", v).apply()
-    /** A download batch is choosing its tier and has enqueued nothing yet (survives process death). */
-    var downloadChoosing: Boolean
-        get() = sp.getBoolean("dlChoosing", false)
-        set(v) = sp.edit().putBoolean("dlChoosing", v).apply()
+    /** Files of a download batch not enqueued yet, while it chooses its tier (survives process death); empty: none. */
+    var downloadBatch: Set<String>
+        get() = sp.getStringSet("dlBatch", emptySet())!!.toSet()
+        set(v) = sp.edit().putStringSet("dlBatch", v).remove("dlChoosing").apply()
     /** The user cancelled the model download: no automatic switch to another source until 下载 / 重试. */
     var downloadCancelled: Boolean
         get() = sp.getBoolean("dlCancelled", false)

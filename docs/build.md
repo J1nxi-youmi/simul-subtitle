@@ -19,6 +19,8 @@ export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
 APK 在 `app/build/outputs/apk/release/app-release.apk`（约 13 MB，原生库压缩存放，安装时解压）。
 上面的命令只编译测试，不运行单元测试或模拟器。
 
+代码分两个模块：`core/` 是不依赖 Android 的核心（断句、识别和翻译的流水线、翻译提示词与在线翻译、Jev、模型清单与校验、会话日志、服务状态），手机和桌面版共用；`app/` 是 Android 外壳（界面、浮层、后台服务、模型下载、检查更新、本地模型的 JNI）。跑全部单元测试：`./gradlew :core:test :app:testDebugUnitTest`。
+
 ## 模型
 
 App 里点「下载模型」时，由系统 DownloadManager 在后台下载。每个文件有三层地址，内容完全相同：

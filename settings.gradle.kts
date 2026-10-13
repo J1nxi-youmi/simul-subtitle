@@ -5,4 +5,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "simul-subtitle"
-include(":app")
+include(":core", ":app")

@@ -786,12 +786,12 @@ class PipelineTest {
         assertEquals(200, c.http)
         assertTrue(c.limited && !c.ok)
         assertNull(c.limit) // the placeholder is not kept
-        assertEquals(CaptionOverlayView.Light.YELLOW, CaptionService.light(c, true))
+        assertEquals(ServiceStatus.Light.YELLOW, ServiceStatus.light(c, true))
         // installed later and over: the warning says the next sentence tries again, not "回答无法使用"
-        val shown = CaptionService.jevShown(c, null, JevLimit(0, null, false), 0)!!
-        assertEquals("请求受限，下一句重试", CaptionService.reason(shown, true, 1, System.currentTimeMillis()))
+        val shown = ServiceStatus.jevShown(c, null, JevLimit(0, null, false), 0)!!
+        assertEquals("请求受限，下一句重试", ServiceStatus.reason(shown, true, 1, System.currentTimeMillis()))
         // not installed by the time it is shown (no limit known): still limited
-        assertEquals("请求受限，稍后重试", CaptionService.reason(CaptionService.jevShown(c, null, null, 0)!!, true, 1, 0))
+        assertEquals("请求受限，稍后重试", ServiceStatus.reason(ServiceStatus.jevShown(c, null, null, 0)!!, true, 1, 0))
     }
 
     @Test

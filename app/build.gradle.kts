@@ -71,6 +71,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
     implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Jev and online MT: a Call can be cancelled before it runs, so stop never lets a request go out afterwards

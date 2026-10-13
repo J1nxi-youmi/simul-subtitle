@@ -1,5 +1,9 @@
 package io.github.korenkrita.simulsub
 
+import io.github.korenkrita.simulsub.ServiceStatus.jevShown
+import io.github.korenkrita.simulsub.ServiceStatus.light
+import io.github.korenkrita.simulsub.ServiceStatus.reason
+import io.github.korenkrita.simulsub.ServiceStatus.serviceWarning
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -824,78 +828,6 @@ class CaptionService : Service() {
             "sourceLang", "targetLang", "onlineModel")
         const val EXTRA_CODE = "code"
 
-        fun light(c: ServiceCall?, on: Boolean): CaptionOverlayView.Light = when {
-            !on || c == null -> CaptionOverlayView.Light.GREY
-            c.limited -> CaptionOverlayView.Light.YELLOW
-            c.ok -> CaptionOverlayView.Light.GREEN
-            else -> CaptionOverlayView.Light.RED
-        }
-
-        /**
-         * Jev's light state: a pause the client is in ([paused]) wins (also one from before this session, or newer than
-         * the last result's). Otherwise the last real result ([last]); when that was limited, with the service's
-         * installed limit ([installed]): the result may have been taken while it was still being installed.
-         */
-        fun jevShown(last: ServiceCall?, paused: JevLimit?, installed: JevLimit?, from: Int): ServiceCall? {
-            if (paused != null) return ServiceCall(false, 429, "paused", paused, from)
-            if (last == null || !last.limited) return last
-            return ServiceCall(last.ok, last.http, last.error, installed ?: last.limit, last.setup, true)
-        }
-
-        /** Why a light is not green, short; null for a working one. */
-        fun reason(c: ServiceCall, jev: Boolean, nowMono: Long, nowWall: Long): String? {
-            c.limit?.let { l ->
-                val what = if (l.free) "免费额度已用完" else "请求受限"
-                val whenText = when {
-                    nowMono >= l.untilMs -> "下一句重试"
-                    l.resumeAt != null -> "预计 ${clockText(l.resumeAt, nowWall)} 可重试"
-                    else -> "稍后重试"
-                }
-                return "$what，$whenText"
-            }
-            if (c.ok) return null
-            return when {
-                c.http == 401 || c.http == 403 -> "key 无效或没有权限"
-                c.limited -> "请求受限，稍后重试".takeIf { jev } ?: "请求受限"
-                c.http >= 500 -> "服务出错（HTTP ${c.http}）"
-                c.http in 400..499 -> "请求被拒绝（HTTP ${c.http}）"
-                c.http == 200 -> if (jev) "回答无法使用" else "没有得到译文"
-                c.error?.startsWith("deadline") == true || c.error?.startsWith("no content") == true -> "响应超时"
-                c.error == "bad key" -> "key 格式不对"
-                c.error == "busy" -> "请求太多，没有发出"
-                c.http == 0 && c.error != null && c.error.contains('.') -> "网络连不上"
-                else -> "请求失败"
-            }
-        }
-
-        /** The time of [at] (wall ms) as the phone shows it, with the day when it is not today. */
-        private fun clockText(at: Long, nowWall: Long): String {
-            val z = java.time.ZoneId.systemDefault()
-            val t = java.time.Instant.ofEpochMilli(at).atZone(z)
-            val today = java.time.Instant.ofEpochMilli(nowWall).atZone(z).toLocalDate()
-            val hm = "%02d:%02d".format(t.hour, t.minute)
-            return when (t.toLocalDate()) { today -> hm; today.plusDays(1) -> "明天 $hm"; else -> "${t.monthValue}月${t.dayOfMonth}日 $hm" }
-        }
-
-        /**
-         * The always-shown line for a failing service, or null. It says what still works: sentence ends by pauses
-         * only when that switch is on, "翻译照常" only when the translator's last request worked.
-         */
-        fun serviceWarning(mt: ServiceCall?, jev: ServiceCall?, jevEnds: Boolean, jevCheck: Boolean, nowMono: Long, nowWall: Long): String? {
-            fun bad(c: ServiceCall?) = c != null && light(c, true).let { it == CaptionOverlayView.Light.RED || it == CaptionOverlayView.Light.YELLOW }
-            val mtBad = bad(mt)
-            val jevBad = (jevEnds || jevCheck) && bad(jev)
-            val parts = mutableListOf<String>()
-            if (mtBad) parts += "⚠ 翻译：${reason(mt!!, false, nowMono, nowWall)}"
-            if (jevBad) {
-                val effects = mutableListOf<String>()
-                if (jevEnds) effects += "断句改按停顿"
-                if (jevCheck) effects += "译文不检查"
-                if (mt?.ok == true) effects.add(0, "翻译照常")
-                parts += "⚠ Jev ${reason(jev!!, true, nowMono, nowWall)} · ${effects.joinToString("，")}"
-            }
-            return parts.joinToString("  ·  ").ifEmpty { null }
-        }
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"
         // 8 Gen 3: 1×X4 + 5×A720 + 2×A520. Keep ASR + MT below the 6 big cores so they don't thrash.

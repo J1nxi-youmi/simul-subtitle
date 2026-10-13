@@ -1,12 +1,12 @@
 package io.github.korenkrita.simulsub
 
-import io.github.korenkrita.simulsub.CaptionOverlayView.Light
+import io.github.korenkrita.simulsub.ServiceStatus.Light
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The overlay's service lights and the warning line ([CaptionService.light], [CaptionService.serviceWarning]). */
+/** The overlay's service lights and the warning line ([ServiceStatus.light], [ServiceStatus.serviceWarning]). */
 class ServiceStateTest {
     private val now = 1_000_000L
     private val wall = java.time.ZonedDateTime.of(2026, 10, 12, 19, 0, 0, 0, java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -15,15 +15,15 @@ class ServiceStateTest {
     private fun limited(free: Boolean, resumeAt: Long?, until: Long = now + 60_000) =
         ServiceCall(false, 429, "HTTP 429", JevLimit(until, resumeAt, free), 0)
     private fun warn(mt: ServiceCall?, jev: ServiceCall?, ends: Boolean = true, check: Boolean = false) =
-        CaptionService.serviceWarning(mt, jev, ends, check, now, wall)
+        ServiceStatus.serviceWarning(mt, jev, ends, check, now, wall)
 
     @Test
     fun lights() {
-        assertEquals(Light.GREY, CaptionService.light(null, true))
-        assertEquals(Light.GREY, CaptionService.light(ok, false)) // Jev switched off
-        assertEquals(Light.GREEN, CaptionService.light(ok, true))
-        assertEquals(Light.YELLOW, CaptionService.light(limited(true, null), true))
-        assertEquals(Light.RED, CaptionService.light(down, true))
+        assertEquals(Light.GREY, ServiceStatus.light(null, true))
+        assertEquals(Light.GREY, ServiceStatus.light(ok, false)) // Jev switched off
+        assertEquals(Light.GREEN, ServiceStatus.light(ok, true))
+        assertEquals(Light.YELLOW, ServiceStatus.light(limited(true, null), true))
+        assertEquals(Light.RED, ServiceStatus.light(down, true))
     }
 
     @Test
@@ -56,7 +56,7 @@ class ServiceStateTest {
     @Test
     fun aLimitedTranslatorIsYellowAndAnUnknownOneIsNotCalledFine() {
         val mt429 = ServiceCall(false, 429, "HTTP 429", null, 0)
-        assertEquals(Light.YELLOW, CaptionService.light(mt429, true))
+        assertEquals(Light.YELLOW, ServiceStatus.light(mt429, true))
         assertEquals("⚠ 翻译：请求受限", warn(mt429, ok))
         // the translator not asked yet: nothing claimed about it
         assertEquals("⚠ Jev 请求受限，稍后重试 · 断句改按停顿", warn(null, limited(false, null)))
@@ -67,13 +67,13 @@ class ServiceStateTest {
         // the result was taken before the 429's end was known: no end of its own
         val last = ServiceCall(false, 429, "deadline 2000ms", null, 0)
         val installed = JevLimit(now - 1, null, false) // installed, and already over
-        val shown = CaptionService.jevShown(last, null, installed, 0)!!
-        assertEquals(Light.YELLOW, CaptionService.light(shown, true))
+        val shown = ServiceStatus.jevShown(last, null, installed, 0)!!
+        assertEquals(Light.YELLOW, ServiceStatus.light(shown, true))
         assertTrue(warn(ok, shown)!!.contains("下一句重试"))
         // while still being installed (or live) the live pause wins
         val live = JevLimit(now + 60_000, null, false)
-        assertEquals(live, CaptionService.jevShown(last, live, installed, 0)!!.limit)
+        assertEquals(live, ServiceStatus.jevShown(last, live, installed, 0)!!.limit)
         // a working last result stays as it was
-        assertEquals(ok, CaptionService.jevShown(ok, null, installed, 0))
+        assertEquals(ok, ServiceStatus.jevShown(ok, null, installed, 0))
     }
 }

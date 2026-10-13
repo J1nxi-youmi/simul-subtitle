@@ -1,5 +1,6 @@
 package io.github.korenkrita.simulsub
 
+import io.github.korenkrita.simulsub.ServiceStatus.Light
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -93,11 +94,6 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** The 原文 / 用时 switches show these states. */
     fun setShown(ja: Boolean, stats: Boolean) {
         showSwitch(jaBtn, ja, "显示原文"); showSwitch(statsBtn, stats, "显示识别和翻译用时")
-    }
-    /** Grey = off or not asked yet, green = the last request worked, yellow = limited (paused), red = failed. */
-    enum class Light(val color: Int, val word: String) {
-        GREY(0xFF8B8B94.toInt(), "未用到"), GREEN(0xFF81C995.toInt(), "正常"),
-        YELLOW(0xFFFDD663.toInt(), "受限"), RED(0xFFF28B82.toInt(), "出错"),
     }
     private fun lightView() = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); setTextColor(0xFFDADCE0.toInt())

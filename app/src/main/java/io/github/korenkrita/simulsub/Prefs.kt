@@ -69,9 +69,11 @@ class Prefs(ctx: Context) {
     fun downloadId(path: String) = sp.getLong("dl:$path", -1)
     fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
     /** Source to continue [path] from after its download was rejected (-1 none): survives DownloadManager cleanup. */
-    // "dlNext2": the sources were renumbered in 0.6.4 (a GitHub copy of the translation model); older values are ignored
-    fun pendingSource(path: String) = sp.getInt("dlNext2:$path", -1)
-    fun setPendingSource(path: String, source: Int) = sp.edit().putInt("dlNext2:$path", source).apply()
+    // "dlNext2": the sources were renumbered in 0.6.4 (a GitHub copy of the translation model); a "dlNext" value of an
+    // older version is read in its numbering
+    fun pendingSource(path: String) = sp.getInt("dlNext2:$path",
+        sp.getInt("dlNext:$path", -1).let { if (it >= 0) ModelDownloader.legacySource(path, it) else it })
+    fun setPendingSource(path: String, source: Int) = sp.edit().putInt("dlNext2:$path", source).remove("dlNext:$path").apply()
     /** The tier ([ModelSpec.tiers]) this download batch chose, -1 none yet: a file switching source stays on it. */
     var downloadTier: Int
         get() = sp.getInt("dlTier", -1)

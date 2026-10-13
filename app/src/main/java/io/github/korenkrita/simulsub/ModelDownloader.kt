@@ -27,6 +27,7 @@ class ModelDownloader private constructor(ctx: Context) {
     private val prefs = Prefs(app)
     val store = ModelStore(app.getExternalFilesDir(null)!!, needsMt = { !prefs.mtOnline })
     private val dm = app.getSystemService(DownloadManager::class.java)
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "jpsub-verify").apply { isDaemon = true } }
     private val queued = HashSet<String>() // paths submitted to [worker], guarded by this
     /** Verification failed: not resubmitted by [state] polling, only by an explicit [start] (重试). */
@@ -84,26 +85,38 @@ class ModelDownloader private constructor(ctx: Context) {
         // Choose this batch's route first: every tier tries the smallest file at once (a few KB, thrown away). The
         // official tier wins if it answers within the check, otherwise the lowest tier that answered; all files then
         // start there. Nothing answered (e.g. no network yet): the full route, which DownloadManager waits out.
+        // [Prefs.downloadChoosing] stays set until every file is enqueued, so a process that ends in between resumes.
         prefs.downloadTier = -1
-        prefs.downloadChoosing = true // the process may end during the check: [state] starts it again
+        prefs.downloadChoosing = true
         choosing = true
         val gen = ++chooseGen
         val probe = store.specs.minBy { it.size }
         Thread({
             val tier = bestTier(probe.tiers, CHOOSE_MS) { url -> fetches(url, probe) } ?: 0
-            synchronized(this) {
-                if (gen != chooseGen) return@Thread // cancelled, or a newer start
-                choosing = false
-                prefs.downloadTier = tier
-                prefs.downloadChoosing = false
-                // what is needed now: the mode may have changed to online translation during the check
-                val needed = store.required().map { it.path }.toSet()
-                for (s in fresh) {
-                    if (s.path !in needed || store.isInstalled(s) || s.path in queued || recorded(s) != null) continue
-                    enqueue(s, route(s).first())
+            // enqueue on the main thread, where the mode changes too: a switch to online translation is seen
+            main.post {
+                synchronized(this) {
+                    if (gen != chooseGen) return@post // cancelled, or a newer start
+                    choosing = false
+                    prefs.downloadTier = tier
+                    schedule()
                 }
             }
         }, "jpsub-route").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Enqueues, on the chosen tier, every file the mode needs now that has no job yet, then ends the batch's
+     * choosing phase. Main thread; run again after a process death in between (enqueued files are skipped).
+     */
+    private fun schedule() {
+        for (s in store.required()) {
+            if (store.isInstalled(s) || store.file(s).isFile || s.path in queued) continue
+            adoptOrphan(s)
+            if (recorded(s) != null) continue
+            enqueue(s, route(s).first())
+        }
+        prefs.downloadChoosing = false
     }
 
     /** The probe file comes back whole and right from [url] (a proxy may answer with an error page). */
@@ -187,9 +200,8 @@ class ModelDownloader private constructor(ctx: Context) {
                 val source: Int; val file: File
                 if (m != null) {
                     if (!m.groupValues[2].startsWith("$name.")) continue
-                    source = m.groupValues[1].toInt() - 1
-                        // up to 0.6.3 the translation model had no GitHub copy: its source 2 (ModelScope) is now 3
-                        .let { if (current == null && s.path.startsWith("mt/") && it >= 1) it + 1 else it }
+                    val n = m.groupValues[1].toInt() - 1
+                    source = if (current == null) legacySource(s.path, n) else n
                     file = File(store.file(s).parentFile, m.groupValues[2])
                 } else {
                     if (c.getString(urCol) != s.urls[0]) continue
@@ -223,7 +235,7 @@ class ModelDownloader private constructor(ctx: Context) {
         val now = SystemClock.elapsedRealtime()
         val last = progress[s.path]
         if (!trying || last == null || last.first != j.bytes) { progress[s.path] = j.bytes to now; return false }
-        return j.bytes == 0L && !j.answered && now - last.second > STALL_MS
+        return cutOff(j.bytes, j.answered || j.file.length() > 0, now - last.second)
     }
 
     /** Failures that another copy of the same file can fix; full storage or a file error cannot. */
@@ -268,8 +280,10 @@ class ModelDownloader private constructor(ctx: Context) {
     @Synchronized
     fun state(): State {
         var done = 0L; var running = false
-        // a route check the process did not live to finish: check again (nothing was enqueued for it yet)
-        if (prefs.downloadChoosing && !choosing && !prefs.downloadCancelled) start()
+        // a batch the process did not live to set up: enqueue the rest on its tier, or check again if none was chosen
+        if (prefs.downloadChoosing && !choosing && !prefs.downloadCancelled) {
+            if (prefs.downloadTier >= 0) schedule() else start()
+        }
         // a download of a file the mode no longer needs keeps running (cancel() stops it), it just is not counted
         for (s in store.required()) {
             if (store.isInstalled(s)) { done += s.size; continue }
@@ -393,6 +407,7 @@ class ModelDownloader private constructor(ctx: Context) {
         /** the same up to 0.6.3, numbering the sources of that version */
         private val LEGACY_DESCRIPTION = Regex("来源 (\\d+)：(.+\\.part)")
         private const val STALL_MS = 15_000L
+        private const val ANSWERED_MS = 60_000L
         /** how long the route check waits for a tier that has not answered yet */
         private const val CHOOSE_MS = 15_000L
         private val PROBE_CLIENT = OkHttpClient.Builder().connectTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS)
@@ -403,6 +418,17 @@ class ModelDownloader private constructor(ctx: Context) {
          * worked, decided as soon as every lower tier failed, or after [timeoutMs] among those that worked by then;
          * null when none did. Late answers are ignored.
          */
+        /**
+         * Whether a transfer stuck for [idleMs] is given up for the next source. Bytes counted: never (switching
+         * starts the file over). Not counted yet but the server answered ([answered]: its size is known, or bytes are
+         * on disk): the count moves only in 64 KiB steps, so wait [ANSWERED_MS], below 1 KiB/s. Else [STALL_MS].
+         */
+        fun cutOff(bytes: Long, answered: Boolean, idleMs: Long) =
+            bytes == 0L && idleMs > if (answered) ANSWERED_MS else STALL_MS
+
+        /** A source index saved by 0.6.3 or older: the translation model had no GitHub copy, ModelScope moved 1 → 2. */
+        fun legacySource(path: String, n: Int) = if (path.startsWith("mt/") && n >= 1) n + 1 else n
+
         fun bestTier(tiers: List<List<String>>, timeoutMs: Long, fetch: (String) -> Boolean): Int? {
             val lock = Object()
             val ok = BooleanArray(tiers.size)

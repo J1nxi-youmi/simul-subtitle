@@ -45,6 +45,24 @@ class ModelRouteTest {
         assertNull(ModelDownloader.bestTier(tiers, 2_000, fetch(emptySet())))
     }
 
+    @Test fun aStartedDownloadIsNeverCutOffAndAnAnsweredOneOnlyWhenDead() {
+        assertTrue(ModelDownloader.cutOff(0, answered = false, idleMs = 15_001))
+        assertTrue(!ModelDownloader.cutOff(0, answered = false, idleMs = 14_000))
+        // the server answered (e.g. 32 KiB on disk, below the 64 KiB step of the counter): only after a minute
+        assertTrue(!ModelDownloader.cutOff(0, answered = true, idleMs = 30_000))
+        assertTrue(ModelDownloader.cutOff(0, answered = true, idleMs = 60_001))
+        assertTrue(!ModelDownloader.cutOff(65_536, answered = true, idleMs = 3_600_000))
+    }
+
+    @Test fun sourcesSavedBy063AreRenumberedOnlyForTheTranslationModel() {
+        assertEquals(0, ModelDownloader.legacySource("mt/index-translate-2b.gguf", 0)) // Hugging Face
+        assertEquals(2, ModelDownloader.legacySource("mt/index-translate-2b.gguf", 1)) // ModelScope
+        assertEquals(1, ModelDownloader.legacySource("asr/tokens.txt", 1)) // unchanged
+        assertEquals(3, ModelDownloader.legacySource("asr/tokens.txt", 3))
+        val mt = ModelStore.MODELS.single { it.path.startsWith("mt/") }
+        assertTrue(mt.urls[ModelDownloader.legacySource(mt.path, 1)].startsWith("https://www.modelscope.cn/"))
+    }
+
     @Test fun routeSkipsTiersThatLostAndKeepsTheLaterOnes() {
         assertEquals(listOf(0, 1, 2, 3, 4), spec.route(0))
         assertEquals(listOf(1, 2, 3, 4), spec.route(1))

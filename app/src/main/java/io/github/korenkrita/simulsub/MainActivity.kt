@@ -27,8 +27,6 @@ import com.google.android.material.slider.Slider
 class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: Prefs
-    private lateinit var store: ModelStore
-    private lateinit var dl: ModelDownloader
     private lateinit var preview: CaptionOverlayView
     private lateinit var updater: AppUpdater
 
@@ -80,8 +78,19 @@ class MainActivity : Activity() {
             v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom); insets
         }
         prefs = Prefs(this)
-        dl = ModelDownloader.get(this)
-        store = dl.store
+        // Up to 0.6.5 the models were downloaded into the app's files dir (the local translation model 1.3 GB); they
+        // are inside the APK now, so the old copies only take space. The app's DownloadManager jobs (all were model
+        // downloads) are removed first, so a running or queued one cannot write a file back; then the files.
+        Thread {
+            val dm = getSystemService(android.app.DownloadManager::class.java)
+            val ids = ArrayList<Long>()
+            dm.query(android.app.DownloadManager.Query())?.use { c ->
+                val id = c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_ID)
+                while (c.moveToNext()) ids += c.getLong(id)
+            }
+            if (ids.isNotEmpty()) dm.remove(*ids.toLongArray())
+            for (d in listOf("asr", "vad", "mt")) java.io.File(getExternalFilesDir(null), d).deleteRecursively()
+        }.start()
 
         statusDot = findViewById(R.id.statusDot)
         statusTitle = findViewById(R.id.statusTitle)
@@ -215,7 +224,6 @@ class MainActivity : Activity() {
         prefs.listen(styleListener)
         renderPermissions()
         renderLogs()
-        renderModelFiles()
         render()
         main.post(ticker)
         updater.resume()
@@ -245,8 +253,6 @@ class MainActivity : Activity() {
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
             val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.activeFiles()
             if (now != listedLogs) renderLogs()
-            // a session or download started/finished, or a download published a file
-            if ((store.listFiles() to modelFilesBusy()) != listedModels) renderModelFiles()
             main.postDelayed(this, 800)
         }
     }
@@ -257,7 +263,6 @@ class MainActivity : Activity() {
     private var startRefused = false
 
     private fun render() {
-        if (!store.ready()) { renderModels(); return }
         progress.visibility = View.GONE
         secondary.visibility = View.GONE
         primary.isEnabled = true
@@ -271,8 +276,9 @@ class MainActivity : Activity() {
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
             val hint = if (missingPerm) "点下面的按钮，按提示允许下方两项，就能开始。" else "点下面的按钮，再在弹出的窗口里选你要看的 App。"
-            if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
-            else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", dl.maintenanceWarning?.let { "$hint\n⚠ $it（占用存储空间，可在系统设置里清除本 App 的缓存/数据后重新下载）" } ?: hint)
+            if (!prefs.byokReady) status(R.color.err, "翻译模型还没填完整", "请在设置的「怎么翻译」里填好服务地址、模型 ID 和 API Key 并保存。")
+            else if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
+            else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
             onPrimary(R.color.on_brand)
@@ -285,45 +291,6 @@ class MainActivity : Activity() {
         primary.setTextColor(getColor(color)); primary.iconTint = ColorStateList.valueOf(getColor(color))
     }
 
-    private fun renderModels() {
-        val st = dl.state()
-        val verifying = st.verifying
-        val gb = { b: Long -> "%.2f GB".format(b / 1e9) }
-        progress.visibility = if (st.running || st.doneBytes > 0) View.VISIBLE else View.GONE
-        progress.setProgressCompat((st.doneBytes * 1000 / st.totalBytes).toInt(), true)
-        primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
-        primary.setIconResource(R.drawable.ic_download)
-        when {
-            verifying != null -> {
-                status(R.color.brand, "正在校验模型…", "${verifying}（确保文件完整，不会用坏文件）")
-                primary.text = "校验中…"; busy()
-                secondary.visibility = View.GONE
-            }
-            st.running -> {
-                if (st.choosing) status(R.color.brand, "正在选择下载线路…", "同时试官方、GitHub 和国内镜像，最多约 15 秒。")
-                else status(R.color.brand, "正在下载模型", "${gb(st.doneBytes)} / ${gb(st.totalBytes)} · 可以切到后台，系统会继续下载。")
-                primary.text = "下载中 ${st.doneBytes * 100 / st.totalBytes}%"; busy()
-                secondary.visibility = View.VISIBLE; secondary.text = "取消下载"
-                secondary.setOnClickListener { dl.cancel(); render() }
-            }
-            st.errors.isNotEmpty() -> {
-                status(R.color.err, "下载未完成", st.errors.joinToString("\n"))
-                primary.text = "重试"; primary.isEnabled = true
-                primary.setOnClickListener { dl.start(); render() }
-                secondary.visibility = View.GONE
-            }
-            else -> {
-                val left = store.totalBytes() - store.installedBytes()
-                if (prefs.mtOnline) status(R.color.warn, "第一次用，先下载一下",
-                    "要下载约 ${gb(left)} 的识别文件，只需要下载一次。听声音在手机上完成，翻译用网络。\n文件来自 huggingface.co、github.com。")
-                else status(R.color.warn, "第一次用，先下载一下",
-                    "要下载约 ${gb(left)} 的识别和翻译文件，只需要下载一次，之后翻译也在手机上完成（Jev 仍需联网）。建议连 Wi‑Fi。\n文件来自 huggingface.co、github.com。")
-                primary.text = "下载模型"; primary.isEnabled = true
-                primary.setOnClickListener { dl.start(); render() }
-                secondary.visibility = View.GONE
-            }
-        }
-    }
 
     /** Busy state: no action, but keep the brand look (a disabled button is grey and hard to read). */
     private fun busy() {
@@ -360,8 +327,8 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             val ask = { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM_ONLY) }
-            permRow("通知（可以不开）", "在通知栏显示运行状态、下载进度和「停止」按钮", granted, permList, ask)
-            permRow("通知", "在通知栏显示运行状态、下载进度和「停止」按钮", granted, notifBox, ask)
+            permRow("通知（可以不开）", "在通知栏显示运行状态和「停止」按钮", granted, permList, ask)
+            permRow("通知", "在通知栏显示运行状态和「停止」按钮", granted, notifBox, ask)
         }
     }
 
@@ -550,7 +517,7 @@ class MainActivity : Activity() {
         }
 
     /**
-     * Engine, scene, display mode and Jev. While running: the engine and the two Jev switches wait for the next start,
+     * The translation service, scene, display mode and Jev. While running: the two Jev switches wait for the next start,
      * the display mode applies at once, everything else from the next sentence (CaptionService rebuilds its setup).
      */
     private fun renderTranslate() {
@@ -558,31 +525,13 @@ class MainActivity : Activity() {
         root.removeAllViews()
         val running = CaptionService.running
         translateRunning = running
-        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型、自己的模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；翻译方式要先停止字幕才能换，智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
+        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
         // -- how it translates
         var box = group(root, "怎么翻译")
         box.addView(hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。"))
-        // one line each, like the other two: the "experimental" warning is shown right below when it is picked
-        val engine = choice(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "手机上翻译", MtMode.BYOK to "自己的模型"), prefs.mtMode) {
-            if (prefs.mtMode != it) { prefs.mtMode = it; renderTranslate(); render() } // local needs its model file
-        }
-        if (running) for (i in 0 until engine.childCount) engine.getChildAt(i).isEnabled = false
-        box.addView(engine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (12 * dpx).toInt()
-        })
-        when (prefs.mtMode) {
-            MtMode.INDEX -> {
-                box.addView(label("翻译模型"))
-                box.addView(dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal, true) {
-                    if (prefs.onlineModel.ordinal != it) prefs.onlineModel = OnlineModel.entries[it]
-                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-                box.addView(hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。"))
-            }
-            MtMode.LOCAL -> box.addView(hint("翻译也在手机上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。"))
-            MtMode.BYOK -> renderByok(box, running)
-        }
+        renderByok(box, running)
 
         box = group(root, "内容")
         box.addView(label("内容类型"))
@@ -677,7 +626,7 @@ class MainActivity : Activity() {
 
     /** BYOK: the user's OpenAI-compatible service; URL, key, model id and a test that also finds the thinking switch. */
     private fun renderByok(box: LinearLayout, running: Boolean) {
-        box.addView(note("⚠ 实验性功能：翻译效果和速度都无法预测，取决于你填的服务和模型。开启后风险由你自己承担，包括费用、额度和服务商对内容的处理。"),
+        box.addView(hint("翻译用你自己的模型服务（OpenAI 兼容接口）。只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"),
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (10 * dpx).toInt() })
         fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
             box.addView(label(title))
@@ -766,7 +715,7 @@ class MainActivity : Activity() {
                     byokResult = when {
                         ok != null -> "✓ 可以用。参数：${v!!.label}（这次没检测到思考，已记住）；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
                             (if ((ok.firstContentMs ?: 0) > FIRST_CONTENT_MS) "（超过 ${FIRST_CONTENT_MS / 1000} 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
-                        none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
+                        none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用。"
                         else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
                     }
                     renderTranslate()
@@ -875,79 +824,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ---- model files ---------------------------------------------------------------------------------------
-
-    /** Files in the model folders, current and left over, each deletable while nothing can be reading or writing it. */
-    private fun renderModelFiles() {
-        val box = findViewById<LinearLayout>(R.id.modelFileList)
-        box.removeAllViews()
-        val dp = resources.displayMetrics.density
-        val files = store.listFiles()
-        val busy = modelFilesBusy()
-        listedModels = files to busy
-        if (files.isEmpty()) {
-            box.addView(TextView(this).apply {
-                text = "还没有下载文件。"; textSize = 15f; setTextColor(getColor(R.color.text2))
-                setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt())
-            })
-            return
-        }
-        for (f in files) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
-            }
-            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            texts.addView(TextView(this).apply { text = f.path; textSize = 15f; setTextColor(getColor(R.color.text)) })
-            texts.addView(TextView(this).apply {
-                text = sizeText(f.bytes) + " · " + when (f.kind) {
-                    ModelStore.Kind.CURRENT -> if (f.path.startsWith("mt/")) "手机上翻译时用，在线翻译用不到" else "正在使用，删除后要重新下载"
-                    ModelStore.Kind.OLD -> "旧版本留下的，可以删除"
-                    ModelStore.Kind.PARTIAL -> "没下载完的文件，可以删除"
-                }
-                textSize = 13.5f
-                setTextColor(getColor(if (f.kind == ModelStore.Kind.CURRENT) R.color.text2 else R.color.warn))
-            })
-            row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-                text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = busy == null
-                setOnClickListener {
-                    val warn = if (f.kind == ModelStore.Kind.CURRENT) "这是当前要用的模型，删除后需要重新下载（${sizeText(f.bytes)}）才能用。" else "这个文件现在不用，删除后可以腾出 ${sizeText(f.bytes)}。"
-                    confirmDelete("删除 ${f.path}？", warn) {
-                        // re-checked now: a session or download may have started while the dialog was open
-                        val why = modelFilesBusy()
-                        when {
-                            why != null -> Toast.makeText(this@MainActivity, why, Toast.LENGTH_SHORT).show()
-                            !store.delete(f) -> Toast.makeText(this@MainActivity, "删除失败：${f.path}", Toast.LENGTH_SHORT).show()
-                        }
-                        renderModelFiles(); render()
-                    }
-                }
-            })
-            box.addView(row)
-        }
-        box.addView(TextView(this).apply {
-            text = "共 ${sizeText(files.sumOf { it.bytes })}" + (busy?.let { "\n$it" } ?: "")
-            textSize = 12.5f; setTextColor(getColor(R.color.text2))
-            setPadding(0, (6 * dp).toInt(), 0, 0)
-        })
-    }
-
-    /** Why model files cannot be deleted right now, or null. */
-    private fun modelFilesBusy(): String? = when {
-        // also true after stopping until the session thread has freed the native models
-        CaptionService.modelsInUse -> "字幕运行中（或正在释放模型），停止后才能删除"
-        // anyTransfer: also a local-model download still running after switching to online (state() skips it)
-        dl.anyTransfer() || dl.state().let { it.running || it.verifying != null } -> "正在下载或校验模型，完成或取消后才能删除"
-        else -> null
-    }
-
-    private fun sizeText(b: Long) = when {
-        b >= 1L shl 30 -> "%.2f GB".format(b / 1073741824.0)
-        b >= 1L shl 20 -> "%.1f MB".format(b / 1048576.0)
-        else -> "%.1f KB".format(b / 1024.0)
-    }
-    private var listedModels: Pair<List<ModelStore.StoredFile>, String?>? = null
     private var listedLogs: Pair<List<String>, Set<java.io.File>>? = null
     private var translateRunning = false
 
@@ -1089,11 +965,7 @@ class MainActivity : Activity() {
 
     private fun start() {
         startRefused = false
-        if (!store.ready()) { render(); return } // never start without verified models
-        if (prefs.mtMode == MtMode.BYOK && !prefs.byokReady) {
-            status(R.color.err, "自己的模型还没填完整", "请在下面「怎么翻译」里填好服务地址、模型 ID 和 API Key 并保存，或者换回在线翻译。")
-            return
-        }
+        if (!prefs.byokReady) return // render() says what is missing
         // a connectivity test still running would probe the same service again alongside the session's own probe
         byokTest?.let { it.cancel(); byokTest = null; renderTranslate() }
         if (!hasAudio()) {

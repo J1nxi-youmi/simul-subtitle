@@ -6,7 +6,6 @@ plugins {
 android {
     namespace = "io.github.korenkrita.simulsub"
     compileSdk = 35
-    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "io.github.korenkrita.simulsub"
@@ -15,34 +14,10 @@ android {
         versionCode = 16
         versionName = "0.6.5"
         ndk { abiFilters += "arm64-v8a" }
-        externalNativeBuild {
-            cmake {
-                arguments += listOf(
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DLLAMA_BUILD_COMMON=OFF",
-                    "-DLLAMA_BUILD_TESTS=OFF",
-                    "-DLLAMA_BUILD_TOOLS=OFF",
-                    "-DLLAMA_BUILD_EXAMPLES=OFF",
-                    "-DLLAMA_BUILD_SERVER=OFF",
-                    "-DLLAMA_BUILD_APP=OFF",
-                    "-DLLAMA_OPENSSL=OFF",
-                    "-DGGML_NATIVE=OFF",
-                    "-DGGML_OPENMP=OFF",
-                    "-DGGML_LLAMAFILE=OFF",
-                    // Snapdragon 8 Gen 3: armv9-a with dotprod / i8mm / fp16
-                    "-DGGML_CPU_ARM_ARCH=armv8.6-a+dotprod+i8mm+fp16",
-                )
-            }
-        }
     }
 
-    externalNativeBuild {
-        cmake {
-            path("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // the speech models in assets/models (setup.sh): stored, so sherpa-onnx reads them from the APK without inflating
+    androidResources { noCompress += "onnx" }
 
     buildTypes {
         release {

@@ -62,8 +62,17 @@ internal data class UpdateRelease(
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024
         const val MAX_NOTES = 8_000 // characters shown in the dialog
-        // Same order as ModelStore.GH_PROXIES. Never send api.github.com through these download proxies.
+        // github.com first, then third-party download proxies. Never send api.github.com through these proxies.
         fun sources(url: String) = listOf(url, "https://gh-proxy.com/$url", "https://gh.llkk.cc/$url")
+
+        fun sha256(f: java.io.File): String {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { input ->
+                val buf = ByteArray(1 shl 20)
+                while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) }
+            }
+            return md.digest().joinToString("") { "%02x".format(it) }
+        }
 
         /**
          * An automatic check when the app is entered: [auto] on, nothing unfinished ([pending]: an update found,
@@ -357,7 +366,7 @@ internal class AppUpdater(private val activity: Activity) {
 
     @Suppress("DEPRECATION") // minSdk 29; the typed flags overload requires API 33.
     private fun verify(release: UpdateRelease) {
-        if (!apk.isFile || apk.length() != release.size || ModelStore.sha256(apk) != release.sha256) throw IOException("APK checksum mismatch")
+        if (!apk.isFile || apk.length() != release.size || UpdateRelease.sha256(apk) != release.sha256) throw IOException("APK checksum mismatch")
         val pm = activity.packageManager
         val archive = pm.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES) ?: throw IOException("Invalid APK")
         val installed = pm.getPackageInfo(activity.packageName, PackageManager.GET_SIGNING_CERTIFICATES)

@@ -9,3 +9,4 @@ models/
 tools/mac-e2e/build/
 tools/mac-capture/build/
 tools/mac-app/build/
+app/src/main/assets/models/

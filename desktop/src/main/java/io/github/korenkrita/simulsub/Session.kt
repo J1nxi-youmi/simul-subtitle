@@ -45,10 +45,9 @@ class CaptionService private constructor(private val sysaudio: File) {
      * and ends the child, so nothing is ever freed while another thread is still inside it.
      */
     @Volatile private var stopping = false
-    /** Guards [pipeline]/[translator] so stop's cancel never races the session thread's native free. */
+    /** Guards [pipeline] so stop never races the session thread's release. */
     private val cancelLock = Any()
     private var pipeline: Pipeline? = null
-    private var translator: Mt? = null
     /** A BYOK first-use probe in progress (at start or after "保存" while running), so stop can cancel it. */
     private var probing: ByokTranslator? = null
     /** The running session's settings versions and BYOK probe (shares [cancelLock]); null outside a session. */
@@ -83,8 +82,8 @@ class CaptionService private constructor(private val sysaudio: File) {
     /** shows a pause that just ended as such; scheduled by [refresh] for the pause on screen */
     private val pauseOver: Runnable = Runnable { refresh() }
     private var pauseTimer: javax.swing.Timer? = null
-    /** the translator in use: BYOK by the service its probe accepted, others by model */
-    private fun mtService(s: Snap, byok: Triple<String, String, String>?) = byok?.let { "${it.first}\n${it.second}\n${it.third}" } ?: s.mtLabel
+    /** the translator in use: the service its probe accepted */
+    private fun mtService(byok: Triple<String, String, String>) = "${byok.first}\n${byok.second}\n${byok.third}"
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
     private var mtState: ServiceCall? = null
     private var jevState: ServiceCall? = null
@@ -112,51 +111,36 @@ class CaptionService private constructor(private val sysaudio: File) {
         refresh()
         // fixed at the start: switching it while models load affects the next session, as the switch says
         val keepLogs = prefs.keepLogs
-        sessions.incrementAndGet() // until the session thread has freed every native model (see [modelsInUse])
-        Thread({ try { session(keepLogs) } finally { sessions.decrementAndGet(); main.post { modelsBusy.value = modelsInUse } } },
-            "jpsub-session").start()
+        Thread({ session(keepLogs) }, "jpsub-session").start()
     }
 
     private fun session(keepLogs: Boolean) {
-        val root = modelsDir
-        val files = ModelFiles(root)
         var vad: SileroProb? = null
         var asr: SherpaAsr? = null
-        var local: LlamaTranslator? = null
         var log: SessionLog? = null
         var keepOverlay = false
         try {
-            // Fixed for the whole session (the home screen disables them while running): how it translates and the two
-            // Jev switches. Everything else a sentence is translated with is a [Setup], rebuilt when it changes (below).
-            val mode = prefs.mtMode
+            // Fixed for the whole session (the home screen disables them while running): the two Jev switches.
+            // Everything else a sentence is translated with is a [Setup], rebuilt when it changes (below).
             val jevEnds = prefs.jevOn; val jevCheck = prefs.jevCheck
             val wantJev = jevEnds || jevCheck
             // a change from here on is seen by the snapshot below or rebuilt after the start
             val order = SetupOrder<Triple<String, String, String>, ByokTranslator.ThinkingOff?>(cancelLock).also { this.order = it }
             val v0 = order.version()
-            val s0 = Snap(prefs, mode, wantJev, files.mt.name)
-            if (mode == MtMode.BYOK && (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null)) {
-                setStatus("⚠ 自己的模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
+            val s0 = Snap(prefs, wantJev)
+            if (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null) {
+                setStatus("⚠ 翻译模型还没填完整（地址、key、模型 ID），请到设置里填好"); Log.w(TAG, "byok incomplete"); return
             }
-            // the home screen only starts with verified models; if they vanished since, end cleanly (finally → stop)
-            if (!ModelStore(root, needsMt = { mode == MtMode.LOCAL }).ready()) { Log.w(TAG, "models missing, not starting"); return }
             val t0 = monoMs()
-            vad = SileroProb(files)
-            asr = SherpaAsr(files, ASR_THREADS)
+            // the models ship inside the app (or come from ./models when run from the repo)
+            vad = SileroProb(modelsDir)
+            asr = SherpaAsr(modelsDir, ASR_THREADS)
             val t1 = monoMs()
             if (stopping) return
-            if (mode == MtMode.LOCAL) {
-                setStatus("正在准备翻译…")
-                // one native model for the session; each setup uses it through its own length cap
-                local = LlamaTranslator(files, MT_THREADS).also { synchronized(cancelLock) { translator = it } }
-            }
-            val t2 = monoMs()
-            // Warm-up so the first real sentence does not pay page-in / first-run costs. Online: nothing to warm up,
-            // and no request is sent that the session log would not show.
+            // warm-up so the first real sentence does not pay page-in / first-run costs (nothing is sent anywhere)
             asr.recognize(FloatArray(16_000))
-            local?.translate(indexPrompt("こんにちは。", Scene.GENERAL))
-            val t3 = monoMs()
-            Log.i(TAG, "load asr=${t1 - t0}ms mt=${t2 - t1}ms warmup=${t3 - t2}ms")
+            val t2 = monoMs()
+            Log.i(TAG, "load asr=${t1 - t0}ms warmup=${t2 - t1}ms")
             if (stopping) return
             setStatus("准备好了，开始播放就会出字幕")
 
@@ -166,8 +150,8 @@ class CaptionService private constructor(private val sysaudio: File) {
             log = sl
             sl?.write(mapOf("ev" to "session_start", "app" to APP_VERSION,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
-                "mt_engine" to (when (mode) { MtMode.INDEX -> "online"; MtMode.LOCAL -> "local"; MtMode.BYOK -> "byok" }),
-                "load_ms" to (t3 - t0), "device" to "Mac ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
+                "mt_engine" to "byok",
+                "load_ms" to (t2 - t0), "device" to "Mac ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
 
             /**
              * BYOK probes: a URL + model used for the first time is first probed for the switch that turns thinking off
@@ -217,8 +201,8 @@ class CaptionService private constructor(private val sysaudio: File) {
                 }
             }
 
-            /** A built setup, the warnings it comes with, and for BYOK the service it really uses and its log entry. */
-            class Built(val setup: Setup, val notice: String, val byok: Triple<String, String, String>?, val byokEv: Map<String, Any?>?)
+            /** A built setup, the warnings it comes with, the BYOK service it really uses and its log entry. */
+            class Built(val setup: Setup, val notice: String, val byok: Triple<String, String, String>, val byokEv: Map<String, Any?>)
 
             /**
              * The translator for BYOK and the service it uses. [wait]: probe a new service here (the start); otherwise
@@ -271,42 +255,33 @@ class CaptionService private constructor(private val sysaudio: File) {
             /** A setup for [s] and the warnings it comes with; null: stopped, or overtaken (the newer change builds). */
             fun make(s: Snap, version: Int, wait: Boolean): Built? {
                 val notices = mutableListOf<String>()
-                var used: Triple<String, String, String>? = null
-                var ev: Map<String, Any?>? = null
-                val mt: Mt = when (mode) {
-                    MtMode.INDEX -> OnlineTranslator(s.online!!, maxTokens = mtMaxTokens(s.target))
-                    MtMode.LOCAL -> LlamaTranslator.Capped(local!!, mtMaxTokens(s.target))
-                    MtMode.BYOK -> {
-                        val (t, k, e) = byok(s, version, wait, notices) ?: return null
-                        used = k; ev = e; t
-                    }
-                }
+                val (mt, used, ev) = byok(s, version, wait, notices) ?: return null
                 // one Jev client for both features; no key = both paused until one is entered
                 // pauses count deep sleep: one kept across sessions ends at the time the service named
                 val judge = s.jevKey?.let {
                     Jev(s.provider, it, source = s.source, target = s.target)
                 }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
-                return Built(Setup(mt, s.scene, s.source, s.target, mode == MtMode.BYOK, judge, s.dedupe, s.contextN, version),
+                return Built(Setup(mt, s.scene, s.source, s.target, judge, s.dedupe, s.contextN, version),
                     notices.joinToString("  ·  "), used, ev)
             }
             /** Log a built setup that is now in use: its BYOK details, and [change] = also as a config_change of [s]. */
             fun logUsed(b: Built, s: Snap, change: Boolean) {
-                b.byokEv?.let { sl?.write(mapOf("ev" to "byok") + it) }
+                sl?.write(mapOf("ev" to "byok") + b.byokEv)
                 // the service really in use: while a newly saved one is probed that is still the previous one
                 if (change) sl?.write(mapOf("ev" to "config_change", "setup" to b.setup.version) + s.log() +
-                    (b.byokEv?.filterKeys { it == "mt_url" || it == "mt_model" } ?: emptyMap()))
+                    b.byokEv.filterKeys { it == "mt_url" || it == "mt_model" })
             }
             // A change during the start probe overtakes it: build again from the newest settings (stop ends the loop).
             // Taken only while its version is still the newest, under the lock every change bumps it under, like a
-            // setup published while running; a dropped one is not cancelled (a Capped shares the native model).
+            // setup published while running; a dropped one is not cancelled (nothing to free).
             var firstSnap = s0
             var v = v0
             var built = make(s0, v0, wait = true)
             while (!stopping && (built == null || !order.publish(v) { true })) {
                 v = order.version()
-                val s = Snap(prefs, mode, wantJev, files.mt.name)
-                if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return
+                val s = Snap(prefs, wantJev)
+                if (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null) return
                 firstSnap = s
                 built = make(s, v, wait = true)
             }
@@ -316,7 +291,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             inUse = built.byok
             jevEndsOn = jevEnds; jevCheckOn = jevCheck
             // the services really in use (BYOK: the one its probe accepted, not a newly saved one still probed)
-            var mtId = mtService(firstSnap, built.byok); var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
+            var mtId = mtService(built.byok); var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
             first.judge.let { j -> main.post { activeJudge = j; refresh() } }
             // the settings in use are not the ones session_start logged: say so, like a change while running
             logUsed(built, firstSnap, change = firstSnap !== s0)
@@ -337,7 +312,6 @@ class CaptionService private constructor(private val sysaudio: File) {
                 scene = first.scene,
                 source = first.source,
                 target = first.target,
-                byokPrompt = first.byokPrompt,
                 judge = first.judge,
                 judgeEnds = jevEnds,
                 checkTranslations = jevCheck,
@@ -367,15 +341,15 @@ class CaptionService private constructor(private val sysaudio: File) {
                 try {
                     val v = order.version()
                     if (v == published || stopping) return@Runnable
-                    val s = Snap(prefs, mode, wantJev, files.mt.name)
+                    val s = Snap(prefs, wantJev)
                     // BYOK is only switched by "保存", which checks the fields; a half-filled one keeps the current setup
-                    if (mode == MtMode.BYOK && (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null)) return@Runnable
+                    if (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null) return@Runnable
                     val b = make(s, v, wait = false) ?: return@Runnable
                     // the version check and the publication under the lock every change bumps the version under: a newer
                     // change or the session end either comes before (this setup is dropped) or after (it rebuilds again)
                     // another translator or Jev service: its light starts unknown (grey), never the old one's. The
                     // switch is queued on the main thread before the new setup can produce any result
-                    val m = mtService(s, b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
+                    val m = mtService(b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
                     val mtNew = m != mtId; val jevNew = j != jevId
                     val judge = b.setup.judge
                     val activate = Runnable {
@@ -440,10 +414,9 @@ class CaptionService private constructor(private val sysaudio: File) {
         } finally {
             // the pipeline workers have exited (or never started), so this is the last event
             log?.let { it.write(mapOf("ev" to "session_end", "overloaded" to overloaded)); it.close() } // failure → onFail
-            // Detach the translator under the same lock onDestroy uses for cancel(), so no thread can call
-            // into it after this point; the (slow) native free then happens outside the lock.
-            synchronized(cancelLock) { pipeline = null; translator = null }
-            local?.release(); asr?.release(); vad?.release()
+            // Detach the pipeline under the same lock stop uses; the native free happens outside it.
+            synchronized(cancelLock) { pipeline = null }
+            asr?.release(); vad?.release()
             Log.i(TAG, "session released")
             // the captions and the reason stay until the user ends them (✕, the menu bar or the home screen)
             if (keepOverlay) { ended = true; main.post { if (current === this@CaptionService) endedState.value = true } }
@@ -610,38 +583,34 @@ class CaptionService private constructor(private val sysaudio: File) {
         pauseTimer?.stop(); pauseTimer = null
         activeJudge = null // stops watching its service
         prefs.unlisten(prefListener)
-        // Only flags + an atomic store into a still-alive translator (the session thread detaches it under the
+        // Only flags and request cancels (the session thread detaches the pipeline under the same lock before
         // same lock before freeing), and the end of the child, which the capture loop sees as EOF.
-        synchronized(cancelLock) { probing?.cancel(); pipeline?.stop() ?: translator?.cancel(); capture?.destroy() }
+        synchronized(cancelLock) { probing?.cancel(); pipeline?.stop(); capture?.destroy() }
     }
 
     /**
      * The settings a [Setup] is built from, read once so a setup never mixes two states of the preferences.
-     * Only fields of [mode] are filled (the others never change the setup). [log] leaves out the keys.
+     * [log] leaves out the keys.
      */
-    private class Snap(prefs: Prefs, mode: MtMode, wantJev: Boolean, localModel: String) {
+    private class Snap(prefs: Prefs, wantJev: Boolean) {
         val scene = prefs.scene
         val source = prefs.sourceLang
         val target = prefs.targetLang
         val dedupe = prefs.dedupeJoin
         val contextN = if (prefs.contextOn) prefs.contextSentences else 0
-        val online = if (mode == MtMode.INDEX) prefs.onlineModel else null
         // the three BYOK fields from one read, so the address of one save never goes out with the key of another
-        private val byok = if (mode == MtMode.BYOK) prefs.byokTriple() else null
-        val byokUrl = byok?.let { ByokTranslator.chatUrl(it.first).second }
-        val byokModel = byok?.second.orEmpty()
-        val byokKey = byok?.third
+        private val byok = prefs.byokTriple()
+        val byokUrl = ByokTranslator.chatUrl(byok.first).second
+        val byokModel = byok.second
+        val byokKey = byok.third
         val provider = prefs.jevProvider
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
-        private val mtModel = online?.id ?: if (mode == MtMode.BYOK) byokModel else localModel
-        /** the translation model of a non-BYOK setup (local or the online one), for [mtService] */
-        val mtLabel get() = "$mtModel\n${online?.let { OnlineTranslator.URL }.orEmpty()}"
 
         fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
             "dedupe_join" to dedupe, "context_sentences" to contextN,
-            "mt_model" to mtModel, "mt_url" to (online?.let { OnlineTranslator.URL } ?: byokUrl))
+            "mt_model" to byokModel, "mt_url" to byokUrl)
     }
 
     companion object {
@@ -651,10 +620,9 @@ class CaptionService private constructor(private val sysaudio: File) {
          * then bumps byokSaved, so a half-saved address or model never becomes a setup. jevKey:* is matched apart.
          */
         private val setupKeys = setOf("scene", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
-            "sourceLang", "targetLang", "onlineModel")
-        // Apple silicon: ASR and MT together stay below the performance cores
+            "sourceLang", "targetLang")
+        // Apple silicon: ASR stays on two of the performance cores
         private const val ASR_THREADS = 2
-        private const val MT_THREADS = 4
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
@@ -673,17 +641,13 @@ class CaptionService private constructor(private val sysaudio: File) {
         /** Compose mirrors of [current] != null and of [ended], for the home screen and the menu bar */
         val runningState = mutableStateOf(false)
         val endedState = mutableStateOf(false)
-        private val sessions = java.util.concurrent.atomic.AtomicInteger()
-        /** A session thread may still have model files open (also after stop, until its native free is done). */
-        val modelsInUse: Boolean get() = sessions.get() > 0
-        val modelsBusy = mutableStateOf(false)
         val running: Boolean get() = current != null
 
         /** UI thread. A session that ended by itself (its message still shown) is replaced. */
         fun start(sysaudio: File) {
             current?.let { if (it.ended) stop() else return }
             val s = CaptionService(sysaudio)
-            current = s; runningState.value = true; endedState.value = false; modelsBusy.value = true
+            current = s; runningState.value = true; endedState.value = false
             s.begin()
         }
 

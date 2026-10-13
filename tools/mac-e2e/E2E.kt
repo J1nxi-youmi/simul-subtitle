@@ -19,14 +19,14 @@ fun main() {
     // -Dsource=<ja|en|auto> -Dtarget=<code>: languages as in the app (default ja -> zh)
     val source = (System.getProperty("source") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: error("source $it") }
     val target = Lang.of(System.getProperty("target") ?: "zh") ?: error("target")
-    // -Donline=<35|9|2> uses bilibili's public Index API instead of the local model
-    val online = System.getProperty("online")?.let { m -> OnlineModel.entries.single { it.name == "B$m" } }
-    val mt: Mt = if (online != null) OnlineTranslator(online, maxTokens = mtMaxTokens(target)) else object : Mt {
-        val h = MacLlama.nativeLoad("$m/mt/index-translate-2b.gguf", 4)
-        override fun translate(prompt: String): MtResult? =
-            qwenChat(prompt).let { full -> MacLlama.nativeTranslate(h, full, mtMaxTokens(target))?.let { MtResult.parse(it, request = full) } }
-        override fun cancel() = MacLlama.nativeCancel(h)
-    }
+    // translation: an OpenAI-compatible service, as in the app (BYOK_URL, BYOK_MODEL, BYOK_KEY); the switch that
+    // turns thinking off is probed first, as the app does on a first use
+    val url = ByokTranslator.chatUrl(System.getenv("BYOK_URL") ?: error("BYOK_URL")).let { it.second ?: error("BYOK_URL: ${it.first}") }
+    val model = System.getenv("BYOK_MODEL") ?: error("BYOK_MODEL"); val key = System.getenv("BYOK_KEY") ?: error("BYOK_KEY")
+    val system = byokSystem(scene, source, target)
+    val variant = ByokTranslator(url, model, key, system, null).probe(mutableListOf())
+    System.err.println("BYOK thinking switch: ${variant?.label ?: "none found"}")
+    val mt: Mt = ByokTranslator(url, model, key, system, variant, maxTokens = mtMaxTokens(target))
     // -Djev=1 uses the real Jev (TYPESAFE_API_KEY); -Dlog=<file> writes the session events as JSONL
     // -Djev=zen: the free keyless Zen endpoint; any other value: TypeSafe official with TYPESAFE_API_KEY
     val judge = when (System.getProperty("jev")) {

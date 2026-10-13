@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Mac app (Apple silicon only) and its unsigned dmg: desktop/build/compose/binaries/main/dmg/*.dmg
 #   tools/mac-app/build.sh
-# The app carries a JRE, its native libraries and the audio helper; models are downloaded on first start into
-# ~/Library/Application Support/SimulSub/models. Needs a JDK 17 in JAVA_HOME and Xcode command line tools.
+# The app carries a JRE, its native libraries, the audio helper and the speech models (./models, see ./setup.sh).
+# Needs a JDK 17 in JAVA_HOME and Xcode command line tools.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
 JH="${JAVA_HOME:?set JAVA_HOME to a JDK 17}"
@@ -21,27 +21,10 @@ fetch "$GH/sherpa-onnx-jvm-$SHERPA.jar" "$W/sherpa-jvm.jar"
 fetch "$GH/sherpa-onnx-native-lib-osx-aarch64-$SHERPA.jar" "$W/sherpa-osx.jar"
 (cd "$R" && unzip -o -q -j "$W/sherpa-osx.jar" 'sherpa-onnx/native/osx-aarch64/*')
 
-# 2. llama.cpp, static and CPU only (as on the phone), linked into the one JNI library the app loads
-CMAKE="${CMAKE:-$(command -v cmake || echo "$HOME/Library/Android/sdk/cmake/3.22.1/bin/cmake")}"
-L="$ROOT/third_party/llama.cpp"
-LREV="$(git -C "$L" rev-parse HEAD)"
-LB="$W/llama"
-if [ ! -s "$LB/src/libllama.a" ] || [ "$(cat "$LB/REV" 2>/dev/null)" != "$LREV" ]; then
-  "$CMAKE" -S "$L" -B "$LB" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.2 \
-    -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod \
-    -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF \
-    -DLLAMA_CURL=OFF >/dev/null
-  "$CMAKE" --build "$LB" -j 8 --target llama >/dev/null
-  echo "$LREV" > "$LB/REV"
-fi
-sed 's/Java_io_github_korenkrita_simulsub_LlamaTranslator_/Java_io_github_korenkrita_simulsub_MacLlama_/' \
-  "$ROOT/app/src/main/cpp/translator_jni.cpp" > "$W/mac_jni.cpp"
-LIBS="$(find "$LB" -name 'libllama.a' -o -name 'libggml*.a' | tr '\n' ' ')"
-# shellcheck disable=SC2086
-clang++ -std=c++17 -O2 -shared -fPIC -arch arm64 -mmacosx-version-min=14.2 \
-  -I"$JH/include" -I"$JH/include/darwin" -I"$L/include" -I"$L/ggml/include" \
-  "$W/mac_jni.cpp" $LIBS -framework Accelerate -install_name @rpath/libjpsub_mac.dylib -o "$R/libjpsub_mac.dylib"
-if otool -L "$R/libjpsub_mac.dylib" | grep -qE 'llama|ggml'; then echo "libjpsub_mac still links llama dynamically"; exit 1; fi
+# 2. the speech models, checked by ./setup.sh (it fetches what is missing)
+"$ROOT/setup.sh" >/dev/null
+mkdir -p "$R/models"
+cp -R "$ROOT/models/asr" "$ROOT/models/vad" "$R/models/"
 
 # 3. the audio helper, Apple silicon only
 xcrun swiftc -O -target arm64-apple-macos14.2 "$ROOT/tools/mac-capture/SysAudio.swift" -o "$R/sysaudio"

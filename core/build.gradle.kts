@@ -1,5 +1,5 @@
 // Platform-free core shared by the Android app and the desktop app: segmentation, the ASR/MT pipeline, translation
-// prompts and online translators, Jev, model manifest/verification, session logs and service status.
+// prompts and the BYOK translator, Jev, session logs and service status.
 plugins {
     id("org.jetbrains.kotlin.jvm")
 }

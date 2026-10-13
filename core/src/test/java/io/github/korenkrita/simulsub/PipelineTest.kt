@@ -65,9 +65,10 @@ class PipelineTest {
     }
 
     companion object {
-        /** The Japanese text inside a GENERAL-scene Index prompt. */
-        fun source(prompt: String) =
-            if (prompt.contains("【源文】\n")) prompt.substringAfter("【源文】\n").substringBefore("\n\n") else prompt.substringAfter("\n\n")
+        /** The sentence inside a BYOK user message ([byokUser]). */
+        fun source(prompt: String) = prompt.substringAfter("【当前句】\n").substringBefore("\n\n")
+        /** The context part of a BYOK user message for these sentences, oldest first. */
+        fun context(vararg s: String) = "【前文】\n" + s.joinToString("\n") + "\n\n"
     }
 
     private fun job(seg: Long, rev: Int, final: Boolean, n: Int) = AsrJob(seg, rev, final, FloatArray(n), monoMs())
@@ -577,13 +578,13 @@ class PipelineTest {
         p.start()
         for ((s, n) in listOf(1L to 10, 2L to 20, 3L to 30, 4L to 40)) p.submit(job(s, 1, true, n))
         assertTrue(done.await(2, TimeUnit.SECONDS)); p.stop(); p.awaitStopped()
-        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        val ctx = "【前文】\n"
         assertTrue(mt.calls[0], !mt.calls[0].contains(ctx)) // the first sentence has none
-        assertTrue(mt.calls[1], mt.calls[1].contains(ctx + "ja10"))
+        assertTrue(mt.calls[1], mt.calls[1].startsWith(context("ja10")))
         // seg 3 is empty (not translated, not context); seg 4 sees the two before it that had text
         assertEquals(3, mt.calls.size)
-        assertTrue(mt.calls[2], mt.calls[2].contains(ctx + "ja10 / ja20"))
-        assertTrue(mt.calls.none { it.contains(ctx + "ja10 / ja20 / ") }) // never more than two
+        assertTrue(mt.calls[2], mt.calls[2].startsWith(context("ja10", "ja20")))
+        assertTrue(mt.calls.none { it.startsWith("【前文】\nja10\nja20\nja") }) // never more than two
     }
 
     @Test
@@ -604,18 +605,18 @@ class PipelineTest {
             judge.gate.countDown()
             assertTrue(done.await(3, TimeUnit.SECONDS))
         } finally { judge.gate.countDown(); p.stop(); p.awaitStopped() }
-        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
-        assertTrue(mt.calls[3], mt.calls[3].contains(ctx + "ja20 / ja30")) // segment 4: the last two only
+        val ctx = "【前文】\n"
+        assertTrue(mt.calls[3], mt.calls[3].startsWith(context("ja20", "ja30"))) // segment 4: the last two only
         val retry1 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja10" }
         assertTrue(retry1, !retry1.contains(ctx))
         val retry2 = mt.calls.first { it.contains(FIX_NOTES["negation"]!!) && source(it) == "ja20" }
         // its own context (just segment 1), not the newest sentences
-        assertEquals(retry2, "ja10", retry2.substringAfter(ctx).lineSequence().first().trim())
+        assertEquals(retry2, "ja10", retry2.substringAfter(ctx).substringBefore("\n\n"))
     }
 
     @Test
     fun contextCanBeTurnedOffOrSetFromOneToFiveSentences() {
-        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        val ctx = "【前文】\n"
         fun run(n: Int): List<String> {
             val mt = FakeMt(1); val done = CountDownLatch(7)
             val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, previousSentences = n)
@@ -630,16 +631,16 @@ class PipelineTest {
         run(0).forEach { assertTrue(it, !it.contains(ctx)) }
         // 1: only the sentence right before
         val one = run(1)
-        assertEquals(one[6], "ja60", one[6].substringAfter(ctx).lineSequence().first().trim())
+        assertEquals(one[6], "ja60", one[6].substringAfter(ctx).substringBefore("\n\n"))
         // 5: the five before, oldest first, never six
         val five = run(Pipeline.MAX_PREVIOUS_SENTENCES)
-        assertTrue(five[6], five[6].contains(ctx + "ja20 / ja30 / ja40 / ja50 / ja60"))
-        assertTrue(five[6], !five[6].contains("ja10 / ja20"))
+        assertTrue(five[6], five[6].startsWith(context("ja20", "ja30", "ja40", "ja50", "ja60")))
+        assertTrue(five[6], !five[6].contains("ja10"))
     }
 
     @Test
     fun aLateRetryKeepsItsOwnContextWithFiveSentences() {
-        val ctx = "前文（只用于理解当前句的指代和省略，不要翻译、不要输出）："
+        val ctx = "【前文】\n"
         val judge = GateJudge(choice = "negation")
         val mt = FakeMt(1); val done = CountDownLatch(8)
         val p = Pipeline(FakeAsr(), mt, { if (it.isFinal) done.countDown() }, judge = judge, checkTranslations = true,

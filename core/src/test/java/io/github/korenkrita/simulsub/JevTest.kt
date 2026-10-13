@@ -77,32 +77,31 @@ class JevTest {
     private fun jev(deadline: Long = 2_000) =
         Jev(JevProvider.OFFICIAL, "sk-secret", deadline, url = "http://127.0.0.1:$port/v1/systemone")
 
-    private fun online(deadline: Long = 2_000) = OnlineTranslator(OnlineModel.B9, deadline, url = "http://127.0.0.1:$port/v1/chat/completions")
+    private fun online(deadline: Long = 2_000) = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null, deadlineMs = deadline)
     private fun sse(vararg chunks: String) = chunks.joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
 
     @Test
-    fun onlineTranslationSendsTheOfficialRequestAndKeepsTheRawResponse() {
-        // stream shape recorded from index-translate.bilibili.com on 2026-10-11
+    fun aStreamedTranslationIsAssembledWithItsUsage() {
+        // stream shape recorded from an OpenAI-compatible service (role-only first chunk, usage at the end)
         reply = { 200 to sse("""{"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}]}""",
             """{"choices":[{"finish_reason":null,"index":0,"delta":{"content":"真的"}}]}""",
             """{"choices":[{"finish_reason":null,"index":0,"delta":{"content":"吗？"}}]}""",
             """{"choices":[{"finish_reason":"stop","index":0,"delta":{}}]}""",
             """{"choices":[],"usage":{"prompt_tokens":34,"completion_tokens":4}}""") }
-        val r = online().translate("请将以下日语文本翻译为中文，直接输出翻译结果，不要进行任何解释。\n\n本当に？")!!
+        val r = online().translate(byokUser("本当に？"))!!
         assertEquals("真的吗？", r.text); assertTrue(r.usable); assertEquals(200, r.http); assertNull(r.error)
-        assertEquals(34, r.promptTokens); assertEquals(4, r.outputTokens); assertNotNull(r.firstContentMs); assertNull(r.prefillMs)
+        assertEquals(34, r.promptTokens); assertEquals(4, r.outputTokens); assertNotNull(r.firstContentMs)
         val req = Json.parse(lastBody.get()!!) as Map<*, *>
-        assertEquals("Index-Translate-9B", req["model"]); assertEquals(true, req["stream"])
-        assertEquals(mapOf("enable_thinking" to false), req["chat_template_kwargs"])
-        assertEquals("本当に？", ((req["messages"] as List<*>).single() as Map<*, *>)["content"].toString().substringAfter("\n\n"))
-        assertEquals(r.request, lastBody.get()); assertTrue(r.response!!.contains("finish_reason"))
+        assertEquals("m-1", req["model"]); assertEquals(true, req["stream"])
+        assertEquals("【当前句】\n本当に？", ((req["messages"] as List<*>)[1] as Map<*, *>)["content"])
+        assertEquals(r.request, lastBody.get())
     }
 
     @Test
-    fun onlineFailuresAreUnusableAndLogged() {
+    fun failuresAreUnusableAndLogged() {
         reply = { 503 to "busy" }
         val a = online().translate("x")!!
-        assertFalse(a.usable); assertEquals(503, a.http); assertEquals("HTTP 503", a.error); assertEquals("busy", a.response)
+        assertFalse(a.usable); assertEquals(503, a.http); assertEquals("HTTP 503", a.error); assertNull(a.response)
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"很长"},"finish_reason":"length"}]}""") }
         val b = online().translate("x")!!
         assertEquals('l', b.stop); assertTrue(b.usable); assertNull(b.promptTokens)
@@ -112,7 +111,7 @@ class JevTest {
     }
 
     private fun streamed(firstContentMs: Long, deadline: Long = 8_000) =
-        OnlineTranslator(OnlineModel.B9, deadline, url = "http://127.0.0.1:$port/v1/chat/completions", firstContentMs = firstContentMs)
+        ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null, deadlineMs = deadline, firstContentMs = firstContentMs)
 
     @Test
     fun noTranslatedTextWithinTheFirstContentWaitFailsTheCaption() {
@@ -154,7 +153,7 @@ class JevTest {
     }
 
     @Test
-    fun aStoppedOnlineTranslatorSendsNothingMore() {
+    fun aStoppedTranslatorSendsNothingMore() {
         val t = online(); t.cancel()
         val r = t.translate("x")!!
         assertFalse(r.usable); assertEquals("cancelled", r.error)
@@ -162,7 +161,7 @@ class JevTest {
     }
 
     @Test
-    fun aCancelledOnlineRequestIsStillLoggedWithWhatWasSent() {
+    fun aCancelledRequestIsStillLoggedWithWhatWasSent() {
         delayMs = 3_000
         val t = online(deadline = 5_000)
         val r = AtomicReference<MtResult?>()
@@ -236,7 +235,7 @@ class JevTest {
     fun anUnknownFinishReasonIsNotAUsableTranslation() {
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"半分"},"finish_reason":"content_filter"}]}""") }
         val a = online().translate("x")!!
-        assertFalse(a.usable); assertEquals("finish_reason", a.error); assertTrue(a.response!!.contains("content_filter"))
+        assertFalse(a.usable); assertEquals("finish_reason", a.error)
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"半分"}}]}""") }
         assertFalse(online().translate("x")!!.usable)
         reply = { 200 to """{"choices":[{"message":{"content":"不是流"},"finish_reason":"stop"}]}""" }
@@ -908,10 +907,10 @@ class JevTest {
     }
 
     @Test
-    fun anOnlineTranslationWhose429BodyIsSlowIsStillA429() {
+    fun aTranslationWhose429BodyIsSlowIsStillA429() {
         // the body trickles past the first-content cutoff (500 ms), well before the deadline: that exit keeps the 429
         reply = { 429 to """{"error":"slow down, this body takes a while"}""" }; trickleMs = 100
-        val r = OnlineTranslator(OnlineModel.B9, 10_000, url = "http://127.0.0.1:$port/v1/chat/completions", firstContentMs = 500).translate("x")!!
+        val r = streamed(500, deadline = 10_000).translate("x")!!
         assertEquals(429, r.http)
         assertTrue(r.error!!, r.error!!.startsWith("no content"))
     }

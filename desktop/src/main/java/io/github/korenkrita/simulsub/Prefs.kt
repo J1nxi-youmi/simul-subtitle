@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Where the app keeps its settings, models and logs: ~/Library/Application Support/SimulSub (or -Dsimulsub.data). */
+/** Where the app keeps its settings and logs: ~/Library/Application Support/SimulSub (or -Dsimulsub.data). */
 val dataDir: File = File(System.getProperty("simulsub.data")
     ?: "${System.getProperty("user.home")}/Library/Application Support/SimulSub").also { it.mkdirs() }
 
@@ -56,13 +56,6 @@ class Prefs private constructor(private val file: File) {
     var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
     var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
     var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
-    var mtMode: MtMode
-        get() = str("mtMode")?.let { runCatching { MtMode.valueOf(it) }.getOrNull() } ?: MtMode.INDEX
-        set(v) = put("mtMode" to v.name)
-    val mtOnline: Boolean get() = mtMode != MtMode.LOCAL
-    var onlineModel: OnlineModel
-        get() = runCatching { OnlineModel.valueOf(str("onlineModel") ?: "") }.getOrDefault(OnlineModel.B35)
-        set(v) = put("onlineModel" to v.name)
     /** null: not sure (the recognizer decides) */
     var sourceLang: Lang?
         get() = (str("sourceLang") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
@@ -86,9 +79,6 @@ class Prefs private constructor(private val file: File) {
     /** a release the user chose to skip (its versionCode) */
     var skippedUpdate: Int get() = int("skippedUpdate", 0); set(v) = put("skippedUpdate" to v)
 
-    /** the source ([ModelSpec.urls] index) the .part of [path] came from; -1 none */
-    fun downloadSource(path: String) = int("dl:$path", -1)
-    fun setDownloadSource(path: String, src: Int) = put("dl:$path" to src.takeIf { it >= 0 })
 
     fun jevKey(p: JevProvider): String? { rev.intValue; return Keychain.get("jevKey:${p.name}") }
     /** false when the keychain refused it */

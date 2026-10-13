@@ -2,46 +2,35 @@
 
 ## 环境
 
-JDK 17，Android SDK（platform 35、build-tools 34.0.0、NDK 27.2.12479018、CMake 3.22.1）。minSdk 29，arm64-v8a。
-
-llama.cpp 按 `armv8.6-a+dotprod+i8mm+fp16` 编译（`app/build.gradle.kts`，`GGML_NATIVE=OFF`，没有运行时分派），所以「手机上翻译」只能在支持这些指令的处理器上运行；不支持的手机选这个方式会因非法指令崩溃。识别和在线翻译不受影响。
+JDK 17，Android SDK（platform 35、build-tools 34.0.0）。minSdk 29，arm64-v8a。不需要 NDK：App 没有自己的原生代码，识别用的是 sherpa-onnx AAR 里编好的库。
 
 ```bash
-git clone --recursive https://github.com/KorenKrita/simul-subtitle   # llama.cpp 是子模块
+git clone https://github.com/KorenKrita/simul-subtitle
 cd simul-subtitle
-./setup.sh                      # 下载 sherpa-onnx AAR 到 app/libs，模型到 models/（Mac 测试用）
+./setup.sh                      # sherpa-onnx AAR 到 app/libs，识别模型到 models/ 并复制进 app/src/main/assets/models
 export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
 ./gradlew -q :app:compileDebugUnitTestKotlin :app:assembleRelease
 ```
 
 需要代理时：`HTTPS_PROXY=... ./setup.sh`，以及 `./gradlew -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890 ...`。
 
-APK 在 `app/build/outputs/apk/release/app-release.apk`（约 13 MB，原生库压缩存放，安装时解压）。
+APK 在 `app/build/outputs/apk/release/app-release.apk`（约 90 MB：识别模型约 78 MB 不压缩存放，原生库压缩存放、安装时解压）。
 上面的命令只编译测试，不运行单元测试或模拟器。
 
-代码分两个模块：`core/` 是不依赖 Android 的核心（断句、识别和翻译的流水线、翻译提示词与在线翻译、Jev、模型清单与校验、会话日志、服务状态），手机和桌面版共用；`app/` 是 Android 外壳（界面、浮层、后台服务、模型下载、检查更新、本地模型的 JNI）。跑全部单元测试：`./gradlew :core:test :app:testDebugUnitTest`。
+代码分两个模块：`core/` 是不依赖 Android 的核心（断句、识别和翻译的流水线、翻译提示词与 BYOK 翻译客户端、Jev、会话日志、服务状态），手机和桌面版共用；`app/` 是 Android 外壳（界面、浮层、后台服务、检查更新）。跑全部单元测试：`./gradlew :core:test :app:testDebugUnitTest`。
 
 ## 模型
 
-App 里点「下载模型」时，由系统 DownloadManager 在后台下载。每个文件有三层地址，内容完全相同：
+识别模型直接打包进 App，不在运行时下载。`./setup.sh` 只从官方地址取文件，逐个核对大小和 SHA-256，不对就报错退出：
 
-| 文件 | ① 官方 | ② 本项目 GitHub | ③ 国内镜像 |
+| 文件 | 大小 | 来源 | 用途 |
 |---|---|---|---|
-| 语音识别（4 个文件）、静音检测 | 固定版本的 Hugging Face 仓库 / sherpa-onnx 的 GitHub Release | 本项目 Release [`models-v1`](https://github.com/KorenKrita/simul-subtitle/releases/tag/models-v1) 的备份 | GitHub 下载代理 gh-proxy.com、gh.llkk.cc 访问同一份备份 |
-| 手机上翻译的模型 | Hugging Face 官方仓库 | `models-v1` 的备份（随附 Apache-2.0 许可证） | 魔搭 ModelScope 上的官方仓库 `IndexTeam/Index-Translate-2B-GGUF`，再到两个 GitHub 代理 |
+| `asr/encoder.int8.onnx` 等 4 个 | 约 77 MB | 固定版本的 Hugging Face 仓库 [csukuangfj/reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en) | ReazonSpeech 识别 |
+| `vad/silero_vad.onnx` | 0.6 MB | sherpa-onnx 的 GitHub Release `asr-models` | 静音检测 |
+| `asr/LICENSE`、`vad/LICENSE` | | apache.org 的 Apache-2.0 原文、[silero-vad](https://github.com/snakers4/silero-vad) 固定 commit 的 MIT 许可证 | 随模型一起分发 |
 
-- **先选线路**：开始下载时，三层的所有地址同时下载最小的那个文件（识别用的 tokens.txt，约 26 KB，核对大小和 SHA-256 后丢弃；魔搭上没有这个文件，所以翻译模型的第三层按代理的结果算）。官方一层能用就走官方；官方不通就用能用的最低一层，下层能不能用，一知道就决定，不等上层超时。最多等 15 秒；都不成功就按完整顺序从官方开始（例如还没联网）。之后这一批的所有文件都从选中的那一层开始，按固定顺序往后试，上面的层不再试。小文件能下不代表大文件一定能下：大文件在选中的线路上不通时，照样按下一条规则换地址。选线路时 App 被系统关掉，下次打开会继续。点「下载」或「重试」会重新选。
-- 一个地址下载失败、15 秒进度一直是 0，或者下回来的文件校验不通过，就换路线上的下一个地址；所有地址都失败才提示错误。以系统上报的进度为准：上报有延迟（至少每 64 KB 才更新一次），所以已经收到少量数据、但进度还没更新的下载也可能被换掉。**进度动过的下载，中途卡住不换地址**，等网络恢复后由系统接着下（换地址要从头下）。换地址只在 App 打开着时进行：切到后台后，系统会继续下载当前地址，回到 App 时再判断要不要换。
-- 存储空间不足等手机本身的问题不会换地址。
-- 每个文件使用前都校验大小和 SHA-256，不论从哪个地址下载，内容都必须与官方文件完全一致；下载不完整或损坏的文件不会被加载。
-
-| 文件 | 大小 | 用途 |
-|---|---|---|
-| `asr/encoder.int8.onnx` 等 4 个 | 约 77 MB | ReazonSpeech 识别 |
-| `vad/silero_vad.onnx` | 0.6 MB | 静音检测 |
-| `mt/index-translate-2b.gguf` | 1.31 GB | 手机上翻译（只在选择时下载） |
-
-也可以用 `./setup.sh push` 通过 adb 推送，推送的文件会在后台校验一次。
+- 手机：`setup.sh` 把这些文件复制到 `app/src/main/assets/models/`（不进 git），`.onnx` 在 APK 里不压缩（`noCompress`），sherpa-onnx 直接从 assets 读取。从 0.6.5 及更早版本升级时，App 会删掉以前下载到手机里的 `asr/`、`vad/`、`mt/` 文件。
+- Mac：`tools/mac-app/build.sh` 把 `models/asr`、`models/vad` 复制进 App 的资源目录；从仓库运行时用 `./models`（或 `-Dsimulsub.models=<目录>`）。
 
 ## Mac 端到端测试
 
@@ -49,11 +38,11 @@ App 里点「下载模型」时，由系统 DownloadManager 在后台下载。�
 tools/mac-e2e/run.sh [file.wav]
 ```
 
-在 macOS 上用真实模型运行和手机相同的 Pipeline / Segmenter / JNI 代码，按实时速度输入 WAV；所有定稿都按顺序送达才返回 0。不带参数时用 `say -v Kyoko` 合成一段 6 句的回归音频。
+在 macOS 上用真实识别模型和你自己的翻译服务运行和手机相同的 Pipeline / Segmenter 代码，按实时速度输入 WAV；翻译服务由环境变量 `BYOK_URL`、`BYOK_MODEL`、`BYOK_KEY` 给出（要能关闭思考，第一次会先探测关闭思考的参数）；所有定稿都按顺序送达才返回 0。不带参数时用 `say -v Kyoko` 合成一段 6 句的回归音频。
 
 - `JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh`：反向检查，必须失败。
 - `-DdeadlineS`（默认 180 s）：超时后以 2 退出，卡住的原生调用不会让测试挂起。
-- `tools/mac-e2e/sample-run.log` 是一次参考运行。
+- `tools/mac-e2e/sample-run.log` 是 0.6.5 用手机上的本地翻译模型时的一次参考运行，翻译耗时和译文不代表 BYOK。
 
 ## Mac 版
 
@@ -63,7 +52,7 @@ tools/mac-e2e/run.sh [file.wav]
 
 ```bash
 tools/mac-capture/build.sh          # 系统声音抓取 sysaudio
-tools/mac-e2e/run.sh                # 顺带编好 sherpa-onnx 与 llama.cpp 的 Mac 原生库
+tools/mac-e2e/run.sh                # 顺带下载 sherpa-onnx 的 Mac 原生库（需要 BYOK_* 环境变量）
 ./gradlew :desktop:run
 ```
 
@@ -76,28 +65,28 @@ export JAVA_HOME=$(mise where java@zulu-17.68.203.0)
 tools/mac-app/build.sh
 ```
 
-产物是 `desktop/build/compose/binaries/main/dmg/SimulSub-<versionName>-mac-arm64.dmg`（约 75 MB），脚本最后打印它的 SHA-256。脚本自己完成全部原生部分，不依赖 `tools/mac-e2e`：
+产物是 `desktop/build/compose/binaries/main/dmg/SimulSub-<versionName>-mac-arm64.dmg`，脚本最后打印它的 SHA-256。脚本自己完成全部原生部分，不依赖 `tools/mac-e2e`：
 
 - sherpa-onnx 1.13.8 的 JVM jar 和 `osx-aarch64` 原生库（与 `tools/mac-e2e` 同一版本）。
-- llama.cpp 静态编译（CPU、`armv8.2-a+dotprod`、不开 Metal），和手机同一份 `translator_jni.cpp` 一起链成一个 `libjpsub_mac.dylib`；脚本会检查它不再动态依赖 llama / ggml。
+- 识别模型（`./setup.sh` 校验过的 `models/asr`、`models/vad`）。
 - `sysaudio` 只编 arm64。
-- `:desktop:createDistributable` 带上精简 JRE（`java.net.http`、`jdk.crypto.ec`、`java.naming` 等），原生库和 `sysaudio` 放在 `SimulSub.app/Contents/app/resources/`（`compose.application.resources.dir`）。
+- `:desktop:createDistributable` 带上精简 JRE（`java.net.http`、`jdk.crypto.ec`、`java.naming` 等），原生库、模型和 `sysaudio` 放在 `SimulSub.app/Contents/app/resources/`（`compose.application.resources.dir`）。
 - 版本号跟安卓同一个 `versionName`。jpackage 要求主版本号大于 0，所以 bundle 的 `CFBundleVersion` 是 `1.<versionCode>`（只用来排序），`CFBundleShortVersionString` 改回 `versionName` 后重新 ad hoc 签名。
 - `Info.plist` 带 `NSAudioCaptureUsageDescription`，第一次「开始字幕」时系统会问是否允许录制系统声音。
 
 没有 Developer ID 签名和公证。用户第一次打开时 macOS 会拦下；要在「系统设置 → 隐私与安全性」里点「仍要打开」，或右键 App 选「打开」。
 
-装好的 App 把设置、使用记录和模型放在 `~/Library/Application Support/SimulSub/`，key 存在钥匙串（服务名 `SimulSub`）。删除 App 不会删除这些。
+装好的 App 把设置和使用记录放在 `~/Library/Application Support/SimulSub/`，key 存在钥匙串（服务名 `SimulSub`）。删除 App 不会删除这些。
 
 ## 签名与包名
 
-包名 `io.github.korenkrita.simulsub`。从旧包名 `dev.krita.jpsub` 的版本升级时会作为新 App 安装，需要重新下载模型。
+包名 `io.github.korenkrita.simulsub`。从旧包名 `dev.krita.jpsub` 的版本升级时会作为新 App 安装。
 
 ## App 内更新与发布
 
 ### 检查协议（从 0.4 起）
 
-不另建更新服务器，不解析网页，也不通过代理请求 GitHub API。每个正式版本的 GitHub Release 必须同时附带 APK 和固定名称的 `update.json`，并设为 **Latest**（模型备份版本、预览版不要设为 Latest）。[GitHub 支持 latest/download 固定文件地址](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)。
+不另建更新服务器，不解析网页，也不通过代理请求 GitHub API。每个正式版本的 GitHub Release 必须同时附带 APK 和固定名称的 `update.json`，并设为 **Latest**（预览版不要设为 Latest）。[GitHub 支持 latest/download 固定文件地址](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)。
 
 按以下顺序获取清单，第一个有效结果为准：
 
@@ -127,8 +116,8 @@ APK 使用清单里指向**具体版本**的 GitHub 地址；失败时按同样�
 - 「跳过本次更新」只跳过该 versionCode；「稍后提醒」延后该版本 24 小时，下次启动且到时间后再提示，不屏蔽后续更新版本。
 - 更新内容和四个按钮放在同一个可滚动区域，大字号 / 长更新内容也能滚到所有选项。
 - 已查到但等待前台显示、或已显示但尚未选择的更新提示会保留；旋转屏幕或进程重建后恢复，并重新判断提示偏好。
-- 下载与校验在后台线程执行；取消、页面销毁时停止网络请求，不影响现有模型下载。旋转屏幕、切主题或进程结束中断下载后，回到页面可点「重试」从头下载，不做断点续传。
-- APK 只放在 App 专用缓存 `updates/update.apk`，重试覆盖这份缓存。仅通过独立 FileProvider 共享该缓存目录，不共享模型、记录或其他缓存。
+- 下载与校验在后台线程执行；取消、页面销毁时停止网络请求。旋转屏幕、切主题或进程结束中断下载后，回到页面可点「重试」从头下载，不做断点续传。
+- APK 只放在 App 专用缓存 `updates/update.apk`，重试覆盖这份缓存。仅通过独立 FileProvider 共享该缓存目录，不共享记录或其他缓存。
 - 每个来源均核对实际大小、SHA-256、包名、versionCode、versionName 和与已安装 App 相同的签名证书。代理提供的哈希不是身份认证；同签名检查及系统安装器是另一道独立校验。
 - 安装请求会先解释「允许来自此来源的应用」，跳转系统设置后返回继续；待安装版本在本机持久化，进程重建后重新校验缓存。最终必须由用户在系统安装器确认。缓存丢失或校验失败可重新下载。
 

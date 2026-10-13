@@ -41,7 +41,7 @@ data class Timing(
     val asrQueueMs: Long,
     val asrMs: Long,
     val mtQueueMs: Long,
-    /** the local translation(s) only; a Jev check and its retry are in [checkMs] */
+    /** the translation(s) only; a Jev check and its retry are in [checkMs] */
     val mtMs: Long,
     /** from the last captured sample until MT finished (UI delivery is measured separately by the app) */
     val mtDoneMs: Long,
@@ -70,8 +70,6 @@ class Setup(
     /** null = auto (Japanese or English) */
     val source: Lang? = Lang.JA,
     val target: Lang = Lang.ZH,
-    /** The translator's prompt format: false = Index ([indexPrompt]), true = BYOK ([byokUser]). */
-    val byokPrompt: Boolean = false,
     /** null: no Jev for this setup (not configured, or paused because its key is missing) */
     val judge: Judge? = null,
     val dedupeJoin: Boolean = false,
@@ -82,7 +80,7 @@ class Setup(
 
 /**
  * The outcome of one real request to the translator or Jev (not a reused translation), for the overlay's lights.
- * [http] 0 = no HTTP status (local model, network failure); [limit]: Jev is paused after a 429; [setup] its version.
+ * [http] 0 = no HTTP status (network failure, cancelled); [limit]: Jev is paused after a 429; [setup] its version.
  * [limited]: the result came with a 429 or while one was on (its answer, also a valid one, not used); its limit's end
  * may not be known yet ([limit] null) and is read from the service when shown.
  */
@@ -116,12 +114,10 @@ class Pipeline(
     /** null = auto (Japanese or English); only the translator and the join of kept drafts use it */
     source: Lang? = Lang.JA,
     target: Lang = Lang.ZH,
-    /** The translator's prompt format: false = Index ([indexPrompt]), true = BYOK ([byokUser]; its system message is fixed). */
-    byokPrompt: Boolean = false,
     /**
      * Optional cloud judge (Jev). With it: endOfSpeech drafts are asked "unfinished?" on a separate thread and the
      * answer is offered to the segmenter through [holdHint]; every final translation is checked once and, for the
-     * error classes in [FIX_NOTES], translated again with the matching note. Any failure keeps the local result.
+     * error classes in [FIX_NOTES], translated again with the matching note. Any failure keeps the first translation.
      */
     private val judge: Judge? = null,
     /** Ask [judge] at sentence-end candidates (the "unfinished?" question). Default on, as before the check switch. */
@@ -131,7 +127,7 @@ class Pipeline(
      * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
      */
     dedupeJoin: Boolean = false,
-    /** Finished sentences given to the translator as context (Index prompt 前文); 0 = none. */
+    /** Finished sentences given to the translator as context (the prompt's 【前文】); 0 = none. */
     previousSentences: Int = PREVIOUS_SENTENCES,
     /** Also ask [judge] to check every final translation (off by default: little gain in logs, adds time per final). */
     private val checkTranslations: Boolean = false,
@@ -148,7 +144,7 @@ class Pipeline(
     private class MtJob(val q: Queued, val ja: String, val asrStartAt: Long, val asrEndAt: Long, val setup: Setup)
 
     /** The setup new segments take; see [Setup]. The constructor's settings are the first one. */
-    @Volatile private var current = Setup(mt, scene, source, target, byokPrompt, judge, dedupeJoin, previousSentences, setupVersion)
+    @Volatile private var current = Setup(mt, scene, source, target, judge, dedupeJoin, previousSentences, setupVersion)
     /** Every setup a pipeline worker may still call (current + those of segments in flight), so [stop] cancels all. */
     private val live: MutableSet<Setup> = java.util.concurrent.ConcurrentHashMap.newKeySet<Setup>().apply { add(current) }
     /** The setup each recent segment took (ASR thread writes, MT / check threads read through their jobs). */
@@ -456,8 +452,7 @@ class Pipeline(
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, setup: Setup, attempt: Int, ja: String, notes: List<String>,
                           previous: List<String>): MtResult? {
-        val prompt = if (setup.byokPrompt) byokUser(ja, notes, previous)
-            else indexPrompt(ja, setup.scene, notes, previous, setup.source, setup.target)
+        val prompt = byokUser(ja, notes, previous)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
@@ -467,7 +462,7 @@ class Pipeline(
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
             "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
-            "output_tokens" to r?.outputTokens, "prefill_ms" to r?.prefillMs, "decode_ms" to r?.decodeMs,
+            "output_tokens" to r?.outputTokens,
             "first_content_ms" to r?.firstContentMs, "cached_tokens" to r?.cachedTokens, "thinking" to r?.thinking, "ms" to clock() - t0,
             // reused: everything but ms is that of the earlier call (rev reused_from)
             "reused" to (hit != null), "reused_from" to hit?.rev, "setup" to setup.version))
@@ -647,7 +642,7 @@ class Pipeline(
          * much of each (by characters in order). From one Mac A/B of two VTuber clips, not tuned on a reference.
          */
         const val LOST_TAIL_SHARE = 0.7
-        /** finished sentences given to the translator as context (Index prompt 前文): default, and the most offered */
+        /** finished sentences given to the translator as context (the prompt's 【前文】): default, and the most offered */
         const val PREVIOUS_SENTENCES = 2
         const val MAX_PREVIOUS_SENTENCES = 5
         /**

@@ -2,9 +2,9 @@
 
 ## 现在用的模型
 
-ReazonSpeech k2 v2 ja-en，App 下载的是 sherpa-onnx 导出版 [csukuangfj/reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)（int8；原始模型由 [ReazonSpeech](https://github.com/reazon-research/ReazonSpeech) 发布），一个模型同时识别日语和英语。
+ReazonSpeech k2 v2 ja-en，App 内置的是 sherpa-onnx 导出版 [csukuangfj/reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)（int8；原始模型由 [ReazonSpeech](https://github.com/reazon-research/ReazonSpeech) 发布），一个模型同时识别日语和英语。
 
-- 文件约 77 MB（encoder 70.9 MB + decoder 5.2 MB + joiner 1.0 MB + tokens）。
+- 文件约 77 MB（encoder 70.9 MB + decoder 5.2 MB + joiner 1.0 MB + tokens），连同 Silero VAD（0.6 MB）直接装在 App 里：手机上放在 APK 的 assets 里（不压缩，sherpa-onnx 直接读取），Mac 上放在 App 的资源目录里。
 - 输入前后各补 0.3 s 静音：语音从第 0 个采样就开始时，这个模型会丢掉第一个词。
 - 这个模型没有“指定语言”的参数，也不输出语言标签。首页选的「视频里说的是」不改变识别本身，只告诉翻译和 Jev 原文是什么语言。
 - 已知问题：日语里偶尔有片段被识别成英语。
@@ -31,7 +31,7 @@ ReazonSpeech k2 v2 ja-en，App 下载的是 sherpa-onnx 导出版 [csukuangfj/re
 - SenseVoice 设置 `language="ja"` 时，英语片段仍被识别成英语，这个参数不能强制语言。
 - 在一段直播录音上抽查，两个模型在短片段上分歧很大，没有参考答案，无法判断谁对。
 
-现在保留 ReazonSpeech：日语差距小，速度快一倍多，内存和下载体积小很多；英语较弱是已知取舍。
+现在保留 ReazonSpeech：日语差距小，速度快一倍多，内存和安装包体积小很多；英语较弱是已知取舍。
 
 ## 可能的改进
 

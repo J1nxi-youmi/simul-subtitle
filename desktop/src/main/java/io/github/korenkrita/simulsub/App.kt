@@ -54,18 +54,15 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 private val prefs get() = Prefs.prefs
-private val dl by lazy { Downloader(Prefs.prefs) }
 private const val REPO = "https://github.com/KorenKrita/simul-subtitle"
 
 private fun open(url: String) = runCatching { Desktop.getDesktop().browse(URI(url)) }
 private fun reveal(f: File) = runCatching { ProcessBuilder("/usr/bin/open", "-R", f.path).start() }
-private fun gb(b: Long) = "%.2f GB".format(b / 1e9)
-private fun sizeText(b: Long) = if (b >= 1e9) gb(b) else if (b >= 1e6) "%.0f MB".format(b / 1e6) else "%.0f KB".format(b / 1e3)
+private fun sizeText(b: Long) = if (b >= 1e6) "%.1f MB".format(b / 1e6) else "%.0f KB".format(b / 1e3)
 
 /** Starts captions from the home screen, the menu bar or the toolbar; null when it cannot, with the reason. */
 private fun startCaptions(): String? {
-    if (!dl.store.ready()) return "模型还没下载完"
-    if (prefs.mtMode == MtMode.BYOK && !prefs.byokReady) return "自己的模型还没填完整：请在设置「翻译」里填好服务地址、模型 ID 和 API Key 并保存，或者换回在线翻译。"
+    if (!prefs.byokReady) return "翻译模型还没填完整：请在设置「翻译」里填好服务地址、模型 ID 和 API Key 并保存。"
     if (!sysaudioFile.canExecute()) return "找不到系统声音采集程序（${sysaudioFile.path}）"
     // a 测试连接 still running would probe the same service the session probes on first use (billed twice)
     byokTest.value?.cancel(); byokTest.value = null
@@ -158,8 +155,6 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
 private fun Home(startError: String?, setStartError: (String?) -> Unit) {
     val running by CaptionService.runningState
     val ended by CaptionService.endedState
-    val st by dl.state
-    LaunchedEffect(prefs.mtMode) { dl.refresh() }
     Text("把视频、直播里的日语和英语，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
     Card {
         @Composable fun status(color: Color, title: String, body: String) {
@@ -168,31 +163,7 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit) {
             }
             Text(body, color = C.text2, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(start = 19.dp, top = 6.dp, bottom = 14.dp))
         }
-        val ready = st.verifying == null && !st.running && dl.store.ready()
         when {
-            !ready -> {
-                when {
-                    st.verifying != null -> status(C.brand, "正在校验模型…", "${st.verifying}（确保文件完整，不会用坏文件）")
-                    st.running && st.choosing -> status(C.brand, "正在选择下载线路…", "同时试官方、GitHub 和国内镜像，最多约 15 秒。")
-                    st.running -> status(C.brand, "正在下载模型", "${gb(st.doneBytes)} / ${gb(st.totalBytes)} · 下载时请不要退出同传字幕（关掉窗口没关系）。")
-                    st.errors.isNotEmpty() -> status(C.err, "下载未完成", st.errors.joinToString("\n"))
-                    else -> {
-                        val left = dl.store.totalBytes() - dl.store.installedBytes()
-                        if (prefs.mtOnline) status(C.warn, "第一次用，先下载一下",
-                            "要下载约 ${gb(left)} 的识别文件，只需要下载一次。听声音在电脑上完成，翻译用网络。\n文件来自 huggingface.co、github.com。")
-                        else status(C.warn, "第一次用，先下载一下",
-                            "要下载约 ${gb(left)} 的识别和翻译文件，只需要下载一次，之后翻译也在电脑上完成（Jev 仍需联网）。\n文件来自 huggingface.co、github.com。")
-                    }
-                }
-                if (st.running || st.doneBytes > 0) LinearProgressIndicator((st.doneBytes.toFloat() / st.totalBytes).coerceIn(0f, 1f),
-                    Modifier.fillMaxWidth().padding(bottom = 12.dp), color = C.brand, backgroundColor = C.line)
-                if (st.running) {
-                    Btn("下载中 ${st.doneBytes * 100 / st.totalBytes}%", primary = true, enabled = false, modifier = Modifier.fillMaxWidth()) {}
-                    Spacer(Modifier.height(8.dp))
-                    Btn("取消下载", modifier = Modifier.fillMaxWidth()) { dl.cancel() }
-                } else if (st.verifying != null) Btn("校验中…", primary = true, enabled = false, modifier = Modifier.fillMaxWidth()) {}
-                else Btn(if (st.errors.isNotEmpty()) "重试" else "下载模型", primary = true, modifier = Modifier.fillMaxWidth()) { dl.start() }
-            }
             running && ended -> {
                 status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
                 Btn("关掉字幕", modifier = Modifier.fillMaxWidth()) { CaptionService.stop() }
@@ -209,8 +180,7 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit) {
             }
             else -> {
                 if (startError != null) status(C.err, "还不能开始", startError)
-                else status(C.brand, "可以开始了", "点下面的按钮开始。第一次会问你是否允许同传字幕录制系统声音，请选「允许」。" +
-                    (dl.maintenanceWarning?.let { "\n⚠ $it" } ?: ""))
+                else status(C.brand, "可以开始了", "点下面的按钮开始。第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
                 Box(Modifier.fillMaxWidth().height(44.dp).background(C.brand, RoundedCornerShape(10.dp))
                     .clickable { setStartError(startCaptions()) }, contentAlignment = Alignment.Center) {
                     Text("▶  开始字幕", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -294,21 +264,10 @@ private val byokResult = mutableStateOf<String?>(null)
 @Composable
 private fun TranslateTab() {
     val running by CaptionService.runningState
-    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型、自己的模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；翻译方式要先停止字幕才能换，智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
+    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、翻译模型（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
     Group("怎么翻译") {
         Hint("视频里说的语言和要翻译成的语言，在首页选（现在是：${prefs.sourceLang?.zh ?: "不确定"} → ${prefs.targetLang.zh}）。")
-        Seg(listOf(MtMode.INDEX to "在线翻译", MtMode.LOCAL to "电脑上翻译", MtMode.BYOK to "自己的模型"), prefs.mtMode, enabled = !running) {
-            prefs.mtMode = it
-        }
-        when (prefs.mtMode) {
-            MtMode.INDEX -> {
-                Label("翻译模型")
-                Dropdown(OnlineModel.entries.map { it.label }, prefs.onlineModel.ordinal) { prefs.onlineModel = OnlineModel.entries[it] }
-                Hint("用 B 站提供的免费 Index 翻译服务，需要联网。只发送识别出的文字，不发送声音；网络断开时这句会显示「翻译失败」。较大的模型通常更擅长复杂内容，较小的模型通常更快，实际速度也受网络和服务繁忙程度影响。")
-            }
-            MtMode.LOCAL -> Hint("翻译也在电脑上完成，不需要联网，但要多下载约 1.3 GB 的文件，而且比在线翻译慢，句子密的时候字幕会跟不上。")
-            MtMode.BYOK -> Byok(running)
-        }
+        Byok(running)
     }
     Group("内容") {
         Label("内容类型")
@@ -366,7 +325,7 @@ private fun TranslateTab() {
 
 @Composable
 private fun Byok(running: Boolean) {
-    Note("⚠ 实验性功能：翻译效果和速度都无法预测，取决于你填的服务和模型。开启后风险由你自己承担，包括费用、额度和服务商对内容的处理。")
+    Hint("翻译用你自己的模型服务（OpenAI 兼容接口）。只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
     var url by remember { mutableStateOf(prefs.byokUrl) }
     var model by remember { mutableStateOf(prefs.byokModel) }
     var key by remember { mutableStateOf("") }
@@ -426,7 +385,7 @@ private fun Byok(running: Boolean) {
                     byokResult.value = when {
                         ok != null -> "✓ 可以用。参数：${v!!.label}（这次没检测到思考，已记住）；收到第一个字 ${ok.firstContentMs ?: "?"} ms" +
                             (if ((ok.firstContentMs ?: 0) > FIRST_CONTENT_MS) "（超过 ${FIRST_CONTENT_MS / 1000} 秒，翻译时这句会判为失败）" else "") + "。\n测试译文：${ok.text.take(60)}"
-                        none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用，风险自负。"
+                        none -> "⚠ 连得上，但试过的 ${steps.size} 种参数都没能关掉思考，翻译可能很慢或经常失败。仍然可以使用。"
                         else -> "✗ 不能用：${steps.lastOrNull()?.result?.let { ByokTranslator.why(it) } ?: "没有回应"}"
                     }
                 }
@@ -504,57 +463,8 @@ private fun LogsTab() {
             }
         }
     }
-    ModelFiles(tick) { tick++ }
 }
 
-@Composable
-private fun ModelFiles(tick: Int, changed: () -> Unit) {
-    Group("已下载的文件") {
-        tick.let { }
-        val files = dl.store.listFiles()
-        val busy = CaptionService.modelsBusy.value || CaptionService.runningState.value
-        val downloading = dl.state.value.running || dl.state.value.verifying != null
-        var confirm by remember { mutableStateOf<String?>(null) }
-        var err by remember { mutableStateOf<String?>(null) }
-        if (files.isEmpty()) Hint("还没有下载文件。")
-        for (f in files) {
-            val why = when (f.kind) {
-                ModelStore.Kind.CURRENT -> if (f.path.startsWith("mt/") && prefs.mtOnline) "电脑上翻译时用，在线翻译用不到" else "正在使用，删除后要重新下载"
-                ModelStore.Kind.OLD -> "旧版本留下的，可以删除"
-                ModelStore.Kind.PARTIAL -> "没下载完的文件，可以删除"
-            }
-            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(f.path, fontSize = 14.sp)
-                    Text("${sizeText(f.bytes)} · $why", fontSize = 12.sp, color = C.muted)
-                }
-                if (confirm == f.path) {
-                    TextBtn("取消") { confirm = null }
-                    // captions may have started (menu bar) while this was open: ask again right before deleting
-                    TextBtn("删除", danger = true, enabled = !busy && !downloading) {
-                        confirm = null
-                        err = if (CaptionService.running || CaptionService.modelsInUse || dl.state.value.running || dl.state.value.verifying != null)
-                            "字幕运行中或正在下载，停止后才能删除"
-                        else if (dl.store.delete(f)) null else "删除失败：${f.path}"
-                        dl.refresh(); changed()
-                    }
-                } else TextBtn("删除", enabled = !busy && !downloading) { confirm = f.path }
-            }
-            confirm?.takeIf { it == f.path }?.let {
-                Hint(if (f.kind == ModelStore.Kind.CURRENT) "这是当前要用的模型，删除后需要重新下载（${sizeText(f.bytes)}）才能用。"
-                     else "这个文件现在不用，删除后可以腾出 ${sizeText(f.bytes)}。")
-            }
-            Divider()
-        }
-        err?.let { Hint(it, C.err) }
-        if (files.isNotEmpty()) Text("共 ${sizeText(files.sumOf { it.bytes })}", fontSize = 13.sp, color = C.muted, modifier = Modifier.padding(top = 6.dp))
-        when {
-            busy -> Hint("字幕运行中（或正在释放模型），停止后才能删除")
-            downloading -> Hint("正在下载或校验模型，完成或取消后才能删除")
-        }
-        Row { Grow(); TextBtn("在访达中打开") { reveal(modelsDir) } }
-    }
-}
 
 // ---- 关于 --------------------------------------------------------------------------------------------------
 
@@ -585,7 +495,7 @@ private fun AboutTab() {
             else -> {}
         }
         Hint(REPO)
-        Hint("翻译用的是 B 站开源的 Index-Translate 模型（github.com/bilibili/Index-Translate），语音识别用的是 ReazonSpeech 模型（通过 sherpa-onnx 在电脑上运行）。感谢这些项目。")
+        Hint("语音识别用的是 ReazonSpeech 模型和 Silero VAD（通过 sherpa-onnx 在电脑上运行，模型已经装在 App 里）。感谢这些项目。")
     }
 }
 

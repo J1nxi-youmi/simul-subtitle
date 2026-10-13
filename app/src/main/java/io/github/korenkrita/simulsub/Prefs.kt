@@ -65,45 +65,10 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("keepChars", CaptionBoard.DEFAULT_CHARS)
         set(v) = sp.edit().putInt("keepChars", v).apply()
 
-    /** DownloadManager ids by model path, so a download survives the activity being recreated */
-    fun downloadId(path: String) = sp.getLong("dl:$path", -1)
-    fun setDownloadId(path: String, id: Long) = sp.edit().putLong("dl:$path", id).apply()
-    /** Source to continue [path] from after its download was rejected (-1 none): survives DownloadManager cleanup. */
-    // "dlNext2": the sources were renumbered in 0.6.4 (a GitHub copy of the translation model); a "dlNext" value of an
-    // older version is read in its numbering
-    fun pendingSource(path: String) = sp.getInt("dlNext2:$path",
-        sp.getInt("dlNext:$path", -1).let { if (it >= 0) ModelDownloader.legacySource(path, it) else it })
-    fun setPendingSource(path: String, source: Int) = sp.edit().putInt("dlNext2:$path", source).remove("dlNext:$path").apply()
-    /** The tier ([ModelSpec.tiers]) this download batch chose, -1 none yet: a file switching source stays on it. */
-    var downloadTier: Int
-        get() = sp.getInt("dlTier", -1)
-        set(v) = sp.edit().putInt("dlTier", v).apply()
-    /** Files of a download batch not enqueued yet, while it chooses its tier (survives process death); empty: none. */
-    var downloadBatch: Set<String>
-        get() = sp.getStringSet("dlBatch", emptySet())!!.toSet()
-        set(v) = sp.edit().putStringSet("dlBatch", v).remove("dlChoosing").apply()
-    /** The user cancelled the model download: no automatic switch to another source until 下载 / 重试. */
-    var downloadCancelled: Boolean
-        get() = sp.getBoolean("dlCancelled", false)
-        set(v) = sp.edit().putBoolean("dlCancelled", v).apply()
     /** true = only show finished sentences; false = live drafts that are corrected in place. Overlay and home share it. */
     var finalOnly: Boolean
         get() = sp.getBoolean("finalOnly", false)
         set(v) = sp.edit().putBoolean("finalOnly", v).apply()
-
-    /**
-     * How captions are translated; read when a session starts. Before BYOK this was the mtOnline switch, so a phone
-     * that never chose keeps what it had (online = Index, off = local).
-     */
-    var mtMode: MtMode
-        get() = sp.getString("mtMode", null)?.let { runCatching { MtMode.valueOf(it) }.getOrNull() }
-            ?: if (sp.getBoolean("mtOnline", true)) MtMode.INDEX else MtMode.LOCAL
-        set(v) = sp.edit().putString("mtMode", v.name).apply()
-    /** Translation needs the network (Index or BYOK), not the local model file. */
-    val mtOnline: Boolean get() = mtMode != MtMode.LOCAL
-    var onlineModel: OnlineModel
-        get() = runCatching { OnlineModel.valueOf(sp.getString("onlineModel", null) ?: "") }.getOrDefault(OnlineModel.B35)
-        set(v) = sp.edit().putString("onlineModel", v.name).apply()
 
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
     var sourceLang: Lang?

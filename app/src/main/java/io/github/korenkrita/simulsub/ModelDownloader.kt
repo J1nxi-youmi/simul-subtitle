@@ -113,7 +113,8 @@ class ModelDownloader private constructor(ctx: Context) {
         for (s in store.required()) {
             if (store.isInstalled(s) || store.file(s).isFile || s.path in queued) continue
             adoptOrphan(s)
-            if (recorded(s) != null) continue
+            // has a job, or a rejected one whose next source [state] continues from
+            if (recorded(s) != null || prefs.pendingSource(s.path) >= 0) continue
             enqueue(s, route(s).first())
         }
         prefs.downloadChoosing = false

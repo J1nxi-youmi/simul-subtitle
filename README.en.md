@@ -71,6 +71,17 @@ The app's interface is in Chinese.
 - From 0.4, the app checks for updates when opened. Read what's new and install, skip a version, or turn checks off; manual checking is always available under Settings → About.
 - To build it yourself, see [docs/build.md](docs/build.md).
 
+### Mac
+
+- Apple silicon (M1 or later), macOS 14.2 or newer.
+- Download `SimulSub-<version>-mac-arm64.dmg` from [Releases](../../releases), open it and drag 同传字幕 into Applications.
+- The dmg is not notarized. The first time, macOS says it cannot verify the developer: right-click the app in Applications and choose Open, or click "Open Anyway" in System Settings → Privacy & Security.
+- On the first start of captions, allow system audio recording (System Settings → Privacy & Security → Screen & System Audio Recording).
+- The captions follow everything the Mac plays, no microphone needed; they float above all windows and can sit on an external display.
+- Closing the main window keeps the captions on; the menu bar icon starts and stops them and reopens the window.
+- Home and Settings are the same as on the phone. Update checks only open the download page; replace the app with the new dmg yourself.
+- Settings, models and usage logs live in `~/Library/Application Support/SimulSub/`, keys in the keychain; deleting the app leaves them.
+
 ## FAQ
 
 **Why are there no subtitles for some apps?**

@@ -55,15 +55,39 @@ tools/mac-e2e/run.sh [file.wav]
 - `-DdeadlineS`（默认 180 s）：超时后以 2 退出，卡住的原生调用不会让测试挂起。
 - `tools/mac-e2e/sample-run.log` 是一次参考运行。
 
-## 桌面版（macOS，开发中）
+## Mac 版
+
+只支持 Apple 芯片、macOS 14.2 及以上（系统声音抓取用的 Core Audio process tap 从 14.2 起才有）。
+
+### 从仓库运行
 
 ```bash
-tools/mac-capture/build.sh          # 系统声音抓取（macOS 14.2+，首次运行要授权「系统录音」）
+tools/mac-capture/build.sh          # 系统声音抓取 sysaudio
 tools/mac-e2e/run.sh                # 顺带编好 sherpa-onnx 与 llama.cpp 的 Mac 原生库
 ./gradlew :desktop:run
 ```
 
-`desktop/` 是 Compose Desktop 应用：抓系统声音 → `core` 的同一套流水线 → 透明、无边框、置顶、可拖动的字幕窗口（右上角 × 退出）。目前直接用仓库里的 `models/` 和上面编出的原生库，设置固定为日译中、本地翻译、不用 Jev。
+直接用仓库的 `models/`（`./setup.sh` 下载）和上面编出的原生库，设置存在 `desktop/build/run-data/`，不碰装好的 App。
+
+### 打包 dmg
+
+```bash
+export JAVA_HOME=$(mise where java@zulu-17.68.203.0)
+tools/mac-app/build.sh
+```
+
+产物是 `desktop/build/compose/binaries/main/dmg/SimulSub-<versionName>-mac-arm64.dmg`（约 75 MB），脚本最后打印它的 SHA-256。脚本自己完成全部原生部分，不依赖 `tools/mac-e2e`：
+
+- sherpa-onnx 1.13.8 的 JVM jar 和 `osx-aarch64` 原生库（与 `tools/mac-e2e` 同一版本）。
+- llama.cpp 静态编译（CPU、`armv8.2-a+dotprod`、不开 Metal），和手机同一份 `translator_jni.cpp` 一起链成一个 `libjpsub_mac.dylib`；脚本会检查它不再动态依赖 llama / ggml。
+- `sysaudio` 只编 arm64。
+- `:desktop:createDistributable` 带上精简 JRE（`java.net.http`、`jdk.crypto.ec`、`java.naming` 等），原生库和 `sysaudio` 放在 `SimulSub.app/Contents/app/resources/`（`compose.application.resources.dir`）。
+- 版本号跟安卓同一个 `versionName`。jpackage 要求主版本号大于 0，所以 bundle 的 `CFBundleVersion` 是 `1.<versionCode>`（只用来排序），`CFBundleShortVersionString` 改回 `versionName` 后重新 ad hoc 签名。
+- `Info.plist` 带 `NSAudioCaptureUsageDescription`，第一次「开始字幕」时系统会问是否允许录制系统声音。
+
+没有 Developer ID 签名和公证。用户第一次打开时 macOS 会拦下；要在「系统设置 → 隐私与安全性」里点「仍要打开」，或右键 App 选「打开」。
+
+装好的 App 把设置、使用记录和模型放在 `~/Library/Application Support/SimulSub/`，key 存在钥匙串（服务名 `SimulSub`）。删除 App 不会删除这些。
 
 ## 签名与包名
 
@@ -147,13 +171,20 @@ APK 使用清单里指向**具体版本**的 GitHub 地址；失败时按同样�
    PY
    ```
 
-3. 推送 main，把两份附件一起发布（不要先发布一个缺清单或缺 APK 的版本）：
+   Mac 版用同一个版本号，打包后放进同一目录（Mac 版检查更新只读清单的版本和更新内容，打开 Release 页让用户下载，不需要清单里有 dmg）：
+
+   ```bash
+   tools/mac-app/build.sh
+   cp "desktop/build/compose/binaries/main/dmg/SimulSub-$VERSION-mac-arm64.dmg" build/release/
+   ```
+
+3. 推送 main，把三份附件一起发布（不要先发布一个缺清单或缺 APK 的版本）：
 
    ```bash
    git push origin main
    gh release create "v$VERSION" --repo KorenKrita/simul-subtitle --target "$(git rev-parse HEAD)" --latest \
      --title "同传字幕 v$VERSION" --notes-file build/release/notes.md \
-     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json
+     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json "build/release/SimulSub-$VERSION-mac-arm64.dmg"
    ```
 
 4. 回读验证，不只检查上传命令退出码：

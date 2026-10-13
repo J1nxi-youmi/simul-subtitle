@@ -28,6 +28,19 @@
 | `SessionLog.kt` | 每次使用的文字记录 |
 | `MainActivity.kt` | 首页与设置页 |
 
+### Mac 版
+
+`core/` 里的 `Segmenter`、`Pipeline`、`Translation`、`Jev`、`ModelStore` 等两端共用。Mac 版在 `desktop/`（Compose Desktop），替换的是两头：
+
+| 文件 | 作用 |
+|---|---|
+| `tools/mac-capture/SysAudio.swift` | `sysaudio`：Core Audio process tap 听整台 Mac 的声音，输出 16 kHz 单声道 float32 到标准输出 |
+| `Session.kt` | 对应 `CaptionService`：读 `sysaudio`、加载模型、建流水线、运行中改设置 |
+| `Engines.kt` / `MacLlama.java` | sherpa-onnx 与 llama.cpp 的 Mac 封装（llama.cpp 与手机共用 `translator_jni.cpp`） |
+| `Overlay.kt` | 透明、置顶、可拖动和缩放的字幕窗口与工具栏 |
+| `App.kt` / `Ui.kt` | 主窗口（首页与设置）、菜单栏图标、检查更新 |
+| `Prefs.kt` / `Downloader.kt` | 设置与钥匙串、模型下载（和手机同样的线路选择与 SHA-256 校验） |
+
 ## 草稿与定稿
 
 - 草稿可以丢：队列里过时的草稿会被合并，只识别最新的一份。选「说完再出」时，草稿根本不识别、不翻译，省电也省流量。

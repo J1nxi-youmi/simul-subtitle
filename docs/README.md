@@ -10,4 +10,4 @@
 | [jev.md](jev.md) | 可选的 Jev 云端判断：智能断句、译文检查 |
 | [privacy.md](privacy.md) | 哪些数据留在手机上、哪些会发到网络 |
 | [logs.md](logs.md) | 使用记录（JSONL）格式、logcat 性能字段 |
-| [build.md](build.md) | 编译、模型下载、Mac 端到端测试 |
+| [build.md](build.md) | 编译、模型下载、Mac 端到端测试、Mac 版运行与打包 |

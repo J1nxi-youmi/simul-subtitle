@@ -45,13 +45,11 @@ class ModelRouteTest {
         assertNull(ModelDownloader.bestTier(tiers, 2_000, fetch(emptySet())))
     }
 
-    @Test fun aStartedDownloadIsNeverCutOffAndAnAnsweredOneOnlyWhenDead() {
-        assertTrue(ModelDownloader.cutOff(0, answered = false, idleMs = 15_001))
-        assertTrue(!ModelDownloader.cutOff(0, answered = false, idleMs = 14_000))
-        // the server answered (e.g. 32 KiB on disk, below the 64 KiB step of the counter): only after a minute
-        assertTrue(!ModelDownloader.cutOff(0, answered = true, idleMs = 30_000))
-        assertTrue(ModelDownloader.cutOff(0, answered = true, idleMs = 60_001))
-        assertTrue(!ModelDownloader.cutOff(65_536, answered = true, idleMs = 3_600_000))
+    @Test fun onlyADownloadWithNoCountedBytesIsCutOffAfter15Seconds() {
+        assertTrue(ModelDownloader.cutOff(0, idleMs = 15_001))
+        assertTrue(!ModelDownloader.cutOff(0, idleMs = 14_000))
+        // counted bytes: a stall waits for the connection to come back, however long
+        assertTrue(!ModelDownloader.cutOff(65_536, idleMs = 3_600_000))
     }
 
     @Test fun sourcesSavedBy063AreRenumberedOnlyForTheTranslationModel() {

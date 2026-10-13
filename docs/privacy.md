@@ -10,7 +10,7 @@
 
 | 什么时候 | 发给谁 | 发什么 |
 |---|---|---|
-| 下载模型 | huggingface.co、github.com、gh-proxy.com、gh.llkk.cc（GitHub 下载代理）、modelscope.cn。开始下载时会同时向这几处请求一个约 26 KB 的小文件，用来选出连得上的线路 | 普通的文件下载请求 |
+| 下载模型 | huggingface.co、github.com、gh-proxy.com、gh.llkk.cc（GitHub 下载代理）、modelscope.cn。开始下载时会同时向前四处请求一个约 26 KB 的小文件，用来选出连得上的线路 | 普通的文件下载请求 |
 | 打开 App 自动检查更新（可关闭），或手动检查 / 下载更新 | github.com、release-assets.githubusercontent.com；连不上时依次使用 gh-proxy.com、gh.llkk.cc | 获取公开的版本清单或 APK；不附带使用记录、声音、文字、key 或设备标识。服务端会看到普通网络请求信息（例如 IP 地址） |
 | 在线翻译（默认） | index-translate.bilibili.com | 识别出的文字、场景说明、前文（如果开启）、修正提示 |
 | 自己的模型（实验性） | 你填的服务地址 | 同上，加上你的 key；第一次使用时还会发一句固定的测试日语。服务商如何处理这些内容由你自己判断 |

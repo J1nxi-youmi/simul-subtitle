@@ -173,8 +173,7 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /** One of this app's DownloadManager jobs for a model file, with the source and file it was started with. */
-    /** [answered]: the server sent its response headers (the size is known), so the source is reachable */
-    private class Job(val id: Long, val status: Int, val reason: Int, val bytes: Long, val answered: Boolean, val source: Int, val file: File)
+    private class Job(val id: Long, val status: Int, val reason: Int, val bytes: Long, val source: Int, val file: File)
 
     private fun describe(source: Int, part: File) = "线路 ${source + 1}：${part.name}"
 
@@ -191,7 +190,6 @@ class ModelDownloader private constructor(ctx: Context) {
             val stCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
             val rsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
             val byCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-            val tsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
             val dsCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_DESCRIPTION)
             val urCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
             while (c.moveToNext()) {
@@ -209,8 +207,7 @@ class ModelDownloader private constructor(ctx: Context) {
                     source = 0; file = store.partFile(s)
                 }
                 if (source !in s.urls.indices) continue
-                out += Job(c.getLong(idCol), c.getInt(stCol), c.getInt(rsCol), c.getLong(byCol).coerceAtLeast(0),
-                    c.getLong(tsCol) > 0, source, file)
+                out += Job(c.getLong(idCol), c.getInt(stCol), c.getInt(rsCol), c.getLong(byCol).coerceAtLeast(0), source, file)
             }
         }
         return out
@@ -223,12 +220,11 @@ class ModelDownloader private constructor(ctx: Context) {
     }
 
     /**
-     * A transfer that is connecting or waiting to retry while the server has not answered for [STALL_MS] counts as
-     * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once the server answered (its
-     * headers gave the size) or bytes arrived it is never cut off: it waits for the connection to come back
-     * (switching would start the file over). The byte count alone cannot tell: it only moves in steps of 64 KiB.
-     * Queued jobs and jobs waiting for the network are never cut off. Only checked while the app is open (the UI
-     * polls [state]).
+     * A transfer that is connecting or waiting to retry while its counted bytes stay 0 for [STALL_MS] counts as
+     * unreachable; DownloadManager itself would keep retrying the same host for minutes. Once bytes are counted it is
+     * never cut off: it waits for the connection to come back (switching would start the file over). The count moves
+     * in steps of 64 KiB, so a source stuck before that (a few KB at most) is switched too, as agreed. Queued jobs and
+     * jobs waiting for the network are never cut off. Only checked while the app is open (the UI polls [state]).
      */
     private fun stalled(s: ModelSpec, j: Job): Boolean {
         val trying = j.status == DownloadManager.STATUS_RUNNING ||
@@ -236,7 +232,7 @@ class ModelDownloader private constructor(ctx: Context) {
         val now = SystemClock.elapsedRealtime()
         val last = progress[s.path]
         if (!trying || last == null || last.first != j.bytes) { progress[s.path] = j.bytes to now; return false }
-        return cutOff(j.bytes, j.answered || j.file.length() > 0, now - last.second)
+        return cutOff(j.bytes, now - last.second)
     }
 
     /** Failures that another copy of the same file can fix; full storage or a file error cannot. */
@@ -408,24 +404,19 @@ class ModelDownloader private constructor(ctx: Context) {
         /** the same up to 0.6.3, numbering the sources of that version */
         private val LEGACY_DESCRIPTION = Regex("来源 (\\d+)：(.+\\.part)")
         private const val STALL_MS = 15_000L
-        private const val ANSWERED_MS = 60_000L
         /** how long the route check waits for a tier that has not answered yet */
         private const val CHOOSE_MS = 15_000L
         private val PROBE_CLIENT = OkHttpClient.Builder().connectTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS)
             .callTimeout(CHOOSE_MS, TimeUnit.MILLISECONDS).build()
+
+        /** A transfer stuck for [idleMs] is given up for the next source: only while no bytes are counted yet. */
+        fun cutOff(bytes: Long, idleMs: Long) = bytes == 0L && idleMs > STALL_MS
 
         /**
          * Tries every source of every tier at once ([fetch] blocks). The answer is the lowest tier with a source that
          * worked, decided as soon as every lower tier failed, or after [timeoutMs] among those that worked by then;
          * null when none did. Late answers are ignored.
          */
-        /**
-         * Whether a transfer stuck for [idleMs] is given up for the next source. Bytes counted: never (switching
-         * starts the file over). Not counted yet but the server answered ([answered]: its size is known, or bytes are
-         * on disk): the count moves only in 64 KiB steps, so wait [ANSWERED_MS], below 1 KiB/s. Else [STALL_MS].
-         */
-        fun cutOff(bytes: Long, answered: Boolean, idleMs: Long) =
-            bytes == 0L && idleMs > if (answered) ANSWERED_MS else STALL_MS
 
         /** A source index saved by 0.6.3 or older: the translation model had no GitHub copy, ModelScope moved 1 → 2. */
         fun legacySource(path: String, n: Int) = if (path.startsWith("mt/") && n >= 1) n + 1 else n

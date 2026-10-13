@@ -51,7 +51,7 @@ KC="$KC:$(jar org.jetbrains.intellij.deps 'trove4j*.jar'):$(jar org.jetbrains/an
 [ -n "${STD%%:*}" ] && [ -n "${STD#*:}" ] || { echo "run ./gradlew :app:testDebugUnitTest once so Gradle fetches Kotlin"; exit 1; }
 # a fresh output dir per run: stale classes of removed/renamed declarations break overload resolution
 C="$(mktemp -d "$W/classes.XXXXXX")"
-"$JH/bin/javac" -d "$C" "$HERE/MacLlama.java"
+"$JH/bin/javac" -d "$C" "$ROOT/desktop/src/main/java/io/github/korenkrita/simulsub/MacLlama.java"
 P="$ROOT/core/src/main/java/io/github/korenkrita/simulsub"
 "$JH/bin/java" -cp "$KC" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -nowarn \
   -cp "$STD:$W/sherpa-jvm.jar:$C" -d "$C" "$P/Pipeline.kt" "$P/Segmenter.kt" "$P/Translation.kt" "$P/Jev.kt" "$HERE/E2E.kt"

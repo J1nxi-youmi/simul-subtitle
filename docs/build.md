@@ -55,6 +55,16 @@ tools/mac-e2e/run.sh [file.wav]
 - `-DdeadlineS`（默认 180 s）：超时后以 2 退出，卡住的原生调用不会让测试挂起。
 - `tools/mac-e2e/sample-run.log` 是一次参考运行。
 
+## 桌面版（macOS，开发中）
+
+```bash
+tools/mac-capture/build.sh          # 系统声音抓取（macOS 14.2+，首次运行要授权「系统录音」）
+tools/mac-e2e/run.sh                # 顺带编好 sherpa-onnx 与 llama.cpp 的 Mac 原生库
+./gradlew :desktop:run
+```
+
+`desktop/` 是 Compose Desktop 应用：抓系统声音 → `core` 的同一套流水线 → 透明、无边框、置顶、可拖动的字幕窗口（右上角 × 退出）。目前直接用仓库里的 `models/` 和上面编出的原生库，设置固定为日译中、本地翻译、不用 Jev。
+
 ## 签名与包名
 
 包名 `io.github.korenkrita.simulsub`。从旧包名 `dev.krita.jpsub` 的版本升级时会作为新 App 安装，需要重新下载模型。

@@ -33,8 +33,9 @@ jobs:
           R=tools/win-app/build/resources/windows-x64
           "$R/sysaudio.exe" 2 > /tmp/pcm 2> /tmp/err || true
           cat /tmp/err; ls -la /tmp/pcm
+      # GitHub zips an artifact itself: upload the app folder, so the download unzips straight to SimulSub/ (the
+      # Release's zip is the same folder, zipped once by tools/win-app/build.sh)
       - uses: actions/upload-artifact@v4
         with:
           name: SimulSub-windows-x64
-          path: desktop/build/compose/binaries/main/SimulSub-*-windows-x64.zip
-          compression-level: 0
+          path: tools/win-app/build/zip/

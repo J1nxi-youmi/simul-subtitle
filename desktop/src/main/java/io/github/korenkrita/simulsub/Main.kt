@@ -29,6 +29,20 @@ fun main() {
     // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
     // (-Djava.net.useSystemProxies=false in JAVA_TOOL_OPTIONS turns it off)
     if (System.getProperty("java.net.useSystemProxies") == null) System.setProperty("java.net.useSystemProxies", "true")
+    // ...and straight to the service when the proxy fails it, as a PAC's "PROXY …; DIRECT" does: a proxy app may not
+    // pass every host (the user's closed the TLS handshake to their own translation service). OkHttp tries the next
+    // route when connecting or the handshake fails, before the request is sent, and tries the failed route last
+    // afterwards.
+    val system = java.net.ProxySelector.getDefault()
+    java.net.ProxySelector.setDefault(object : java.net.ProxySelector() {
+        override fun select(uri: java.net.URI): List<java.net.Proxy> {
+            val p = runCatching { system.select(uri) }.getOrNull().orEmpty()
+            return if (p.isEmpty() || java.net.Proxy.NO_PROXY in p) p.ifEmpty { listOf(java.net.Proxy.NO_PROXY) }
+                else p + java.net.Proxy.NO_PROXY
+        }
+        override fun connectFailed(uri: java.net.URI, sa: java.net.SocketAddress, e: java.io.IOException) =
+            system.connectFailed(uri, sa, e)
+    })
     // Windows: trust the certificates Windows trusts, as the browser does. A proxy app that re-encrypts HTTPS (an
     // "accelerator", a MITM rule) installs its root there; with Java's own list the handshake through it fails.
     if (isWindows && System.getProperty("javax.net.ssl.trustStoreType") == null)

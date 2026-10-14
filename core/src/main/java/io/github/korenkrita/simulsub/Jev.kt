@@ -342,11 +342,12 @@ class HttpResult(val status: Int, val body: String?, val ms: Long, val error: St
  * work, e.g. a blocking DNS lookup. Such leftover work is bounded process-wide: at most [MAX_PENDING] requests
  * (all sessions) may be unfinished in OkHttp; beyond that a request fails at once with "busy" instead of queueing.
  */
-class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypass a system proxy */ proxy: java.net.Proxy? = null) {
+class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypass a system proxy */ proxy: java.net.Proxy? = null,
+            /** tests: the routes to try (the app's is the system's, see the desktop Main.kt) */ proxySelector: java.net.ProxySelector? = null) {
     // one dispatcher / connection pool for the process; per-session settings are a cheap derived client
     private val client = BASE.newBuilder()
         .callTimeout(deadlineMs, TimeUnit.MILLISECONDS) // the whole call, including a slowly trickling body
-        .dns(dns).apply { proxy?.let { proxy(it) } }
+        .dns(dns).apply { proxy?.let { proxy(it) }; proxySelector?.let { proxySelector(it) } }
         .build()
     /** what a caller waits on: the end of its call, and (streamed) the first content */
     private class Waiters(val done: CountDownLatch, val started: CountDownLatch)
@@ -372,7 +373,16 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
              admit: () -> Boolean = { true }): HttpResult {
         val t0 = monoMs()
         if (cancelled) return HttpResult(0, null, 0, "cancelled")
-        val req = Request.Builder().url(url).post(json.toRequestBody(JSON))
+        // one-shot: OkHttp may try the next route (a proxy, then a direct connection) when connecting or the TLS
+        // handshake fails, but never sends the same request twice once it started writing it (billed twice)
+        val bytes = json.toByteArray()
+        val body = object : okhttp3.RequestBody() {
+            override fun contentType() = JSON
+            override fun contentLength() = bytes.size.toLong()
+            override fun isOneShot() = true
+            override fun writeTo(sink: okio.BufferedSink) { sink.write(bytes) }
+        }
+        val req = Request.Builder().url(url).post(body)
             .apply { headers.forEach { (k, v) -> header(k, v) } }.tag(Admit::class.java, Admit(admit)).build()
         val call = client.newCall(req)
         // counted down by the end of the call, by cancel(), and (streamed) by the first content line
@@ -510,7 +520,8 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         private val PENDING = java.util.concurrent.Semaphore(MAX_PENDING)
         private val BASE = OkHttpClient.Builder()
             .followRedirects(false).followSslRedirects(false) // never resend a key to another host
-            .retryOnConnectionFailure(false)
+            // only a request not yet written is tried again, on the next route: the body is one-shot (see post)
+            .retryOnConnectionFailure(true)
             // the last check before a request is written: a network interceptor runs once the connection is up (after
             // OkHttp's queue, DNS, connect and TLS), on the thread that then sends it
             .addNetworkInterceptor { chain ->

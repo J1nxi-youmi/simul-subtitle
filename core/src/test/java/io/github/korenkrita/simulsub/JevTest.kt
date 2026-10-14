@@ -919,4 +919,41 @@ class JevTest {
         assertEquals(429, r.http)
         assertTrue(r.error!!, r.error!!.startsWith("no content"))
     }
+
+    @Test fun aRouteThatFailsBeforeTheRequestIsSentGivesWayToTheNext() {
+        // the system's proxy first, then direct (desktop Main.kt): a proxy that cannot be reached gives way, and the
+        // request is sent once, on the direct route
+        val closed = ServerSocket(0).let { val p = it.localPort; it.close(); p }
+        val bad = java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", closed))
+        val selector = object : java.net.ProxySelector() {
+            override fun select(uri: java.net.URI) = listOf(bad, java.net.Proxy.NO_PROXY)
+            override fun connectFailed(uri: java.net.URI, sa: java.net.SocketAddress, e: java.io.IOException) {}
+        }
+        reply = { _ -> 200 to "{}" }
+        val r = Calls(5_000, proxySelector = selector).post("http://127.0.0.1:$port/v1/x", "{\"a\":1}", emptyMap())
+        assertEquals(r.error, 200, r.status)
+        assertEquals(1, hits.get())
+    }
+
+    @Test fun aRequestThatWasSentIsNeverSentAgain() {
+        // the server reads the request and closes without an answer: no second request (it would be billed twice)
+        val ss = ServerSocket(0)
+        val seen = AtomicInteger()
+        Thread {
+            while (!ss.isClosed) {
+                val s = runCatching { ss.accept() }.getOrNull() ?: break
+                s.use { sock ->
+                    val inp = sock.getInputStream(); val head = StringBuilder()
+                    while (!head.endsWith("\r\n\r\n")) { val b = inp.read(); if (b < 0) return@use; head.append(b.toChar()) }
+                    seen.incrementAndGet()
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        ss.use {
+            val r = Calls(3_000, proxy = java.net.Proxy.NO_PROXY).post("http://127.0.0.1:${ss.localPort}/v1/x", "{}", emptyMap())
+            assertEquals(0, r.status)
+            Thread.sleep(200)
+            assertEquals(1, seen.get())
+        }
+    }
 }

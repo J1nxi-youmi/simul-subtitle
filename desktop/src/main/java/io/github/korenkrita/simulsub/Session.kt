@@ -151,7 +151,8 @@ class CaptionService private constructor(private val sysaudio: File) {
             sl?.write(mapOf("ev" to "session_start", "app" to APP_VERSION,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
                 "mt_engine" to "byok",
-                "load_ms" to (t2 - t0), "device" to "${if (isWindows) "Windows" else "Mac"} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
+                "load_ms" to (t2 - t0), "proxy" to s0.byokUrl?.let { runCatching { java.net.ProxySelector.getDefault().select(java.net.URI(it)).toString() }.getOrNull() },
+                "device" to "${if (isWindows) "Windows" else "Mac"} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
 
             /**
              * BYOK probes: a URL + model used for the first time is first probed for the switch that turns thinking off

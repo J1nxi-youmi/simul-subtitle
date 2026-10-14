@@ -187,7 +187,7 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
             }
             Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
             // the presets, the typed language in use (if any), and 其他 to type one below
-            val presets = Lang.entries.map { Target.of(it) }
+            val presets = Target.PRESETS
             val current = prefs.targetLang
             val targets = if (current in presets) presets else presets + current
             Dropdown(targets.map { it.zh } + "自己填…", targets.indexOf(current), modifier = Modifier.weight(1f)) {
@@ -593,7 +593,7 @@ private fun UpdateBox(r: Release) {
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("打开下载页", primary = true) { open("$REPO/releases/tag/v${r.name}") }
         }
-        Hint("下载页里的 .dmg 是 Mac 版。打开后把同传字幕拖进「应用程序」替换旧版即可，设置和模型都会保留。")
+        Hint("下载页里的 .dmg 是 Mac 版。打开后把同传字幕拖进「应用程序」替换旧版即可，设置会保留。")
     }
 }
 

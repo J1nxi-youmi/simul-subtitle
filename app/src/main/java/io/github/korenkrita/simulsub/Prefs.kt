@@ -88,7 +88,7 @@ class Prefs(ctx: Context) {
     var jevOn: Boolean
         get() = sp.getBoolean("jevOn", false)
         set(v) = sp.edit().putBoolean("jevOn", v).apply()
-    /** Check every final translation with Jev; independent of [jevOn]. Off by default, its own key so an old jevOn does not turn it on. */
+    /** Check every final translation with Jev; independent of [jevOn]. Off by default. */
     var jevCheck: Boolean
         get() = sp.getBoolean("jevCheck", false)
         set(v) = sp.edit().putBoolean("jevCheck", v).apply()
@@ -100,7 +100,7 @@ class Prefs(ctx: Context) {
     var keepLogs: Boolean
         get() = sp.getBoolean("keepLogs", false)
         set(v) = sp.edit().putBoolean("keepLogs", v).apply()
-    /** Give the translator the last finished sentences as context (on by default, as before the switch). */
+    /** Give the translator the last finished sentences as context (on by default). */
     var contextOn: Boolean
         get() = sp.getBoolean("contextOn", true)
         set(v) = sp.edit().putBoolean("contextOn", v).apply()
@@ -108,7 +108,7 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("contextSentences", Pipeline.PREVIOUS_SENTENCES).coerceIn(1, Pipeline.MAX_PREVIOUS_SENTENCES)
         set(v) = sp.edit().putInt("contextSentences", v).apply()
     var jevProvider: JevProvider
-        // a choice saved earlier stays; with none yet, the free Zen endpoint is the default
+        // with no choice yet, the free Zen endpoint
         get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)
         set(v) = sp.edit().putString("jevProvider", v.name).apply()
 

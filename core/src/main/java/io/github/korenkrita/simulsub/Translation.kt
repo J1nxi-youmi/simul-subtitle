@@ -18,16 +18,11 @@ enum class Scene(val label: String, val background: String?, val terms: List<Pai
 }
 
 /**
- * The target languages offered (22 widely spoken languages), with the names
- * the translation prompt uses and English names for the Jev questions. Targets: all. Sources: [SOURCES].
+ * The languages, with the names the translation prompt uses and English names for the Jev questions. Spoken: [SOURCES];
+ * the captions: any of them ([Target.PRESETS]) or a typed name.
  */
 enum class Lang(val code: String, val zh: String, val en: String) {
-    ZH("zh", "中文", "Chinese"), EN("en", "英语", "English"), JA("ja", "日语", "Japanese"), KO("ko", "韩语", "Korean"),
-    DE("de", "德语", "German"), FR("fr", "法语", "French"), ES("es", "西班牙语", "Spanish"), PT("pt", "葡萄牙语", "Portuguese"),
-    RU("ru", "俄语", "Russian"), AR("ar", "阿拉伯语", "Arabic"), IT("it", "意大利语", "Italian"), NL("nl", "荷兰语", "Dutch"),
-    PL("pl", "波兰语", "Polish"), RO("ro", "罗马尼亚语", "Romanian"), SV("sv", "瑞典语", "Swedish"), TR("tr", "土耳其语", "Turkish"),
-    HI("hi", "印地语", "Hindi"), VI("vi", "越南语", "Vietnamese"), TH("th", "泰语", "Thai"), ID("id", "印尼语", "Indonesian"),
-    MS("ms", "马来语", "Malay"), FIL("fil", "菲律宾语", "Filipino");
+    ZH("zh", "中文", "Chinese"), EN("en", "英语", "English"), JA("ja", "日语", "Japanese"), KO("ko", "韩语", "Korean");
 
     companion object {
         /**
@@ -54,11 +49,13 @@ data class Target(val lang: Lang?, val name: String) {
         private const val CUSTOM = "custom:"
         const val MAX_NAME = 40
         val ZH = of(Lang.ZH)
+        /** the caption languages the list offers; anything else is typed in (自己填…) */
+        val PRESETS: List<Target> = Lang.entries.map(::of)
         fun of(l: Lang) = Target(l, l.zh)
         /** A typed language name: one line, trimmed; null when empty or longer than [MAX_NAME]. */
         fun custom(name: String): Target? =
             name.replace(Regex("\\s+"), " ").trim().takeIf { it.isNotEmpty() && it.length <= MAX_NAME }?.let { Target(null, it) }
-        /** A [stored] value (an old preset code too); null for anything else. */
+        /** A [stored] value; null for anything else (the caller falls back to [ZH]). */
         fun parse(s: String?): Target? =
             if (s != null && s.startsWith(CUSTOM)) custom(s.removePrefix(CUSTOM)) else Lang.of(s)?.let(::of)
     }

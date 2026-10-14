@@ -29,8 +29,8 @@ APK 在 `app/build/outputs/apk/release/app-release.apk`（约 90 MB：识别模�
 | `vad/silero_vad.onnx` | 0.6 MB | sherpa-onnx 的 GitHub Release `asr-models` | 静音检测 |
 | `asr/LICENSE`、`vad/LICENSE` | | apache.org 的 Apache-2.0 原文、[silero-vad](https://github.com/snakers4/silero-vad) 固定 commit 的 MIT 许可证 | 随模型一起分发 |
 
-- 手机：`setup.sh` 把这些文件复制到 `app/src/main/assets/models/`（不进 git），`.onnx` 在 APK 里不压缩（`noCompress`），sherpa-onnx 直接从 assets 读取。从 0.6.5 及更早版本升级时，App 会删掉以前下载到手机里的 `asr/`、`vad/`、`mt/` 文件。
-- Mac：`tools/mac-app/build.sh` 把 `models/asr`、`models/vad` 复制进 App 的资源目录；从仓库运行时用 `./models`（或 `-Dsimulsub.models=<目录>`）。从 0.6.5 及更早版本升级时，App 会删掉以前下载到 `~/Library/Application Support/SimulSub/models/` 的文件。
+- 手机：`setup.sh` 把这些文件复制到 `app/src/main/assets/models/`（不进 git），`.onnx` 在 APK 里不压缩（`noCompress`），sherpa-onnx 直接从 assets 读取。
+- Mac：`tools/mac-app/build.sh` 把 `models/asr`、`models/vad` 复制进 App 的资源目录；从仓库运行时用 `./models`（或 `-Dsimulsub.models=<目录>`）。
 
 ## Mac 端到端测试
 

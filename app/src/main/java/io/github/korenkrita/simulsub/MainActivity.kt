@@ -78,19 +78,6 @@ class MainActivity : Activity() {
             v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom); insets
         }
         prefs = Prefs(this)
-        // Up to 0.6.5 the models were downloaded into the app's files dir (the local translation model 1.3 GB); they
-        // are inside the APK now, so the old copies only take space. The app's DownloadManager jobs (all were model
-        // downloads) are removed first, so a running or queued one cannot write a file back; then the files.
-        Thread {
-            val dm = getSystemService(android.app.DownloadManager::class.java)
-            val ids = ArrayList<Long>()
-            dm.query(android.app.DownloadManager.Query())?.use { c ->
-                val id = c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_ID)
-                while (c.moveToNext()) ids += c.getLong(id)
-            }
-            if (ids.isNotEmpty()) dm.remove(*ids.toLongArray())
-            for (d in listOf("asr", "vad", "mt")) java.io.File(getExternalFilesDir(null), d).deleteRecursively()
-        }.start()
 
         statusDot = findViewById(R.id.statusDot)
         statusTitle = findViewById(R.id.statusTitle)
@@ -215,7 +202,7 @@ class MainActivity : Activity() {
         })
         // the presets, the typed language in use (if any), and 其他 to type one; the list is rebuilt after each change,
         // so a cancelled 其他 shows the language in use again
-        val presets = Lang.entries.map { Target.of(it) }
+        val presets = Target.PRESETS
         val current = prefs.targetLang
         val targets = if (current in presets) presets else presets + current
         val items = targets.map { it.zh } + "自己填…"

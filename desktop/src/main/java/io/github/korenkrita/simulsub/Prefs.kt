@@ -34,7 +34,11 @@ class Prefs private constructor(private val file: File) {
             for ((k, v) in kv) if (v == null) json.remove(k) else json.put(k, v)
             // whole-file replace: a crash mid-write never leaves half a settings file
             val tmp = File(file.path + ".tmp")
-            runCatching { tmp.writeText(json.toString(1)); tmp.renameTo(file) }
+            // File.renameTo does not replace an existing file on Windows: every save after the first was lost there
+            runCatching {
+                tmp.writeText(json.toString(1))
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            }.onFailure { System.err.println("settings: not saved: $it") }
         }
         rev.intValue++
         for ((k, _) in kv) listeners.forEach { it(k) }

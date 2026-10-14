@@ -293,6 +293,127 @@ private fun CaptionTab() {
 
 // ---- 翻译 --------------------------------------------------------------------------------------------------
 
+/** The scene being edited in 设置 › 翻译 › 内容 (the editor's text), null while closed. [old] null = 新建. */
+private class SceneDraft(val old: Scene?) {
+    var label by mutableStateOf(old?.label ?: "")
+    var background by mutableStateOf(old?.background ?: "")
+    var terms by mutableStateOf(Scene.termText(old?.terms.orEmpty()))
+    var count by mutableStateOf("20")
+    var status by mutableStateOf<String?>(null)
+    var generating by mutableStateOf(false)
+    var confirm by mutableStateOf(false)
+}
+private val sceneDraft = mutableStateOf<SceneDraft?>(null)
+
+/**
+ * 内容类型: pick a scene, 编辑 it or 新建 one. The editor: name, background, terms one per line; 生成术语 asks the LLM
+ * API for up to the typed number of terms and only appends them (lines already there, saved or typed, stay as they
+ * are); 保存 checks the text; 删除 a user's scene, 恢复默认 an edited built-in (each confirmed once).
+ */
+@Composable
+private fun Scenes() {
+    val scenes = prefs.scenes
+    val scene = prefs.scene
+    val d = sceneDraft.value
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Dropdown(scenes.map { it.label }, scenes.indexOfFirst { it.id == scene.id }.coerceAtLeast(0), enabled = d == null,
+            modifier = Modifier.weight(1f)) { prefs.scene = scenes[it] }
+        Spacer(Modifier.width(8.dp))
+        Btn("编辑", enabled = d == null) { sceneDraft.value = SceneDraft(scene) }
+        Spacer(Modifier.width(8.dp))
+        Btn("新建", enabled = d == null) { sceneDraft.value = SceneDraft(null) }
+    }
+    if (d == null) {
+        Hint(if (scene.terms.isEmpty() && scene.background == null) "告诉翻译这是什么内容，并给常见词定好译法：点「编辑」写说明和术语，或「新建」一个自己的场景。"
+            else "这个场景有${if (scene.background != null) "背景说明" else ""}${if (scene.background != null && scene.terms.isNotEmpty()) "和" else ""}" +
+                "${if (scene.terms.isNotEmpty()) " ${scene.terms.size} 条术语" else ""}，翻译时会一起交给 LLM。" +
+                if (scene.shipped && scene.terms.isNotEmpty()) "自带的术语只在翻成「中文」时使用。" else "")
+        return
+    }
+    Spacer(Modifier.height(10.dp))
+    Text(if (d.old == null) "新建内容类型" else "编辑「${d.old.label}」", color = C.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    Label("名字")
+    Field(d.label, { d.label = it.take(Scene.MAX_LABEL) }, "例如 游戏实况、某主播的直播")
+    Label("背景说明")
+    Area(d.background, { d.background = it }, "这是什么内容、谁在说话、在聊什么，翻译会参考", 2)
+    Label("术语")
+    Area(d.terms, { d.terms = it }, "一行一条：原文→译文，例如 ボス→头目", 4)
+    Spacer(Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Btn(if (d.generating) "生成中…" else "生成术语", enabled = !d.generating) {
+            val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
+            val k = prefs.byokKey
+            val n = d.count.trim().toIntOrNull()
+            d.status = when {
+                chat == null || prefs.byokModel.isEmpty() || k == null -> "先在上面「LLM API」里填好服务并保存。"
+                d.label.isBlank() && d.background.isBlank() -> "先写名字或背景说明，LLM 才知道要哪类术语。"
+                n == null || n < 1 || n > MAX_GENERATE -> "生成条数填 1 到 $MAX_GENERATE。"
+                d.terms.lines().count { it.isNotBlank() } >= Scene.MAX_TERMS -> "术语已经有 ${Scene.MAX_TERMS} 条，满了。"
+                else -> null
+            }
+            if (d.status != null) return@Btn
+            d.generating = true; d.status = "正在生成…（最多一分钟）"
+            val model = prefs.byokModel; val variant = ByokTranslator.variant(prefs.byokVariant(chat!!, model))
+            val label = d.label.trim(); val bg = d.background; val src = prefs.sourceLang; val tgt = prefs.targetLang
+            val have = Scene.sources(d.terms)
+            val room = Scene.MAX_TERMS - d.terms.lines().count { it.isNotBlank() }
+            Thread {
+                val (got, err) = generateTerms(chat, model, k!!, variant, label, bg, have, minOf(n!!, room), src, tgt)
+                java.awt.EventQueue.invokeLater {
+                    d.generating = false
+                    if (sceneDraft.value !== d) return@invokeLater // closed meanwhile
+                    // appended to what is in the box now (the user may have typed meanwhile), skipping 原文 now there
+                    val (text, added) = appendTerms(d.terms, got.orEmpty())
+                    d.status = when {
+                        err != null -> "⚠ 没能生成：$err"
+                        added == 0 -> "没有生成新的术语（可能都已经有了，或者满了），可以把背景说明写详细些再试。"
+                        else -> { d.terms = text; "加了 $added 条，看一下有没有不对的，再点「保存」。" }
+                    }
+                }
+            }.apply { isDaemon = true }.start()
+        }
+        Text("最多", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 12.dp, end = 6.dp))
+        Box(Modifier.width(64.dp)) { Field(d.count, { d.count = it.filter(Char::isDigit).take(3) }, "20") }
+        Text("条", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 6.dp))
+    }
+    d.status?.let { Hint(it, color = if (it.startsWith("⚠")) C.err else C.text2) }
+    Hint("「生成术语」用你填的 LLM API，按名字和背景说明想出这类内容的常见词，只往下面加，不改也不删已有的术语。")
+    Spacer(Modifier.height(8.dp))
+    val old = d.old
+    if (d.confirm && old != null) {
+        Note(if (old.builtin) "把「${old.label}」恢复成自带的说明和术语？你改过的内容会丢掉。" else "删除「${old.label}」？")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Grow()
+            TextBtn("取消") { d.confirm = false }
+            Btn(if (old.builtin) "恢复默认" else "删除", danger = true) {
+                val shipped = Scene.DEFAULTS.firstOrNull { it.id == old.id }
+                val inUse = prefs.scene.id == old.id
+                prefs.scenes = if (shipped != null) prefs.scenes.map { if (it.id == old.id) shipped else it }
+                    else prefs.scenes.filter { it.id != old.id }
+                if (shipped == null && inUse) prefs.scene = prefs.scenes.first()
+                sceneDraft.value = null
+            }
+        }
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        when {
+            old != null && !old.builtin -> TextBtn("删除", danger = true) { d.confirm = true }
+            old != null && !old.shipped -> TextBtn("恢复默认") { d.confirm = true }
+        }
+        Grow()
+        TextBtn("取消") { sceneDraft.value = null }
+        Btn("保存", primary = true) {
+            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", d.label, d.background, d.terms)
+            if (s == null) { d.status = "⚠ $err"; return@Btn }
+            val list = prefs.scenes
+            prefs.scenes = if (list.any { it.id == s.id }) list.map { if (it.id == s.id) s else it } else list + s
+            prefs.scene = s
+            sceneDraft.value = null
+        }
+    }
+}
+
 /** the running BYOK connection test, so a second click or a new screen does not show a stale result */
 private val byokTest = mutableStateOf<ByokTranslator?>(null)
 private val byokResult = mutableStateOf<String?>(null)
@@ -304,8 +425,7 @@ private fun TranslateTab() {
     Group("LLM API") { Byok(running) }
     Group("内容") {
         Label("内容类型")
-        Seg(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it }
-        Hint("选「B站 VTuber 直播」时，翻译会知道这是虚拟主播在 B 站和观众闲聊、念弹幕，并按 B 站的说法翻译「SC」「舰长」「弹幕」这类直播用语。")
+        Scenes()
         SwitchRow("结合上文来翻译", "翻译每句话时，把前面刚说过的几句一起交给翻译参考，帮助它理解人称、指代和省略的内容。参考的句子越多，翻译要处理的文字越多，可能更慢。",
             prefs.contextOn) { prefs.contextOn = it }
         if (prefs.contextOn) {

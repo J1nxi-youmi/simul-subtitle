@@ -15,7 +15,7 @@ fun main() {
         .setTransducer(OfflineTransducerModelConfig.builder().setEncoder("$m/asr/encoder.int8.onnx").setDecoder("$m/asr/decoder.onnx").setJoiner("$m/asr/joiner.int8.onnx").build())
         .setTokens("$m/asr/tokens.txt").setNumThreads(2).setModelType("transducer").build()).setDecodingMethod("greedy_search").build())
     val asr = object : Asr { override fun recognize(samples: FloatArray): String { val s = rec.createStream(); val pd = FloatArray(samples.size + 9600); System.arraycopy(samples, 0, pd, 4800, samples.size); s.acceptWaveform(pd, 16000); rec.decode(s); val t = rec.getResult(s).text; s.release(); return t } }
-    val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
+    val scene = Scene.DEFAULTS.first { it.id == (System.getProperty("scene") ?: "VTUBER") }
     // -Dsource=<ja|en|auto> -Dtarget=<code>: languages as in the app (default ja -> zh)
     val source = (System.getProperty("source") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: error("source $it") }
     // -Dtarget=ko for a preset, -Dtarget=custom:粤语 for a typed language

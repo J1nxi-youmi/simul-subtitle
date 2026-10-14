@@ -62,9 +62,12 @@ class Prefs private constructor(private val file: File) {
         set(v) = put("sourceLang" to (v?.code ?: "auto"))
     /** a preset language, or one the user typed ("custom:<name>") */
     var targetLang: Target get() = Target.parse(str("targetLang")) ?: Target.ZH; set(v) = put("targetLang" to v.stored)
+    /** The built-in scenes (as edited) and the user's own, see [Scene.all]. */
+    var scenes: List<Scene> get() = Scene.all(str("scenes")); set(v) = put("scenes" to Scene.store(v))
+    /** one of [scenes] */
     var scene: Scene
-        get() = runCatching { Scene.valueOf(str("scene") ?: "") }.getOrDefault(Scene.GENERAL)
-        set(v) = put("scene" to v.name)
+        get() = str("scene").let { id -> scenes.let { all -> all.firstOrNull { it.id == id } ?: all.first() } }
+        set(v) = put("scene" to v.id)
     var jevOn: Boolean get() = bool("jevOn", false); set(v) = put("jevOn" to v)
     var jevCheck: Boolean get() = bool("jevCheck", false); set(v) = put("jevCheck" to v)
     var dedupeJoin: Boolean get() = bool("dedupeJoin", false); set(v) = put("dedupeJoin" to v)

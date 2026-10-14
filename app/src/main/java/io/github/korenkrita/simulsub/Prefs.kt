@@ -79,10 +79,14 @@ class Prefs(ctx: Context) {
         get() = Target.parse(sp.getString("targetLang", null)) ?: Target.ZH
         set(v) = sp.edit().putString("targetLang", v.stored).apply()
 
-    /** What the subtitles are about (translator background + term list); read when a session starts. */
+    /** The built-in scenes (as edited) and the user's own, see [Scene.all]. */
+    var scenes: List<Scene>
+        get() = Scene.all(sp.getString("scenes", null))
+        set(v) = sp.edit().putString("scenes", Scene.store(v)).apply()
+    /** What the subtitles are about (translator background + term list), one of [scenes]; read when a session starts. */
     var scene: Scene
-        get() = runCatching { Scene.valueOf(sp.getString("scene", null) ?: "") }.getOrDefault(Scene.GENERAL)
-        set(v) = sp.edit().putString("scene", v.name).apply()
+        get() = sp.getString("scene", null).let { id -> scenes.let { all -> all.firstOrNull { it.id == id } ?: all.first() } }
+        set(v) = sp.edit().putString("scene", v.id).apply()
 
     /** Use Jev (cloud) for sentence ends; needs the key of [jevProvider]. */
     var jevOn: Boolean

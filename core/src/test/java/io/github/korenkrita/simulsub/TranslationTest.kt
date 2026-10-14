@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class TranslationTest {
@@ -21,6 +22,69 @@ class TranslationTest {
         // the source text itself carries a note; its characters also appear in the scene background
         val text = "下次直播见\n（注：这是B站直播）"
         assertEquals(text, MtResult(text, 'e', 1, 1).text)
+    }
+
+    @Test
+    fun scenesTheUserEditedOrAddedAreStoredAndBuiltInsReset() {
+        // nothing saved: the two built-ins, as shipped
+        assertEquals(Scene.DEFAULTS, Scene.all(null))
+        val mine = Scene.edit("u1", " 游戏 实况 ", "主播在玩 RPG", "ヘルパー→帮手\n\n  -> \n").let { assertEquals("术语第 3 行要写成「原文→译文」", it.second); it }
+        assertNull(mine.first)
+        val game = Scene.edit("u1", " 游戏  实况 ", "主播在玩 RPG", "ヘルパー→帮手\nボス -> 头目\n").first!!
+        assertEquals("游戏 实况", game.label); assertEquals(listOf("ヘルパー" to "帮手", "ボス" to "头目"), game.terms)
+        val vt = Scene.VTUBER.copy(terms = Scene.VTUBER.terms + ("メン限" to "会限"))
+        val saved = Scene.store(listOf(Scene.GENERAL, vt, game))
+        // only what differs from the shipped built-ins is saved; read back in place, the user's after the built-ins
+        assertFalse(saved.contains("\"GENERAL\""))
+        assertEquals(listOf(Scene.GENERAL, vt, game), Scene.all(saved))
+        // 恢复默认 = the shipped one again, so it is not saved any more
+        assertEquals(listOf(Scene.GENERAL, Scene.VTUBER, game), Scene.all(Scene.store(listOf(Scene.GENERAL, Scene.VTUBER, game))))
+        assertEquals("名字不能空着", Scene.edit("u2", "  ", "", "").second)
+        assertEquals(Scene.DEFAULTS, Scene.all("not json"))
+        // an entry not as store() writes it is skipped, so the built-in stays as shipped
+        assertEquals(Scene.DEFAULTS, Scene.all("""[{"id":"VTUBER","label":"x","background":"","terms":"broken"}]"""))
+        assertEquals(Scene.DEFAULTS, Scene.all("""[{"id":"VTUBER","label":"x","background":"","terms":[1]}]"""))
+        assertEquals(Scene.DEFAULTS, Scene.all("""[{"id":"VTUBER","label":"x","background":"","terms":["bad line"]}]"""))
+    }
+
+    @Test
+    fun termsTheUserWroteGoToEveryCaptionLanguage() {
+        val game = Scene.edit("u1", "游戏实况", "主播在玩 RPG", "ボス→Boss").first!!
+        assertTrue(byokSystem(game, Lang.JA, Target.of(Lang.EN)).contains("ボス→Boss"))
+        assertTrue(byokSystem(game, Lang.JA, Target.custom("粤语")!!).contains("ボス→Boss"))
+        // an edited built-in is the user's too; the shipped list stays Chinese-only
+        val vt = Scene.VTUBER.copy(terms = listOf("館長" to "captain"))
+        assertTrue(byokSystem(vt, Lang.JA, Target.of(Lang.EN)).contains("館長→captain"))
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains("館長→"))
+        // a background the user wrote is given as it is, whatever the spoken language
+        val bg = Scene.edit("u2", "x", "日本虚拟主播的直播", "").first!!
+        assertTrue(byokSystem(bg, Lang.EN, Target.ZH).contains("背景：日本虚拟主播的直播"))
+        // the shipped background is still the shipped one after only the name or the terms were edited
+        val renamed = Scene.VTUBER.copy(label = "我的 VTuber")
+        assertEquals(byokSystem(Scene.VTUBER, Lang.EN, Target.ZH).substringAfter("背景：").substringBefore("\n\n术语"),
+            byokSystem(renamed, Lang.EN, Target.ZH).substringAfter("背景：").substringBefore("\n\n术语"))
+        assertFalse(byokSystem(renamed, null, Target.ZH).contains("日本虚拟主播"))
+    }
+
+    @Test
+    fun generatingTermsOnlyAddsNewOnes() {
+        val answer = "<think>x</think>好的：\n1. ボス→BOSS\n- ヘルパー→帮手\n• ガチャ → 抽卡\n乱写一行\nガチャ→扭蛋\n`レア→稀有`\nあ→" +
+            "\nイベ→活动"
+        // the user's ボス stays as it is (not replaced by BOSS), a repeat counts once, junk lines are dropped
+        assertEquals(listOf("ヘルパー" to "帮手", "ガチャ" to "抽卡", "レア" to "稀有"), newTerms(answer, setOf("ボス"), 3))
+        assertEquals(4, newTerms(answer, setOf("ボス"), 10).size)
+        val sys = termsSystem("游戏实况", "主播在玩 RPG", setOf("ボス"), 20, Lang.JA, Target.ZH)
+        assertTrue(sys.contains("最多 20 条")); assertTrue(sys.contains("不要重复：ボス")); assertTrue(sys.contains("主播在玩 RPG"))
+        // a line still being typed ("ボス→") and one starting with "-" keep their exact 原文
+        assertEquals(setOf("ボス", "-foo"), Scene.sources("ボス→\n-foo→旧\n\n"))
+        // appended to the editor as it is now: nothing there changes, its 原文 are skipped
+        val (text, added) = appendTerms("ボス→\n-foo→旧", listOf("ボス" to "BOSS", "foo" to "新", "ガチャ" to "抽卡"))
+        assertEquals("ボス→\n-foo→旧\nfoo→新\nガチャ→抽卡", text); assertEquals(2, added)
+        // never past the save limit
+        val full = (1..Scene.MAX_TERMS - 1).joinToString("\n") { "w$it→v" }
+        val (t2, n2) = appendTerms(full, listOf("x" to "1", "y" to "2"))
+        assertEquals(1, n2); assertNotNull(Scene.edit("u", "a", "", t2).first)
+        assertEquals(0, appendTerms(t2, listOf("z" to "3")).second)
     }
 
     @Test

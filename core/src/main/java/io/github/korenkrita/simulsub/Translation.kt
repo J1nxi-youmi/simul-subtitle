@@ -2,19 +2,94 @@ package io.github.korenkrita.simulsub
 
 // Translator prompts and the BYOK client. Pure Kotlin so the Mac app and harness (tools/mac-e2e) compile the same code.
 
-/** What the subtitles are about; changes the background text and the term list given to the translator. */
-enum class Scene(val label: String, val background: String?, val terms: List<Pair<String, String>>) {
-    GENERAL("通用", null, emptyList()),
-    VTUBER(
-        "B站 VTuber 直播",
-        "这是日本虚拟主播（VTuber）在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。",
-        listOf(
-            "ビリビリ" to "B站", "スパチャ" to "SC", "スーパーチャット" to "SC", "館長" to "舰长", "艦長" to "舰长",
-            // no entry for 流れ(る): as a hard rule it turned "流れるの速く" into "（弹幕）刷屏的速度"; the background (念弹幕)
-            // gives the sense, and the Jev literal_metaphor note covers a literal "水流"
-            "コメント" to "弹幕", "配信" to "直播", "ギフト" to "礼物",
-        ),
-    ),
+/**
+ * What the subtitles are about: the background text and the term list given to the translator. Two come with the app
+ * ([DEFAULTS], editable and resettable by [id]); the user adds their own. The term list of a scene the user wrote (a
+ * new one, or a built-in once edited) is given for every caption language, since its translations are the user's; the
+ * shipped VTuber list only for the Chinese preset.
+ */
+data class Scene(val id: String, val label: String, val background: String?, val terms: List<Pair<String, String>>) {
+    /** one of [DEFAULTS] exactly as shipped */
+    val shipped: Boolean get() = this in DEFAULTS
+    val builtin: Boolean get() = DEFAULTS.any { it.id == id }
+
+    companion object {
+        const val MAX_LABEL = 20
+        const val MAX_BACKGROUND = 1000
+        const val MAX_TERMS = 200
+        const val MAX_TERM = 40
+        val GENERAL = Scene("GENERAL", "通用", null, emptyList())
+        val VTUBER = Scene("VTUBER",
+            "B站 VTuber 直播",
+            "这是日本虚拟主播（VTuber）在B站的直播，主播在和观众闲聊、念弹幕和SC（醒目留言）。原文是语音识别结果，可能有听错的词；口语里常有语气词和重复。",
+            listOf(
+                "ビリビリ" to "B站", "スパチャ" to "SC", "スーパーチャット" to "SC", "館長" to "舰长", "艦長" to "舰长",
+                // no entry for 流れ(る): as a hard rule it turned "流れるの速く" into "（弹幕）刷屏的速度"; the background (念弹幕)
+                // gives the sense, and the Jev literal_metaphor note covers a literal "水流"
+                "コメント" to "弹幕", "配信" to "直播", "ギフト" to "礼物",
+            ),
+        )
+        val DEFAULTS = listOf(GENERAL, VTUBER)
+
+        /**
+         * A scene from the editor's text: label one line, background as typed (blank = none), terms one per line as
+         * 原文→译文 (also -> or =). Left: the scene, or right: what is wrong, in words for the user.
+         */
+        fun edit(id: String, label: String, background: String, terms: String): Pair<Scene?, String?> {
+            val l = label.replace(Regex("\\s+"), " ").trim()
+            if (l.isEmpty()) return null to "名字不能空着"
+            if (l.length > MAX_LABEL) return null to "名字最多 $MAX_LABEL 个字"
+            val b = background.trim()
+            if (b.length > MAX_BACKGROUND) return null to "背景说明最多 $MAX_BACKGROUND 个字"
+            val list = ArrayList<Pair<String, String>>()
+            for ((i, line) in terms.lines().withIndex()) {
+                if (line.isBlank()) continue
+                val parts = line.split(Regex("→|->|="), limit = 2).map { it.trim() }
+                if (parts.size < 2 || parts[0].isEmpty() || parts[1].isEmpty())
+                    return null to "术语第 ${i + 1} 行要写成「原文→译文」"
+                if (parts[0].length > MAX_TERM || parts[1].length > MAX_TERM) return null to "术语第 ${i + 1} 行太长（每边最多 $MAX_TERM 个字）"
+                list += parts[0] to parts[1]
+            }
+            if (list.size > MAX_TERMS) return null to "术语最多 $MAX_TERMS 条"
+            return Scene(id, l, b.ifEmpty { null }, list) to null
+        }
+
+        /** the editor's term text of [terms] */
+        fun termText(terms: List<Pair<String, String>>) = terms.joinToString("\n") { "${it.first}→${it.second}" }
+
+        /**
+         * The 原文 of every line of the editor's [text] as written (also a line not finished yet, like "ボス→"): what
+         * 生成术语 must not add again. Nothing is cleaned up, so a typed line keeps its exact 原文.
+         */
+        fun sources(text: String): Set<String> =
+            text.lines().mapNotNull { it.split(Regex("→|->|="), limit = 2)[0].trim().ifEmpty { null } }.toSet()
+
+        /**
+         * The scenes saved by the user (the settings value "scenes": built-ins they edited, by id, and their own)
+         * merged with [DEFAULTS]: the built-ins first, then the user's in the order added. An entry that is not
+         * exactly as [store] writes it is skipped (a built-in then stays as shipped).
+         */
+        fun all(saved: String?): List<Scene> {
+            val mine = runCatching { org.json.JSONArray(saved ?: "[]") }.getOrNull()?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    val o = a.optJSONObject(i) ?: return@mapNotNull null
+                    val t = o.opt("terms") as? org.json.JSONArray ?: return@mapNotNull null
+                    val lines = (0 until t.length()).map { t.opt(it) as? String ?: return@mapNotNull null }
+                    if (listOf("id", "label", "background").any { o.opt(it) !is String }) return@mapNotNull null
+                    edit(o.getString("id"), o.getString("label"), o.getString("background"), lines.joinToString("\n")).first
+                        ?.takeIf { it.id.isNotEmpty() && it.terms.size == lines.size }
+                }
+            }.orEmpty().distinctBy { it.id }
+            return DEFAULTS.map { d -> mine.firstOrNull { it.id == d.id } ?: d } + mine.filter { !it.builtin }
+        }
+
+        /** the settings value of [scenes] (only what differs from the shipped built-ins) */
+        fun store(scenes: List<Scene>): String = org.json.JSONArray().apply {
+            for (s in scenes) if (!s.shipped) put(org.json.JSONObject().put("id", s.id).put("label", s.label)
+                .put("background", s.background ?: "")
+                .put("terms", org.json.JSONArray().apply { s.terms.forEach { put("${it.first}→${it.second}") } }))
+        }.toString()
+    }
 }
 
 /**
@@ -207,9 +282,76 @@ fun byokSystem(scene: Scene, source: Lang?, target: Target): String = buildStrin
     append("保留人名，不凭空补充内容。字幕要简短，可以省略无意义的口头重复。")
     append("【前文】只用于理解当前句的指代和省略，不要翻译、不要输出。【注意】是这一句的额外要求。")
     append("只输出当前句的译文，不要解释、注释或其他文字。")
-    scene.background?.let { append("\n\n背景：" + if (source == Lang.JA) it else it.replace("日本虚拟主播", "虚拟主播")) }
-    if (target.lang == Lang.ZH && scene.terms.isNotEmpty())
+    // the shipped background names a Japanese streamer; for another spoken language the nationality goes
+    scene.background?.let { append("\n\n背景：" + if (source == Lang.JA || it != Scene.VTUBER.background) it else it.replace("日本虚拟主播", "虚拟主播")) }
+    // the shipped list translates into Chinese; terms the user wrote are theirs, for whatever they caption into
+    if (scene.terms.isNotEmpty() && (target.lang == Lang.ZH || !scene.shipped))
         append("\n\n术语（原文出现时必须这样译）：" + scene.terms.joinToString("、") { "${it.first}→${it.second}" })
+}
+
+/**
+ * 生成术语: the system message asking the user's LLM for up to [max] terms for a scene, as 原文→译文 lines, none of
+ * [have] again. [source] null = Japanese or English.
+ */
+fun termsSystem(label: String, background: String, have: Set<String>, max: Int, source: Lang?, target: Target) = buildString {
+    append("你在为实时字幕翻译整理术语表。字幕把${source?.zh ?: "日语或英语"}的语音翻译成${target.zh}。")
+    append("根据下面的场景，列出这类内容里常出现、容易译错或有固定译法的词（专有名词、圈内用语、称呼、梗），最多 $max 条。")
+    append("每行一条，格式「原文→译文」，原文用${source?.zh ?: "原文语言"}，译文用${target.zh}；不要编号、解释或其他文字。")
+    append("\n\n场景：$label")
+    if (background.isNotBlank()) append("\n说明：${background.trim()}")
+    if (have.isNotEmpty()) append("\n\n已有的术语，不要重复：" + have.joinToString("、"))
+}
+
+/** generating at most this many terms in one go (the answer has to fit the token cap of [generateTerms]) */
+const val MAX_GENERATE = 100
+
+/**
+ * 生成术语 with the user's LLM API: one request (any thread, blocking, up to a minute; [cancel] through the returned
+ * translator is not needed, the editor waits). Left: the new terms (possibly none), right: why it failed, for the user.
+ */
+fun generateTerms(url: String, model: String, key: String, variant: ByokTranslator.ThinkingOff?, label: String,
+                  background: String, have: Set<String>, max: Int, source: Lang?, target: Target)
+    : Pair<List<Pair<String, String>>?, String?> {
+    val n = max.coerceIn(1, MAX_GENERATE)
+    val t = ByokTranslator(url, model, key, termsSystem(label, background, have, n, source, target), variant,
+        deadlineMs = 60_000, maxTokens = 40 * n + 200, firstContentMs = 30_000)
+    val r = t.translate("列出术语。") ?: return null to "没有收到回复"
+    if (r.stop == 'f' && r.text.isEmpty()) return null to when {
+        r.error?.startsWith("deadline") == true || r.error?.startsWith("no content") == true -> "一分钟内没有生成完，可以少要几条再试"
+        r.error == "unfinished thinking" -> "模型一直在思考，没有给出术语"
+        else -> ByokTranslator.why(r)
+    }
+    // cut at the token cap: the lines that came through still count
+    return newTerms(r.text, have, n) to null
+}
+/**
+ * The new terms in an LLM answer to [termsSystem]: lines that parse as 原文→译文 (numbering and bullets dropped),
+ * none whose 原文 is in [have] (see [Scene.sources]) or already taken, at most [max].
+ */
+fun newTerms(answer: String, have: Set<String>, max: Int): List<Pair<String, String>> {
+    val seen = have.toMutableSet()
+    val out = ArrayList<Pair<String, String>>()
+    for (line in stripThink(answer).lines()) {
+        if (out.size >= max) break
+        val l = line.trim().replace(Regex("^([-*•·]|\\d+[.、)）])\\s*"), "").trim('`', ' ')
+        val p = l.split(Regex("→|->|="), limit = 2).map { it.trim() }
+        if (p.size < 2 || p[0].isEmpty() || p[1].isEmpty() || p[0].length > Scene.MAX_TERM || p[1].length > Scene.MAX_TERM) continue
+        if (seen.add(p[0])) out += p[0] to p[1]
+    }
+    return out
+}
+
+/**
+ * The editor's term text after 生成术语: [editor] as it is now (typed meanwhile too) with the [generated] terms whose 原文
+ * is not in it appended, as many as still fit [Scene.MAX_TERMS]. Nothing already there is changed or removed.
+ * Left: the new text, right: how many were added.
+ */
+fun appendTerms(editor: String, generated: List<Pair<String, String>>): Pair<String, Int> {
+    val have = Scene.sources(editor).toMutableSet()
+    val room = Scene.MAX_TERMS - editor.lines().count { it.isNotBlank() }
+    val add = generated.filter { have.add(it.first) }.take(room.coerceAtLeast(0))
+    if (add.isEmpty()) return editor to 0
+    return editor + (if (editor.isEmpty() || editor.endsWith("\n")) "" else "\n") + Scene.termText(add) to add.size
 }
 
 /** BYOK user message: the parts that change, oldest first, the current sentence and its one-off notes last. */

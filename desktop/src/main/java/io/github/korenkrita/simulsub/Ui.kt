@@ -193,6 +193,16 @@ fun Themed(dark: Boolean, content: @Composable () -> Unit) {
     }
 }
 
+/** a multi-line text field, [minLines] high, growing with its text */
+@Composable fun Area(value: String, onChange: (String) -> Unit, placeholder: String, minLines: Int = 3) {
+    Box(Modifier.fillMaxWidth().heightIn(min = (20 * minLines + 16).dp).background(C.pill, RoundedCornerShape(8.dp))
+        .padding(horizontal = 12.dp, vertical = 8.dp)) {
+        if (value.isEmpty()) Text(placeholder, color = C.muted, fontSize = 14.sp, lineHeight = 20.sp)
+        BasicTextField(value, onChange, modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(color = C.text, fontSize = 14.sp, lineHeight = 20.sp), cursorBrush = SolidColor(C.brand))
+    }
+}
+
 /** the status dot of the home card */
 @Composable fun Dot(color: Color) = Box(Modifier.size(9.dp).background(color, CircleShape))
 

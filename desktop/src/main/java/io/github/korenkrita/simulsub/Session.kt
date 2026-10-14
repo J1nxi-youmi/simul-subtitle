@@ -607,7 +607,7 @@ class CaptionService private constructor(private val sysaudio: File) {
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
 
-        fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.stored,
+        fun log() = mapOf("scene" to scene.label, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.stored,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
             "dedupe_join" to dedupe, "context_sentences" to contextN,
             "mt_model" to byokModel, "mt_url" to byokUrl)
@@ -619,7 +619,7 @@ class CaptionService private constructor(private val sysaudio: File) {
          * Settings a running session takes from the next sentence. BYOK changes as one: "保存" writes its fields and
          * then bumps byokSaved, so a half-saved address or model never becomes a setup. jevKey:* is matched apart.
          */
-        private val setupKeys = setOf("scene", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
+        private val setupKeys = setOf("scene", "scenes", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
             "sourceLang", "targetLang")
         // Apple silicon: ASR stays on two of the performance cores
         private const val ASR_THREADS = 2

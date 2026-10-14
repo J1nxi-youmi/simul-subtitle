@@ -237,6 +237,118 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /**
+     * 编辑 a scene ([old]) or 新建 one (null): name, background, terms one per line. 生成术语 asks the LLM API for up to
+     * the typed number of terms and only appends them (lines already there, saved or typed, stay as they are).
+     * 保存 checks the text and keeps the dialog open on a mistake; 删除 a user's scene, 恢复默认 an edited built-in.
+     */
+    private fun editScene(old: Scene?) {
+        fun area(value: String, hintText: String, lines: Int) = android.widget.EditText(this).apply {
+            setText(value); hint = hintText; textSize = 15f; setTextColor(getColor(R.color.text))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = lines; maxLines = 8; gravity = Gravity.TOP or Gravity.START
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((22 * dpx).toInt(), (4 * dpx).toInt(), (22 * dpx).toInt(), 0)
+        }
+        val name = android.widget.EditText(this).apply {
+            setText(old?.label ?: ""); hint = "例如 游戏实况、某主播的直播"; isSingleLine = true
+            filters = arrayOf(android.text.InputFilter.LengthFilter(Scene.MAX_LABEL))
+        }
+        val background = area(old?.background ?: "", "这是什么内容、谁在说话、在聊什么，翻译会参考", 2)
+        val terms = area(Scene.termText(old?.terms.orEmpty()), "一行一条：原文→译文，例如 ボス→头目", 3)
+        val count = android.widget.EditText(this).apply {
+            setText("20"); isSingleLine = true; inputType = android.text.InputType.TYPE_CLASS_NUMBER; textSize = 15f
+            filters = arrayOf(android.text.InputFilter.LengthFilter(3)); contentDescription = "最多生成几条"
+        }
+        val generate = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply { text = "生成术语" }
+        val status = hint("")
+        form.addView(label("名字", 8)); form.addView(name)
+        form.addView(label("背景说明")); form.addView(background)
+        form.addView(label("术语")); form.addView(terms)
+        form.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(generate)
+            addView(TextView(this@MainActivity).apply { text = "最多"; textSize = 15f; setTextColor(getColor(R.color.text2)); setPadding((12 * dpx).toInt(), 0, (4 * dpx).toInt(), 0) })
+            addView(count, LinearLayout.LayoutParams((56 * dpx).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(TextView(this@MainActivity).apply { text = "条"; textSize = 15f; setTextColor(getColor(R.color.text2)) })
+        })
+        form.addView(status)
+        form.addView(hint("「生成术语」用你填的 LLM API，按名字和背景说明想出这类内容的常见词，只往下面加，不改也不删已有的术语。"))
+
+        val b = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(if (old == null) "新建内容类型" else "编辑「${old.label}」")
+            .setView(android.widget.ScrollView(this).apply { addView(form) })
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存", null)
+        when {
+            old != null && !old.builtin -> b.setNeutralButton("删除", null)
+            old != null && !old.shipped -> b.setNeutralButton("恢复默认", null)
+        }
+        val dialog = b.show()
+        var generating = false
+
+        generate.setOnClickListener {
+            if (generating) return@setOnClickListener
+            val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
+            val k = prefs.byokKey
+            if (chat == null || prefs.byokModel.isEmpty() || k == null) { status.text = "先在上面「LLM API」里填好服务并保存。"; return@setOnClickListener }
+            val label = name.text.toString().trim()
+            if (label.isEmpty() && background.text.isBlank()) { status.text = "先写名字或背景说明，LLM 才知道要哪类术语。"; return@setOnClickListener }
+            val n = count.text.toString().toIntOrNull()
+            if (n == null || n < 1 || n > MAX_GENERATE) { status.text = "生成条数填 1 到 $MAX_GENERATE。"; return@setOnClickListener }
+            val room = Scene.MAX_TERMS - terms.text.lines().count { it.isNotBlank() }
+            if (room <= 0) { status.text = "术语已经有 ${Scene.MAX_TERMS} 条，满了。"; return@setOnClickListener }
+            generating = true; generate.isEnabled = false; status.text = "正在生成…（最多一分钟）"
+            val model = prefs.byokModel; val variant = ByokTranslator.variant(prefs.byokVariant(chat, model))
+            val bg = background.text.toString(); val src = prefs.sourceLang; val tgt = prefs.targetLang
+            val have = Scene.sources(terms.text.toString())
+            Thread {
+                val (got, err) = generateTerms(chat, model, k, variant, label, bg, have, minOf(n, room), src, tgt)
+                main.post {
+                    generating = false; generate.isEnabled = true
+                    if (!dialog.isShowing || isDestroyed) return@post
+                    // appended to what is in the box now (the user may have typed meanwhile), skipping 原文 now there
+                    val (text, added) = appendTerms(terms.text.toString(), got.orEmpty())
+                    status.text = when {
+                        err != null -> "⚠ 没能生成：$err"
+                        added == 0 -> "没有生成新的术语（可能都已经有了，或者满了），可以把背景说明写详细些再试。"
+                        else -> {
+                            val t = terms.text.toString()
+                            terms.append(text.substring(t.length))
+                            "加了 $added 条，看一下有没有不对的，再点「保存」。"
+                        }
+                    }
+                }
+            }.start()
+        }
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", name.text.toString(), background.text.toString(), terms.text.toString())
+            if (s == null) { status.text = "⚠ $err"; return@setOnClickListener }
+            val list = prefs.scenes
+            prefs.scenes = if (list.any { it.id == s.id }) list.map { if (it.id == s.id) s else it } else list + s
+            prefs.scene = s
+            dialog.dismiss(); renderTranslate()
+        }
+        dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+            old ?: return@setOnClickListener
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setMessage(if (old.builtin) "把「${old.label}」恢复成自带的说明和术语？你改过的内容会丢掉。" else "删除「${old.label}」？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton(if (old.builtin) "恢复默认" else "删除") { _, _ ->
+                    val shipped = Scene.DEFAULTS.firstOrNull { it.id == old.id }
+                    val inUse = prefs.scene.id == old.id
+                    prefs.scenes = if (shipped != null) prefs.scenes.map { if (it.id == old.id) shipped else it }
+                        else prefs.scenes.filter { it.id != old.id }
+                    if (shipped == null && inUse) prefs.scene = prefs.scenes.first()
+                    dialog.dismiss(); renderTranslate()
+                }
+                .show()
+        }
+    }
+
     /** The home card's last row: the LLM API translations go to (or that none is set up yet); opens 设置 › 翻译. */
     private fun renderService() {
         val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { android.net.Uri.parse(it).host }
@@ -581,8 +693,23 @@ class MainActivity : Activity() {
 
         box = group(root, "内容")
         box.addView(label("内容类型"))
-        box.addView(choice(Scene.entries.map { it to it.label }, prefs.scene) { prefs.scene = it })
-        box.addView(hint("选「B站 VTuber 直播」时，翻译会知道这是虚拟主播在 B 站和观众闲聊、念弹幕，并按 B 站的说法翻译「SC」「舰长」「弹幕」这类直播用语。"))
+        // the scenes: the built-ins and the user's own; 编辑 the one in use, 新建 another (a running session: from the
+        // next sentence)
+        val scenes = prefs.scenes
+        val scene = prefs.scene
+        box.addView(dropdown(scenes.map { it.label }, scenes.indexOfFirst { it.id == scene.id }.coerceAtLeast(0), true) {
+            if (scenes[it].id != prefs.scene.id) { prefs.scene = scenes[it]; main.post { renderTranslate() } }
+        }.apply { contentDescription = "内容类型" })
+        box.addView(LinearLayout(this).apply {
+            gravity = Gravity.END
+            addView(pillButton("编辑") { editScene(scene) })
+            addView(pillButton("新建") { editScene(null) }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dpx).toInt() })
+        box.addView(hint(if (scene.terms.isEmpty() && scene.background == null) "告诉翻译这是什么内容，并给常见词定好译法：点「编辑」写说明和术语，或「新建」一个自己的场景。"
+            else "这个场景有${if (scene.background != null) "背景说明" else ""}${if (scene.background != null && scene.terms.isNotEmpty()) "和" else ""}" +
+                "${if (scene.terms.isNotEmpty()) " ${scene.terms.size} 条术语" else ""}，翻译时会一起交给 LLM。" +
+                if (scene.shipped && scene.terms.isNotEmpty()) "自带的术语只在翻成「中文」时使用。" else ""))
 
         // translation context: on/off and how many finished sentences (a running session: from the next sentence)
         val ctxCount = label("")

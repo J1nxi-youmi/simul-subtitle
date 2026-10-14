@@ -38,3 +38,12 @@
 - **设置、使用记录**：在 `~/Library/Application Support/SimulSub/`；使用记录默认关闭，只有你自己把文件发出去才会离开电脑。
 - **key**：存在登录钥匙串里（服务名 `SimulSub`）。写入时 key 经 `security` 命令的标准输入传入，不出现在其他进程可见的命令行参数里。
 - **检查更新**：只读同一份公开的版本清单，有新版本时打开 GitHub 下载页，不在 App 里下载安装包。
+
+## Windows 版
+
+和 Mac 版相同，差别只在本机这一边：
+
+- **声音**：`sysaudio.exe` 用 WASAPI loopback 听默认播放设备的全部声音（不分 App，也不用麦克风），只在本机识别，不保存。Windows 不弹权限询问。
+- **设置、使用记录**：在 `%APPDATA%\SimulSub\`；使用记录默认关闭。
+- **key**：用 Windows 的 DPAPI 按当前 Windows 账户加密，存在同一目录的 `keys.json`；别的账户、别的电脑读不出。
+- **网络**：跟随系统代理；代理连不上某个服务时改为直连。

@@ -78,6 +78,26 @@ tools/mac-app/build.sh
 
 装好的 App 把设置和使用记录放在 `~/Library/Application Support/SimulSub/`，key 存在钥匙串（服务名 `SimulSub`）。删除 App 不会删除这些。
 
+## Windows 版
+
+只做 x64，免安装 zip。这台 Mac 编不了，打包在 GitHub Actions 的 Windows 机器上：`.github/workflows/windows.yml` 在推送 `windows` 分支或手动运行（Actions 页 → windows → Run workflow）时执行 `tools/win-app/build.sh`，产物是 `SimulSub-<versionName>-windows-x64.zip`，Actions 的 artifact 是解开后的 `SimulSub/` 文件夹。
+
+`tools/win-app/build.sh` 在 Windows 的 Git Bash 里运行，要 JDK 17 和 MSVC 的 `cl.exe`（Developer 命令行，或 CI 里的 `ilammy/msvc-dev-cmd`）：
+
+- sherpa-onnx 1.13.8 的 JVM jar 和 `win-x64` 原生库（`sherpa-onnx-jni.dll`、`onnxruntime.dll`）。
+- 识别模型（`./setup.sh` 校验过的 `models/asr`、`models/vad`；在 Git Bash 里用 `sha256sum`）。
+- `tools/win-capture/sysaudio.cpp`：WASAPI loopback 录默认播放设备，转 16 kHz 单声道 float32 写到标准输出，和 Mac 的 `sysaudio` 格式相同；没声音时写静音保持实时，默认设备变了会跟过去，每 5 秒往 stderr 写一行统计（设备名和音量，记进使用记录的 `sysaudio` 事件）。静态 C 运行库（`/MT`），不用另装 VC++ 运行库。
+- `:desktop:createDistributable` 出 `SimulSub/SimulSub.exe` 和精简 JRE（Windows 多带 `jdk.crypto.mscapi`），用 Windows 自带的 `tar.exe` 打成 zip（路径分隔符是 `/`）。jpackage 在 Windows 上按系统代码页读参数，所以 Windows 的包描述是英文。
+
+和 Mac 版不同的地方都在桌面端代码里用 `isWindows` 判断：
+
+- 绘制用 skiko 的 `SOFTWARE`：默认的 Direct3D 画透明字幕窗会出错（拖动后工具栏被裁掉、放大后字幕消失、关窗口时整个 App 卡住），OpenGL 会让工具栏底部发黑。环境变量 `SKIKO_RENDER_API` 仍可覆盖。
+- 证书信任 Windows 证书库（`Windows-ROOT`），和浏览器一致。
+- 设置在 `%APPDATA%\SimulSub\`；key 用 DPAPI（jna-platform 的 `Crypt32Util`）加密后存在 `keys.json`。
+- 托盘图标按注册表 `SystemUsesLightTheme` 画成白色或黑色。
+
+两个平台共用的：网络请求跟随系统代理（`java.net.useSystemProxies`），代理之后再加一条直连线路；OkHttp 只在请求还没开始发送时（连接或 TLS 握手失败）换下一条线路，请求体是一次性的，已经发出的请求不会重发。
+
 ## 签名与包名
 
 包名 `io.github.korenkrita.simulsub`。从旧包名 `dev.krita.jpsub` 的版本升级时会作为新 App 安装。
@@ -160,20 +180,27 @@ APK 使用清单里指向**具体版本**的 GitHub 地址；失败时按同样�
    PY
    ```
 
-   Mac 版用同一个版本号，打包后放进同一目录（Mac 版检查更新只读清单的版本和更新内容，打开 Release 页让用户下载，不需要清单里有 dmg）：
+   Mac 版和 Windows 版用同一个版本号，打包后放进同一目录（桌面版检查更新只读清单的版本和更新内容，打开 Release 页让用户下载，不需要清单里有 dmg 或 zip）：
 
    ```bash
    tools/mac-app/build.sh
    cp "desktop/build/compose/binaries/main/dmg/SimulSub-$VERSION-mac-arm64.dmg" build/release/
+   # Windows：版本号提交推送后，在 GitHub Actions 手动运行 windows 工作流（选 main），下载它的 artifact
+   gh workflow run windows.yml --repo KorenKrita/simul-subtitle --ref main
+   gh run watch "$(gh run list --repo KorenKrita/simul-subtitle --workflow windows.yml --limit 1 --json databaseId -q '.[0].databaseId')" --repo KorenKrita/simul-subtitle --exit-status
+   gh run download "$(gh run list --repo KorenKrita/simul-subtitle --workflow windows.yml --limit 1 --json databaseId -q '.[0].databaseId')" \
+     --repo KorenKrita/simul-subtitle -n SimulSub-windows-x64 --dir build/release/win
+   (cd build/release/win && zip -qr "../SimulSub-$VERSION-windows-x64.zip" SimulSub)
    ```
 
-3. 推送 main，把三份附件一起发布（不要先发布一个缺清单或缺 APK 的版本）：
+3. 推送 main，把四份附件一起发布（不要先发布一个缺清单或缺 APK 的版本）：
 
    ```bash
    git push origin main
    gh release create "v$VERSION" --repo KorenKrita/simul-subtitle --target "$(git rev-parse HEAD)" --latest \
      --title "同传字幕 v$VERSION" --notes-file build/release/notes.md \
-     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json "build/release/SimulSub-$VERSION-mac-arm64.dmg"
+     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json "build/release/SimulSub-$VERSION-mac-arm64.dmg" \
+     "build/release/SimulSub-$VERSION-windows-x64.zip"
    ```
 
 4. 回读验证，不只检查上传命令退出码：

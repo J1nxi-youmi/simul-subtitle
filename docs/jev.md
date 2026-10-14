@@ -28,7 +28,7 @@
 | OpenRouter | 需要 |
 
 - 只发送识别出的原文和译文，不发送声音。
-- key 在手机上用 Android Keystore 加密保存，在 Mac 上存在钥匙串里；都不写进使用记录。
+- key 在手机上用 Android Keystore 加密保存，在 Mac 上存在钥匙串里，在 Windows 上用 DPAPI 加密保存；都不写进使用记录。
 - 任何失败都按没有 Jev 时的做法处理（断句照常按停顿，译文照常显示），字幕不受影响。
 
 ## 请求频率与费用

@@ -5,8 +5,8 @@
 <h1 align="center">Simul Subtitle（同传字幕）</h1>
 
 <p align="center">
-  Live subtitles on your Android phone for Japanese and English videos and streams,<br>
-  translated into Chinese or 21 other languages, on top of any app.
+  Live subtitles for Japanese and English videos and streams, on your Android phone or your computer (Mac, Windows),<br>
+  translated into Chinese or any language you name, on top of any app.
 </p>
 
 <p align="center">
@@ -85,6 +85,17 @@ The app's interface is in Chinese.
 - Home and Settings are the same as on the phone. Update checks only open the download page; replace the app with the new dmg yourself.
 - Settings and usage logs live in `~/Library/Application Support/SimulSub/`, keys in the keychain; deleting the app leaves them.
 
+### Windows
+
+- Windows 10 / 11, 64-bit (x64).
+- Download `SimulSub-<version>-windows-x64.zip` from [Releases](../../releases), unzip it anywhere and run `SimulSub.exe`. Nothing to install.
+- The program is not signed. The first time, Windows may say it protected your PC: click "More info" → "Run anyway".
+- The captions follow everything the default output device plays, no microphone needed; a new default device (headphones in or out) is followed.
+- Closing the main window keeps the captions on; the icon in the notification area starts and stops them and reopens the window. To quit, right-click it and choose 退出.
+- Requests go through the system proxy, and straight to a service the proxy cannot reach.
+- Update checks only open the download page: quit the app, then replace its folder with the new zip's.
+- Settings and usage logs live in `%APPDATA%\SimulSub\`; keys are in `keys.json` there, encrypted with Windows' DPAPI so only your Windows account can read them. Deleting the folder leaves them.
+
 ## FAQ
 
 **Why are there no subtitles for some apps?**
@@ -104,7 +115,7 @@ One that can turn thinking (reasoning) off, otherwise every sentence takes a lon
 Built on these open-source projects:
 
 - **[ReazonSpeech](https://github.com/reazon-research/ReazonSpeech)**: Japanese / English speech recognition (the app uses the sherpa-onnx export [reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)).
-- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: speech recognition and voice activity detection ([Silero VAD](https://github.com/snakers4/silero-vad)) on the phone and the Mac.
+- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: speech recognition and voice activity detection ([Silero VAD](https://github.com/snakers4/silero-vad)) on the phone and the computer.
 
 The optional online Decisions model assistance (sentence ends, translation checks) uses **[TypeSafe Jev](https://typesafe.ai)**, a closed-source commercial cloud service (not open source), off by default. With a paid endpoint it is billed by usage: about US$0.04 per hour of speech (see [docs/jev.md](docs/jev.md)).
 

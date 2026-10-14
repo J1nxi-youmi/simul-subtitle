@@ -1,4 +1,5 @@
-# The Windows zip (tools/win-app/build.sh) on a GitHub Windows runner, uploaded as the run's artifact.
+# The Windows zip (tools/win-app/build.sh) on a GitHub Windows runner, uploaded as the run's artifact. Runs on a push
+# to the windows branch, or by hand (a release: gh workflow run windows.yml --ref main, see docs/build.md).
 name: windows
 on:
   push:

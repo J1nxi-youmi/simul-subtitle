@@ -5,7 +5,7 @@
 <h1 align="center">同传字幕</h1>
 
 <p align="center">
-  看日语、英语视频和直播时，手机或 Mac 实时给你配上中文（或其他语言）字幕。<br>
+  看日语、英语视频和直播时，手机或电脑（Mac、Windows）实时给你配上中文（或其他语言）字幕。<br>
   不用等别人做字幕，不用换播放器，打开就能看懂。
 </p>
 
@@ -88,6 +88,17 @@
 - 首页、设置和手机版一样。检查更新时只打开下载页，新版本要自己下载 dmg 替换。
 - 设置和使用记录放在 `~/Library/Application Support/SimulSub/`，key 存在钥匙串里；删除 App 不会删除它们。
 
+### Windows 版
+
+- 系统要求：Windows 10 / 11，64 位（x64）。
+- 在 [Releases](../../releases) 页面下载 `SimulSub-版本号-windows-x64.zip`，解压到任意文件夹，双击里面的 `SimulSub.exe`。不用安装。
+- 这个程序没有签名。第一次打开时 Windows 可能提示「已保护你的电脑」：点「更多信息」→「仍要运行」。
+- 字幕听的是这台电脑默认播放设备的所有声音，不用麦克风；换了默认设备（插拔耳机）会自动跟上。
+- 关掉主窗口字幕也会继续；任务栏右下角的同传字幕图标可以开始、停止，或重新打开窗口。要退出，右键这个图标选「退出」。
+- 网络请求跟随系统代理；代理连不上某个服务时会改为直连。
+- 检查更新时只打开下载页：先退出同传字幕，解压新的 zip 替换旧文件夹即可。
+- 设置和使用记录放在 `%APPDATA%\SimulSub\`，key 用 Windows 的 DPAPI 加密后存在同一目录的 `keys.json`，只有你的 Windows 账户能读出；删除文件夹不会删除它们。
+
 ## 常见问题
 
 **为什么有的 App 没有字幕？**
@@ -110,7 +121,7 @@
 同传字幕站在这些优秀的开源项目上：
 
 - **[ReazonSpeech](https://github.com/reazon-research/ReazonSpeech)**：日语 / 英语语音识别模型（App 使用 sherpa-onnx 导出版 [reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en)）。
-- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机和 Mac 上运行语音识别和静音检测（[Silero VAD](https://github.com/snakers4/silero-vad)）。
+- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**：在手机和电脑上运行语音识别和静音检测（[Silero VAD](https://github.com/snakers4/silero-vad)）。
 
 可选的 在线 Decisions 模型辅助（智能断句、检查译文）使用 **[TypeSafe Jev](https://typesafe.ai)**。它是 TypeSafe 的闭源商业云服务，不是开源项目，默认关闭。开启后通过网络调用，用付费接口时会按用量产生费用（每小时约 0.04 美元，见 [Jev 说明](docs/jev.md)）。
 
@@ -122,7 +133,7 @@
 - [在线 Decisions 模型辅助（Jev）](docs/jev.md)：智能断句与译文检查
 - [隐私说明](docs/privacy.md)：哪些数据会离开手机
 - [使用记录与调试](docs/logs.md)：记录格式、性能数据
-- [构建与开发](docs/build.md)：编译、Mac 端到端测试
+- [构建与开发](docs/build.md)：编译、Mac 端到端测试、Mac 和 Windows 打包
 
 ---
 

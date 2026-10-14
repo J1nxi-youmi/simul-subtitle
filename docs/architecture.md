@@ -27,18 +27,20 @@
 | `SessionLog.kt` | 每次使用的文字记录 |
 | `MainActivity.kt` | 首页与设置页 |
 
-### Mac 版
+### 桌面版（Mac、Windows）
 
-`core/` 里的 `Segmenter`、`Pipeline`、`Translation`、`Jev` 等两端共用。Mac 版在 `desktop/`（Compose Desktop），替换的是两头：
+`core/` 里的 `Segmenter`、`Pipeline`、`Translation`、`Jev` 等手机和电脑共用。桌面版在 `desktop/`（Compose Desktop，Mac 和 Windows 同一份代码），替换的是两头：
 
 | 文件 | 作用 |
 |---|---|
 | `tools/mac-capture/SysAudio.swift` | `sysaudio`：Core Audio process tap 听整台 Mac 的声音，输出 16 kHz 单声道 float32 到标准输出 |
+| `tools/win-capture/sysaudio.cpp` | Windows 的 `sysaudio.exe`：WASAPI loopback 听默认播放设备，输出格式同上 |
 | `Session.kt` | 对应 `CaptionService`：读 `sysaudio`、从 App 自带的资源目录（`compose.application.resources.dir`）下的 `models/` 加载识别模型、建流水线、运行中改设置 |
 | `Engines.kt` | sherpa-onnx 的 Mac 封装 |
 | `Overlay.kt` | 透明、置顶、可拖动和缩放的字幕窗口与工具栏 |
 | `App.kt` / `Ui.kt` | 主窗口（首页与设置）、菜单栏图标、检查更新 |
-| `Prefs.kt` | 设置与钥匙串 |
+| `Prefs.kt` | 设置；key 在 Mac 的钥匙串、Windows 的 DPAPI 加密文件 |
+| `Main.kt` | 平台差异（`isWindows`）、系统代理与直连、Windows 的绘制方式和证书库 |
 
 ## 草稿与定稿
 

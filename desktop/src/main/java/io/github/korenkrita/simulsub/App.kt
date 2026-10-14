@@ -3,11 +3,12 @@ package io.github.korenkrita.simulsub
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
@@ -78,8 +80,11 @@ fun app() = application {
     var startError by remember { mutableStateOf<String?>(null) }
     val running by CaptionService.runningState
     val dark = when (prefs.theme) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
+    // Windows: the taskbar's own theme (it can be dark while apps are light), checked again every few seconds
+    var trayDark by remember { mutableStateOf(taskbarDark()) }
+    if (isWindows) LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
 
-    Tray(icon = TrayIcon(running), tooltip = "同传字幕", menu = {
+    Tray(icon = TrayIcon(running, trayDark), tooltip = "同传字幕", menu = {
         if (running) Item("停止字幕", onClick = { CaptionService.stop() })
         else Item("开始字幕", onClick = { startError = startCaptions(); if (startError != null) mainOpen = true })
         Item("打开同传字幕", onClick = { mainOpen = true })
@@ -95,7 +100,7 @@ fun app() = application {
     if (mainOpen) {
         val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
         // closing the window keeps the app (and its captions) in the menu bar
-        Window(onCloseRequest = { mainOpen = false }, state = state, title = "同传字幕") {
+        Window(onCloseRequest = { mainOpen = false }, state = state, title = "同传字幕", icon = painterResource("icon.png")) {
             // the title bar is the system's: follow the page colour, not just macOS's own setting
             if (!isWindows) LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
             Themed(dark) {
@@ -106,23 +111,36 @@ fun app() = application {
     AutoUpdateCheck()
 }
 
-/** The menu bar icon: a caption card, filled while captions run. Drawn, so it follows no file. */
-private class TrayIcon(val on: Boolean) : Painter() {
+/**
+ * Windows: true when the taskbar is dark (the default), from the registry; on macOS false (the icon is a template
+ * image there, which the menu bar colours itself).
+ */
+private fun taskbarDark(): Boolean = isWindows && runCatching {
+    com.sun.jna.platform.win32.Advapi32Util.registryGetIntValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER,
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "SystemUsesLightTheme") == 0
+}.getOrDefault(true)
+
+/**
+ * The menu bar / notification area icon: a caption card, filled while captions run. Drawn, so it follows no file.
+ * Black on macOS (a template image: the menu bar draws it white when it is dark), white on a dark Windows taskbar.
+ */
+private class TrayIcon(val on: Boolean, val dark: Boolean) : Painter() {
     override val intrinsicSize = Size(64f, 64f)
     override fun DrawScope.onDraw() {
         val w = size.width; val h = size.height
-        val c = Color.Black
+        val c = if (dark) Color.White else Color.Black
         val r = androidx.compose.ui.geometry.CornerRadius(w * 0.14f)
         val tl = androidx.compose.ui.geometry.Offset(w * 0.08f, h * 0.2f)
         val sz = Size(w * 0.84f, h * 0.6f)
         if (on) drawRoundRect(c, tl, sz, r)
         else drawRoundRect(c, tl, sz, r, style = androidx.compose.ui.graphics.drawscope.Stroke(w * 0.07f))
-        val line = if (on) Color.White else c
-        drawRect(line, androidx.compose.ui.geometry.Offset(w * 0.24f, h * 0.42f), Size(w * 0.52f, h * 0.07f))
-        drawRect(line, androidx.compose.ui.geometry.Offset(w * 0.32f, h * 0.56f), Size(w * 0.36f, h * 0.07f))
+        // the lines on a filled card are cut out (transparent), so a template image keeps them
+        val blend = if (on) androidx.compose.ui.graphics.BlendMode.Clear else androidx.compose.ui.graphics.BlendMode.SrcOver
+        drawRect(c, androidx.compose.ui.geometry.Offset(w * 0.24f, h * 0.42f), Size(w * 0.52f, h * 0.07f), blendMode = blend)
+        drawRect(c, androidx.compose.ui.geometry.Offset(w * 0.32f, h * 0.56f), Size(w * 0.36f, h * 0.07f), blendMode = blend)
     }
-    override fun equals(other: Any?) = other is TrayIcon && other.on == on
-    override fun hashCode() = on.hashCode()
+    override fun equals(other: Any?) = other is TrayIcon && other.on == on && other.dark == dark
+    override fun hashCode() = on.hashCode() * 31 + dark.hashCode()
 }
 
 @Composable
@@ -254,7 +272,9 @@ private fun CaptionTab() {
             CaptionCard(sample, prefs, modifier = Modifier.fillMaxWidth(prefs.widthFrac.coerceIn(Prefs.MIN_WIDTH, 1f)))
         }
         Label("字幕配色")
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // wraps onto more lines: a sideways scroll needs a trackpad (a mouse wheel scrolls the page)
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (p in PALETTES) {
                 val sel = p.id == palette(prefs.palette).id
                 Row(Modifier.height(40.dp).background(C.card, RoundedCornerShape(20.dp))

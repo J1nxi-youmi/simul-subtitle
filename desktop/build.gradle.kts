@@ -61,7 +61,10 @@ compose.desktop {
             copyright = if (windows) "(c) KorenKrita" else "© KorenKrita"
             modules("java.net.http", "jdk.crypto.ec", "java.naming")
             dist?.let { appResourcesRootDir.set(it.resolve("resources")) }
+            // the exe's icon (the zip's folder, see tools/win-app); icons/make.py draws both
+            windows { iconFile.set(project.file("icons/icon.ico")) }
             macOS {
+                iconFile.set(project.file("icons/icon.icns"))
                 bundleID = "io.github.korenkrita.simulsub"
                 dockName = "同传字幕"
                 minimumSystemVersion = "14.2"

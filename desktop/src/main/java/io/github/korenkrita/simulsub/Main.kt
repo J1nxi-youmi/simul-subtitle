@@ -25,6 +25,11 @@ val sysaudioFile: File = System.getProperty("compose.application.resources.dir")
     ?: File(System.getProperty("simulsub.root") ?: ".", "tools/mac-capture/build/sysaudio")
 
 fun main() {
+    // the translation service, Jev and the update check go through the system's proxy, as a browser does (a proxy
+    // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
+    System.setProperty("java.net.useSystemProxies", "true")
+    // macOS: the menu bar icon is a template image, drawn white or black to match the menu bar
+    System.setProperty("apple.awt.enableTemplateImages", "true")
     // Windows: Direct3D (skiko's default there) draws the transparent caption window wrong: the toolbar is cut off
     // after a move, a larger card vanishes, and closing it hangs the app; OpenGL leaves the toolbar's bottom black.
     // Software rendering draws it right (tested on Windows 10/11). SKIKO_RENDER_API in the environment still wins.

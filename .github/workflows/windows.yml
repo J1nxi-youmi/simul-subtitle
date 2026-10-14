@@ -26,6 +26,8 @@ jobs:
             tools/win-app/build/*.jar
           key: win-deps-${{ hashFiles('setup.sh', 'tools/win-app/build.sh') }}
       - run: tools/win-app/build.sh
+      - if: failure()
+        run: cat desktop/build/compose/logs/*/*.txt || true
       # quick check of the helper: it must start, find an output device or say why, and exit
       - run: |
           R=tools/win-app/build/resources/windows-x64

@@ -43,6 +43,8 @@ STAGE="$W/zip"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ZIP="desktop/build/compose/binaries/main/SimulSub-$VER-windows-x64.zip"
 rm -f "$ZIP"
-powershell -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$STAGE")\\*' -DestinationPath '$(cygpath -w "$ROOT/$ZIP")'"
+# Windows' own bsdtar: entries with "/" (Windows PowerShell's Compress-Archive writes "\", which other unzippers keep
+# in the file name)
+(cd "$STAGE" && /c/Windows/System32/tar.exe -a -c -f "$(cygpath -w "$ROOT/$ZIP")" SimulSub)
 sha256sum "$ZIP"
 ls -la "$ZIP"

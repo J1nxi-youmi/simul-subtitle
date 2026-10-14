@@ -1,13 +1,13 @@
 # 技术文档
 
-面向想了解实现、参与开发或自己编译的读者。使用说明见 [项目首页](../README.md)。
+面向想了解内部实现、参与开发或自行编译打包的读者。日常安装与使用说明请见[项目首页](../README.md)。
 
-| 文档 | 内容 |
+| 文档 | 内容概要 |
 |---|---|
-| [architecture.md](architecture.md) | 整体流程：采集 → 静音检测 → 分句 → 识别 → 翻译 → 悬浮字幕；线程与过载处理 |
-| [asr.md](asr.md) | 语音识别模型、为什么选 ReazonSpeech、与 SenseVoice 的对比数据 |
-| [translation.md](translation.md) | 自己的翻译模型（BYOK）、关闭思考、提示词、上下文、场景术语、支持的语言 |
-| [jev.md](jev.md) | 可选的 Jev 云端判断：智能断句、译文检查 |
-| [privacy.md](privacy.md) | 哪些数据留在手机上、哪些会发到网络 |
-| [logs.md](logs.md) | 使用记录（JSONL）格式、logcat 性能字段 |
-| [build.md](build.md) | 编译、内置模型的来源、Mac 端到端测试、Mac 版运行与打包 |
+| [architecture.md](architecture.md) | 整体数据流（采集 → VAD → 分句 → 本地识别 → 翻译 → 悬浮窗）、`:core` / `:app` / `:desktop` 模块划分、草稿与定稿策略、过载保护 |
+| [asr.md](asr.md) | 内置 ReazonSpeech 离线识别模型细节，以及与 SenseVoice-Small 在准确率、延迟、体积和内存上的实测对比 |
+| [translation.md](translation.md) | OpenAI 兼容翻译接口（BYOK）、6 种关闭思考参数自动探测、面向前缀缓存的提示词排布、滑动上文与场景术语表 |
+| [jev.md](jev.md) | 可选的 TypeSafe Jev 云端判断：句尾断句判断与译文错译重译、实测请求频率与费用估算 |
+| [privacy.md](privacy.md) | 本地留存与网络发送的数据边界、Android / macOS / Windows 三端权限用途与密钥加密方式 |
+| [logs.md](logs.md) | JSONL 会话使用记录格式、Android `logcat` 各阶段延迟指标 |
+| [build.md](build.md) | 编译环境、内置模型校验、macOS 端到端回归测试、三端打包与正式版发布流程 |

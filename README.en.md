@@ -19,36 +19,26 @@
 ## Screenshots
 
 <table>
+  <tr><th colspan="3">Android</th></tr>
   <tr>
-    <td><img src="docs/images/screens/home.png" width="200" alt="Home"></td>
-    <td><img src="docs/images/screens/overlay.png" width="300" alt="Floating subtitles (tap for the toolbar)"></td>
-    <td><img src="docs/images/screens/caption.png" width="200" alt="Settings · Subtitles"></td>
-    <td><img src="docs/images/screens/size.png" width="200" alt="Subtitle box size and kept sentences"></td>
-    <td><img src="docs/images/screens/translate.png" width="200" alt="Settings · Translation"></td>
-    <td><img src="docs/images/screens/page-dark.png" width="200" alt="Settings · Page (dark)"></td>
-    <td><img src="docs/images/screens/records.png" width="200" alt="Settings · Records"></td>
-    <td><img src="docs/images/screens/about.png" width="200" alt="Settings · About"></td>
-    <td><img src="docs/images/screens/home-dark.png" width="200" alt="Home (dark)"></td>
+    <td align="center" valign="top"><img src="docs/images/screens/home.png" width="240" alt="Android · Home"><br>Home</td>
+    <td align="center" valign="top"><img src="docs/images/screens/caption.png" width="240" alt="Android · Settings · Subtitles"><br>Settings · Subtitles</td>
+    <td align="center" valign="top"><img src="docs/images/screens/translate.png" width="240" alt="Android · Settings · Translation"><br>Settings · Translation</td>
   </tr>
+  <tr><th colspan="3">Desktop (Mac)</th></tr>
   <tr>
-    <td align="center">Home</td>
-    <td align="center">Floating subtitles (tap for the toolbar)</td>
-    <td align="center">Settings · Subtitles</td>
-    <td align="center">Subtitle box size and kept sentences</td>
-    <td align="center">Settings · Translation</td>
-    <td align="center">Settings · Page (dark)</td>
-    <td align="center">Settings · Records</td>
-    <td align="center">Settings · About</td>
-    <td align="center">Home (dark)</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/home.png" width="260" alt="Desktop (Mac) · Home"><br>Home</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/caption.png" width="260" alt="Desktop (Mac) · Settings · Subtitles"><br>Settings · Subtitles</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/translate.png" width="260" alt="Desktop (Mac) · Settings · Translation"><br>Settings · Translation</td>
   </tr>
 </table>
 
 ## What it does
 
-- **Works with most apps**: Bilibili, YouTube, streaming apps, the browser… any app that allows its playback to be captured; a few apps and DRM-protected video do not.
+- **Works with most apps**: Bilibili, YouTube, streaming apps, the browser… On the phone, any app that allows its playback to be captured (a few apps and DRM-protected video do not); on a computer, everything it plays.
 - **Floating subtitles**: shown over the video like movie subtitles; move them anywhere, change size, colour and background.
 - **As people speak**: text appears while someone is talking and becomes a final subtitle when the sentence ends.
-- **Speech stays on the phone**: audio is recognised on the device and **never uploaded**.
+- **Speech stays on your device**: audio is recognised on the phone or computer and **never uploaded**.
 - **Any caption language**: Chinese, English, Japanese and Korean in the list; for any other (e.g. French, Traditional Chinese, Cantonese) pick 自己填… and type it.
 - **Tell the translator what you watch**: a built-in Bilibili VTuber scene, or your own: a short background and a term list (source word, translation), which your LLM can also draft from the background.
 - **Bring your own translation model**: enter the address, model ID and key of any OpenAI-compatible service (e.g. DeepSeek, Qwen); you pay your provider for your own usage.
@@ -56,18 +46,20 @@
 ## Get started in three steps
 
 1. **Set up the LLM API**: on first launch the home screen asks for it; tap 去填写 (or go to Settings → 翻译), fill in the service address, model ID and API key, then tap 测试连接 (test). The model must be able to turn thinking off and should answer fast (see the FAQ).
-2. **Allow**: let the app hear other apps' sound and draw over other apps.
-3. **Start**: tap 开始字幕, pick the app you want to watch, and go back to your video.
+2. **Allow**: on the phone, let the app hear other apps' sound and draw over other apps; on a Mac, allow system audio recording the first time you start; Windows needs nothing.
+3. **Start**: tap 开始字幕. On the phone, pick the app you want to watch; a computer listens to everything it plays. Go back to your video.
 
 The speech recognition models ship inside the app; nothing else to download.
 
 Subtitle size, colours and translation options are in Settings.
 
-On the subtitle: **drag** to move · **tap** for the toolbar (text size, background, display mode, original text and timings on/off, lock, stop); while it is shown, **drag a corner mark** to resize · **locked**: position and size are fixed, a tap only shows an unlock button.
+On the subtitle (phone or computer; on a computer, a tap is a click): **drag** to move · **tap** for the toolbar (text size, background, display mode, original text and timings on/off, lock, stop); while it is shown, **drag a corner mark** to resize · **locked**: position and size are fixed, a tap only shows an unlock button.
 
 The app's interface is in Chinese.
 
 ## Install
+
+### Android
 
 - Android 10 or newer, arm64.
 - Download the APK from the [Releases](../../releases) page and open it on the phone (allow "install unknown apps").
@@ -98,14 +90,14 @@ The app's interface is in Chinese.
 
 ## FAQ
 
-**Why are there no subtitles for some apps?**
-Some apps (for example DRM-protected video) do not allow other apps to capture their audio. This is an Android restriction.
+**Why are there no subtitles for some apps on the phone?**
+Some apps (for example DRM-protected video) do not allow other apps to capture their audio. This is an Android restriction; a computer captures everything it plays.
 
 **Which spoken languages?**
 Japanese and English. Choosing the right one on the home screen makes the translation more accurate.
 
 **Is my audio uploaded?**
-No. Audio is turned into text on the phone; for translation only the recognised text is sent to the service you entered. See [docs/privacy.md](docs/privacy.md).
+No. Audio is turned into text on your phone or computer; for translation only the recognised text is sent to the service you entered. See [docs/privacy.md](docs/privacy.md).
 
 **Which translation model should I use?**
 One that can turn thinking (reasoning) off, otherwise every sentence takes a long wait; and preferably one that answers fast, so the subtitles keep up. The first time a model is used, the app finds out by itself how to turn its thinking off and remembers it.

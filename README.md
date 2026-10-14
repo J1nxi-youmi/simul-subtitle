@@ -19,36 +19,26 @@
 ## 界面一览
 
 <table>
+  <tr><th colspan="3">Android</th></tr>
   <tr>
-    <td><img src="docs/images/screens/home.png" width="200" alt="首页"></td>
-    <td><img src="docs/images/screens/overlay.png" width="300" alt="悬浮字幕（点一下出工具栏）"></td>
-    <td><img src="docs/images/screens/caption.png" width="200" alt="设置 · 字幕"></td>
-    <td><img src="docs/images/screens/size.png" width="200" alt="字幕框大小和保留几句"></td>
-    <td><img src="docs/images/screens/translate.png" width="200" alt="设置 · 翻译（LLM API）"></td>
-    <td><img src="docs/images/screens/page-dark.png" width="200" alt="设置 · 页面（夜间）"></td>
-    <td><img src="docs/images/screens/records.png" width="200" alt="设置 · 记录"></td>
-    <td><img src="docs/images/screens/about.png" width="200" alt="设置 · 关于"></td>
-    <td><img src="docs/images/screens/home-dark.png" width="200" alt="首页（夜间）"></td>
+    <td align="center" valign="top"><img src="docs/images/screens/home.png" width="240" alt="Android · 首页"><br>首页</td>
+    <td align="center" valign="top"><img src="docs/images/screens/caption.png" width="240" alt="Android · 设置 · 字幕"><br>设置 · 字幕</td>
+    <td align="center" valign="top"><img src="docs/images/screens/translate.png" width="240" alt="Android · 设置 · 翻译"><br>设置 · 翻译</td>
   </tr>
+  <tr><th colspan="3">桌面端（Mac）</th></tr>
   <tr>
-    <td align="center">首页</td>
-    <td align="center">悬浮字幕（点一下出工具栏）</td>
-    <td align="center">设置 · 字幕</td>
-    <td align="center">字幕框大小和保留几句</td>
-    <td align="center">设置 · 翻译（LLM API）</td>
-    <td align="center">设置 · 页面（夜间）</td>
-    <td align="center">设置 · 记录</td>
-    <td align="center">设置 · 关于</td>
-    <td align="center">首页（夜间）</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/home.png" width="260" alt="桌面端（Mac） · 首页"><br>首页</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/caption.png" width="260" alt="桌面端（Mac） · 设置 · 字幕"><br>设置 · 字幕</td>
+    <td align="center" valign="top"><img src="docs/images/screens/desktop/translate.png" width="260" alt="桌面端（Mac） · 设置 · 翻译"><br>设置 · 翻译</td>
   </tr>
 </table>
 
 ## 它能做什么
 
-- **大多数 App 都能用**：B 站、YouTube、直播软件、浏览器……适用于允许录制播放声音的 App；少数 App 和有版权保护的视频不支持。
+- **大多数 App 都能用**：B 站、YouTube、直播软件、浏览器……手机上适用于允许录制播放声音的 App（少数 App 和有版权保护的视频不支持）；电脑上听的是整台电脑播放出来的声音。
 - **字幕浮在画面上**：像电影字幕一样浮在视频上方，可以拖到任何位置，大小、颜色、透明度都能调。
 - **边听边出**：说话人一开口，字幕就开始出现；一句说完，再变成正式字幕。
-- **听写在手机上完成**：声音只在你的手机里识别成文字，**不会上传**。
+- **听写在你的设备上完成**：声音只在你的手机或电脑里识别成文字，**不会上传**。
 - **想翻成什么语言都行**：列表里有中文、英语、日语、韩语，其他语言（比如法语、繁体中文、粤语）选「自己填…」写上就行。
 - **告诉翻译你在看什么**：自带「B站 VTuber 直播」，也可以自己建场景：写几句背景说明，给常见词定好译法（术语表），还能让 LLM 按说明自动生成一批术语。
 - **用你自己的 LLM API 翻译**：填上任意 OpenAI 兼容服务的地址、模型 ID 和 key（例如 DeepSeek、通义千问），按你自己的用量计费。
@@ -56,8 +46,8 @@
 ## 三步开始
 
 1. **填 LLM API**：第一次打开，首页会提示「先填翻译用的 LLM API」，点「去填写」（或者「设置 → 翻译」），填好服务地址、模型 ID 和 API Key，点「测试连接」。模型要能关闭思考，并且尽量选回复快的（见下面的常见问题）。
-2. **允许**：按提示允许「听 App 的声音」和「在屏幕上显示字幕」。
-3. **开始**：点「开始字幕」，在弹出的窗口里选你要看的 App，回到视频就能看到字幕。
+2. **允许**：手机上按提示允许「听 App 的声音」和「在屏幕上显示字幕」；Mac 第一次开始字幕时允许「录制系统声音」；Windows 不用授权。
+3. **开始**：点「开始字幕」。手机上在弹出的窗口里选你要看的 App；电脑上直接听整台电脑的声音。回到视频就能看到字幕。
 
 语音识别模型已经装在 App 里，不用另外下载。
 
@@ -65,12 +55,16 @@
 
 ### 字幕上的小技巧
 
+手机和电脑上用法一样（电脑上「点」就是用鼠标点）：
+
 - **按住拖动**：换字幕的位置。
 - **点一下字幕，再拖四个角上的小箭头**：改字幕框的宽度和高度（小箭头和工具栏一起出现、一起消失）。
 - **点一下字幕**：出现工具栏，可以调字号、调背景、切换「边听边出 / 说完再出」、开关原文和用时、锁定，或者停止。
 - **锁定**：位置和大小都固定，不能拖动也不能改大小；点字幕不再出工具栏，只在右下角出一个开锁按钮，点它解锁。
 
 ## 安装
+
+### Android 版
 
 - 系统要求：Android 10 及以上，arm64 手机。
 - 在 [Releases](../../releases) 页面下载 APK，在手机上打开安装（需要允许「安装未知应用」）。
@@ -101,14 +95,14 @@
 
 ## 常见问题
 
-**为什么有的 App 没有字幕？**
-有些 App（比如开启了版权保护的视频）不允许其他 App 听它的声音，这是 Android 系统的限制，这时不会出字幕。
+**为什么手机上有的 App 没有字幕？**
+有些 App（比如开启了版权保护的视频）不允许其他 App 听它的声音，这是 Android 系统的限制，这时不会出字幕。电脑上听的是整台电脑播放的声音，没有这个限制。
 
 **能听哪些语言？**
 现在能听日语和英语。在首页选好视频里说的语言，翻译会更准。
 
 **会上传我的声音吗？**
-不会。声音在手机上变成文字；翻译时只把识别出的文字发给你填的 LLM API。详见 [隐私说明](docs/privacy.md)。
+不会。声音在你的手机或电脑上变成文字；翻译时只把识别出的文字发给你填的 LLM API。详见 [隐私说明](docs/privacy.md)。
 
 **翻译模型怎么选？**
 必须是能关闭思考（深度思考 / reasoning）的模型，否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。第一次用某个模型时，App 会自动试出关闭思考的参数并记住。

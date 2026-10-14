@@ -54,9 +54,11 @@ compose.desktop {
             // jpackage wants MAJOR > 0: the bundle's own version is 1.<versionCode> (it only orders builds for macOS);
             // the app, the Release and the dmg's file name show versionName (-Dsimulsub.version)
             packageVersion = "1.$appCode"
-            description = "同传字幕：把电脑播放的日语和英语实时变成字幕"
+            // jpackage on Windows reads its arguments in the system code page: ASCII only there
+            val windows = System.getProperty("os.name").startsWith("Windows")
+            description = if (windows) "SimulSub: live captions for what the computer plays" else "同传字幕：把电脑播放的日语和英语实时变成字幕"
             vendor = "KorenKrita"
-            copyright = "© KorenKrita"
+            copyright = if (windows) "(c) KorenKrita" else "© KorenKrita"
             modules("java.net.http", "jdk.crypto.ec", "java.naming")
             dist?.let { appResourcesRootDir.set(it.resolve("resources")) }
             macOS {

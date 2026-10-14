@@ -27,6 +27,8 @@ class JevTest {
     @Volatile private var redirectTo: String? = null
     /** extra header lines for the plain reply, e.g. "Retry-After: 30" */
     @Volatile private var extraHeaders = ""
+    /** the headers of the last request, names lowercased */
+    private val lastHeaders = AtomicReference<Map<String, String>>(emptyMap())
     /** when set, the reply to request number [holdHit] waits on [holdGate] after it is received (truly in flight) */
     @Volatile private var holdHit = -1
     private val holdGate = java.util.concurrent.CountDownLatch(1)
@@ -48,7 +50,7 @@ class JevTest {
                         val len = headers["content-length"]?.toInt() ?: 0
                         val body = ByteArray(len).also { var o = 0; while (o < len) o += inp.read(it, o, len - o) }
                         hits.incrementAndGet()
-                        lastAuth.set(headers["authorization"]); lastBody.set(String(body))
+                        lastAuth.set(headers["authorization"]); lastHeaders.set(headers); lastBody.set(String(body))
                         val n = hits.get()
                         if (n == holdHit) { held.countDown(); holdGate.await() }
                         Thread.sleep(delayMs)
@@ -78,7 +80,7 @@ class JevTest {
     private fun jev(deadline: Long = 2_000) =
         Jev(JevProvider.OFFICIAL, "sk-secret", deadline, url = "http://127.0.0.1:$port/v1/systemone")
 
-    private fun online(deadline: Long = 2_000) = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null, deadlineMs = deadline)
+    private fun online(deadline: Long = 2_000) = ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test"), "SYS", null, deadlineMs = deadline)
     private fun sse(vararg chunks: String) = chunks.joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
 
     @Test
@@ -111,8 +113,44 @@ class JevTest {
         assertFalse(c.usable); assertTrue(c.error!!, c.error!!.startsWith("deadline"))
     }
 
+    @Test
+    fun theServiceHeadersGoOutWithEachRequest() {
+        reply = { 200 to sse("""{"choices":[{"delta":{"content":"好"},"finish_reason":"stop"}]}""") }
+        val url = "http://127.0.0.1:$port/v1/chat/completions"
+        // defaults: our User-Agent and the key
+        ByokTranslator(ByokService(url, "m-1", "sk-test"), "SYS", null).translate("x")!!
+        assertEquals(ByokTranslator.defaultUserAgent, lastHeaders.get()["user-agent"]); assertEquals("Bearer sk-test", lastAuth.get())
+        // a typed User-Agent and extra headers, no key: no Authorization at all
+        val free = ByokService(url, "m-1", "", "Index-Translate-Client/1.0", listOf("X-Team" to "a b", "X-Two" to "2"))
+        assertTrue(ByokTranslator(free, "SYS", null).translate("x")!!.usable)
+        val h = lastHeaders.get()
+        assertEquals("Index-Translate-Client/1.0", h["user-agent"]); assertEquals("a b", h["x-team"]); assertEquals("2", h["x-two"])
+        assertNull(lastAuth.get())
+        // the log has the User-Agent and the header names, never their values
+        assertEquals(mapOf("mt_user_agent" to "Index-Translate-Client/1.0", "mt_headers" to listOf("X-Team", "X-Two")), free.log())
+    }
+
+    @Test
+    fun onlyHeadersThatCanBeSentAreAccepted() {
+        assertNull(ByokService.badName("X-Api-Key")); assertNull(ByokService.badValue("X", "Bearer a.b-c_d=="))
+        for (n in listOf("", "X Key", "X:Y", "头", "Authorization", "content-type", "Host", "User-Agent")) assertNotNull(n, ByokService.badName(n))
+        assertNotNull(ByokService.badValue("X", "a\r\nX-Evil: 1")); assertNotNull(ByokService.badValue("X", "中文"))
+        assertNotNull(ByokService.badUserAgent("UA\n")); assertNull(ByokService.badUserAgent("Mozilla/5.0 (X; Y)"))
+        // stored and read back; a bad or broken entry is dropped on reading, not sent
+        val h = listOf("X-A" to "1", "X-B" to "")
+        assertEquals(h, ByokService.parseHeaders(ByokService.storeHeaders(h)))
+        assertEquals(listOf("X-A" to "1"), ByokService.parseHeaders("""[["X-A","1"],["Host","evil"],["X-C"],5]"""))
+        assertEquals(emptyList<Pair<String, String>>(), ByokService.parseHeaders("not json"))
+        assertEquals(emptyList<Pair<String, String>>(), ByokService.parseHeaders(null))
+        // the 高级设置 as a whole: a repeated name (any case) and more than the cap are refused too
+        assertNull(ByokService.badAdvanced("", listOf("X-A" to "1")))
+        assertNotNull(ByokService.badAdvanced("", listOf("X-A" to "1", "x-a" to "2")))
+        assertNotNull(ByokService.badAdvanced("", (0..ByokService.MAX_HEADERS).map { "X-$it" to "v" }))
+        assertNotNull(ByokService.badAdvanced("", listOf("Host" to "x")))
+    }
+
     private fun streamed(firstContentMs: Long, deadline: Long = 8_000) =
-        ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null, deadlineMs = deadline, firstContentMs = firstContentMs)
+        ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test"), "SYS", null, deadlineMs = deadline, firstContentMs = firstContentMs)
 
     @Test
     fun noTranslatedTextWithinTheFirstContentWaitFailsTheCaption() {
@@ -455,7 +493,7 @@ class JevTest {
     // ---- BYOK
 
     private fun byok(variant: ByokTranslator.ThinkingOff? = null, deadline: Long = 2_000) =
-        ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", variant, deadlineMs = deadline)
+        ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test"), "SYS", variant, deadlineMs = deadline)
     private val plain = sse("""{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""")
     private val thought = sse("""{"choices":[{"delta":{"reasoning_content":"嗯…"}}]}""",
         """{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}""")
@@ -524,6 +562,13 @@ class JevTest {
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"key sk-test"},"finish_reason":"stop"}]}""") }
         val r = byok().translate("x")!!
         assertFalse(r.raw.contains("sk-test")); assertNull("a streamed body is never kept", r.response)
+        // a header value is masked like the key (it may be one): split over chunks, and joined after reasoning is cut
+        pieces = listOf("data: " + """{"choices":[{"delta":{"content":"好 hk-se"}}]}""" + "\n\n" to 0L,
+            "data: " + """{"choices":[{"delta":{"content":"cr<think>x</think>et sk-test"},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 0L)
+        val h = ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", headers = listOf("X-Api-Key" to "hk-secret")),
+            "SYS", null).translate("x")!!
+        pieces = null
+        assertFalse(h.raw, h.raw.contains("hk-secret") || h.raw.contains("sk-test")); assertFalse(h.text.contains("hk-secret"))
         // ran out of tokens while thinking: nothing to show
         reply = { 200 to sse("""{"choices":[{"delta":{"content":"<think>let me"},"finish_reason":"length"}]}""") }
         val t = byok().translate("x")!!
@@ -531,7 +576,7 @@ class JevTest {
         // thinking in the content at once, the translation only after 1 s: no translated text within 1 s
         pieces = listOf("data: " + """{"choices":[{"delta":{"content":"<think>嗯"}}]}""" + "\n\n" to 0L,
             "data: " + """{"choices":[{"delta":{"content":"</think>你好"},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 1_500L)
-        val late = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null,
+        val late = ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test"), "SYS", null,
             deadlineMs = 4_000, firstContentMs = 1_000).translate("x")!!
         assertEquals("no content in 1000ms", late.error)
         // tags split over chunks: "<thi" + "nk>" is still thinking; a closed block then text in time is in time
@@ -539,7 +584,7 @@ class JevTest {
             "data: " + """{"choices":[{"delta":{"content":"nk>嗯</thi"}}]}""" + "\n\n" to 50L,
             "data: " + """{"choices":[{"delta":{"content":"nk>你好"}}]}""" + "\n\n" to 50L,
             "data: " + """{"choices":[{"delta":{},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n" to 1_200L)
-        val split = ByokTranslator("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test", "SYS", null,
+        val split = ByokTranslator(ByokService("http://127.0.0.1:$port/v1/chat/completions", "m-1", "sk-test"), "SYS", null,
             deadlineMs = 4_000, firstContentMs = 1_000).translate("x")!!
         assertTrue(split.error, split.usable); assertEquals("你好", split.text)
         // the key split over two chunks: the body is not kept at all

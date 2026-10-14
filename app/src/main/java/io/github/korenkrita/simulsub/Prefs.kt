@@ -5,6 +5,8 @@ import android.content.Context
 /** Subtitle look, shared by the settings screen (live preview) and the overlay. */
 class Prefs(ctx: Context) {
     private val sp = ctx.getSharedPreferences("jpsub", Context.MODE_PRIVATE)
+    // every LLM API request (the session, 测试连接, 生成术语) is made after some Prefs exists
+    init { ByokTranslator.defaultUserAgent = "SimulSub/${BuildConfig.VERSION_NAME}" }
 
     /** Chinese caption size in sp */
     var textSp: Float
@@ -135,16 +137,28 @@ class Prefs(ctx: Context) {
      * "保存": all BYOK fields in one edit (null key = keep the saved one), plus the byokSaved marker a running session
      * switches on. One edit, so a reader never sees the new address with the old key.
      */
-    fun saveByok(url: String, model: String, key: String?) = sp.edit().apply {
+    fun saveByok(url: String, model: String, key: String?, userAgent: String? = null,
+                 headers: List<Pair<String, String>>? = null) = sp.edit().apply {
         putString("byokUrl", url.trim()); putString("byokModel", model.trim())
-        if (!key.isNullOrBlank()) putString("byokKey", KeyBox.seal(key.trim()))
+        if (key != null) { if (key.isBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(key.trim())) }
+        if (userAgent != null) { if (userAgent.isBlank()) remove("byokUserAgent") else putString("byokUserAgent", userAgent.trim()) }
+        // sealed like the key: a header may carry a second key
+        if (headers != null) { if (headers.isEmpty()) remove("byokHeaders") else putString("byokHeaders", KeyBox.seal(ByokService.storeHeaders(headers))) }
         putLong("byokSaved", System.nanoTime())
     }.apply()
-    /** URL, model and key read together (one copy of the preferences), for a session building its translator. */
-    fun byokTriple(): Triple<String, String, String?> {
+    val byokUserAgent: String get() = sp.getString("byokUserAgent", null).orEmpty()
+    val byokHeaders: List<Pair<String, String>>
+        get() = ByokService.parseHeaders(sp.getString("byokHeaders", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() })
+    /**
+     * The saved service read together (one copy of the preferences), for a session building its translator; null when
+     * the address is not valid. The key may be "" (a service without one).
+     */
+    fun byokService(): ByokService? {
         val all = sp.all
-        return Triple((all["byokUrl"] as? String).orEmpty(), (all["byokModel"] as? String).orEmpty(),
-            (all["byokKey"] as? String)?.let { runCatching { KeyBox.open(it) }.getOrNull() })
+        val url = ByokTranslator.chatUrl((all["byokUrl"] as? String).orEmpty()).second ?: return null
+        fun open(k: String) = (all[k] as? String)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+        return ByokService(url, (all["byokModel"] as? String).orEmpty(), open("byokKey").orEmpty(),
+            (all["byokUserAgent"] as? String).orEmpty(), ByokService.parseHeaders(open("byokHeaders")))
     }
     /**
      * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and
@@ -153,8 +167,8 @@ class Prefs(ctx: Context) {
     fun byokVariant(url: String, model: String): String? = sp.getString("byokVariant:$url|$model", null)
     fun setByokVariant(url: String, model: String, name: String?) =
         sp.edit().apply { if (name == null) remove("byokVariant:$url|$model") else putString("byokVariant:$url|$model", name) }.apply()
-    /** URL, model and key are all there and valid: BYOK can start. */
-    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty() && byokKey != null
+    /** URL and model are there and valid: BYOK can start (the key may be left empty, for a free service). */
+    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()
 
 
     fun listen(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(l)

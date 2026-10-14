@@ -25,6 +25,7 @@ val sysaudioFile: File = System.getProperty("compose.application.resources.dir")
     ?: File(System.getProperty("simulsub.root") ?: ".", "tools/mac-capture/build/sysaudio")
 
 fun main() {
+    ByokTranslator.defaultUserAgent = "SimulSub/$APP_VERSION"
     // the translation service, Jev and the update check go through the system's proxy, as a browser does (a proxy
     // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
     // (-Djava.net.useSystemProxies=false in JAVA_TOOL_OPTIONS turns it off)

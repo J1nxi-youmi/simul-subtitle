@@ -383,11 +383,11 @@ private fun Scenes() {
     Spacer(Modifier.height(8.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Btn(if (d.generating) "生成中…" else "生成术语", enabled = !d.generating) {
-            val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
-            val k = prefs.byokKey
+            val service = prefs.byokService()
+            val chat = service?.url
             val n = d.count.trim().toIntOrNull()
             d.status = when {
-                chat == null || prefs.byokModel.isEmpty() || k == null -> "先在上面「LLM API」里填好服务并保存。"
+                service == null || service.model.isEmpty() -> "先在上面「LLM API」里填好服务并保存。"
                 d.label.isBlank() && d.background.isBlank() -> "先写名字或背景说明，LLM 才知道要哪类术语。"
                 n == null || n < 1 || n > MAX_GENERATE -> "生成条数填 1 到 $MAX_GENERATE。"
                 d.terms.count { it.first.isNotBlank() || it.second.isNotBlank() } >= Scene.MAX_TERMS -> "术语已经有 ${Scene.MAX_TERMS} 条，满了。"
@@ -400,7 +400,7 @@ private fun Scenes() {
             val have = Scene.sources(d.terms)
             val room = Scene.MAX_TERMS - d.terms.count { it.first.isNotBlank() || it.second.isNotBlank() }
             Thread {
-                val (got, err) = generateTerms(chat, model, k!!, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n!!, room), src, tgt)
+                val (got, err) = generateTerms(service!!, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n!!, room), src, tgt)
                 java.awt.EventQueue.invokeLater {
                     d.generating = false
                     if (sceneDraft.value !== d) return@invokeLater // closed meanwhile
@@ -466,7 +466,7 @@ private val byokResult = mutableStateOf<String?>(null)
 private fun TranslateTab() {
     val running by CaptionService.runningState
     if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
-    Group("LLM API") { Byok(running) }
+    Group("LLM API") { Byok(running); ByokAdvanced() }
     Group("内容") {
         Label("内容类型")
         Scenes()
@@ -520,51 +520,119 @@ private fun TranslateTab() {
     }
 }
 
+/**
+ * What the LLM API boxes hold but 保存 has not saved yet: address, model, a typed key, "clear the saved key", and the
+ * 高级设置 (null: unchanged). All of it is saved by one 保存, so a running session never pairs one service's headers or
+ * key with another's address. Outside the composable so switching tabs keeps it.
+ */
+private class ByokDraft {
+    var url by mutableStateOf(prefs.byokUrl)
+    var model by mutableStateOf(prefs.byokModel)
+    var key by mutableStateOf("")
+    var clearKey by mutableStateOf(false)
+    var userAgent by mutableStateOf<String?>(null)
+    var headers by mutableStateOf<List<Pair<String, String>>?>(null)
+}
+private val byokDraft = mutableStateOf(ByokDraft())
+
+/** The 高级设置 being edited (null: closed): the User-Agent and the extra headers, as typed. */
+private class ByokAdvancedDraft(d: ByokDraft) {
+    var userAgent by mutableStateOf(d.userAgent ?: prefs.byokUserAgent)
+    var headers by mutableStateOf((d.headers ?: prefs.byokHeaders).ifEmpty { listOf("" to "") })
+    var status by mutableStateOf<String?>(null)
+}
+private val byokAdvanced = mutableStateOf<ByokAdvancedDraft?>(null)
+
+/**
+ * 高级设置 of the LLM API: the User-Agent (empty = ours) and extra request headers, one row of two boxes each. 好
+ * checks them and puts them in the draft; the LLM API's 保存 saves them with the rest of the service (the headers kept
+ * like the key), and a running session takes them from the next sentence.
+ */
+@Composable
+private fun ByokAdvanced() {
+    val d = byokAdvanced.value ?: return
+    Spacer(Modifier.height(10.dp))
+    Text("高级设置", color = C.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    Label("User-Agent")
+    Field(d.userAgent, { d.userAgent = it }, ByokTranslator.defaultUserAgent)
+    Hint("空着就用 ${ByokTranslator.defaultUserAgent}。有的服务会拦下不认识的 User-Agent，例如 B 站 Index 的免费接口要求填 Index-Translate-Client/1.0。")
+    Label("自定义请求头")
+    Hint("左边写名字，右边写值，每个请求都会带上。值和 key 一样保存在${if (isWindows) "加密文件" else "钥匙串"}里，使用记录里只记名字。")
+    d.headers.forEachIndexed { i, (k, v) ->
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { Field(k, { n -> d.headers = d.headers.toMutableList().also { it[i] = n to it[i].second } }, "名字") }
+            Text(":", color = C.muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 8.dp))
+            Box(Modifier.weight(1.4f)) { Field(v, { n -> d.headers = d.headers.toMutableList().also { it[i] = it[i].first to n } }, "值") }
+            TextBtn("×") { d.headers = d.headers.toMutableList().also { it.removeAt(i) } }
+        }
+    }
+    TextBtn("+ 加一个") { if (d.headers.size < ByokService.MAX_HEADERS) d.headers = d.headers + ("" to "") }
+    d.status?.let { Hint(it, C.err) }
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Grow()
+        TextBtn("取消") { byokAdvanced.value = null }
+        Btn("好", primary = true) {
+            val agent = d.userAgent.trim()
+            val headers = d.headers.map { it.first.trim() to it.second.trim() }.filter { it.first.isNotEmpty() || it.second.isNotEmpty() }
+            val err = ByokService.badAdvanced(agent, headers)
+            if (err != null) { d.status = "⚠ $err"; return@Btn }
+            byokDraft.value.userAgent = agent; byokDraft.value.headers = headers
+            byokAdvanced.value = null
+            byokResult.value = "高级设置改好了，点「保存」才会生效。"
+        }
+    }
+}
+
 @Composable
 private fun Byok(running: Boolean) {
     Hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
-    var url by remember { mutableStateOf(prefs.byokUrl) }
-    var model by remember { mutableStateOf(prefs.byokModel) }
-    var key by remember { mutableStateOf("") }
-    val saved = prefs.byokKey
+    val d = byokDraft.value
+    val saved = prefs.byokKey?.takeUnless { d.clearKey }
     val testing = byokTest.value != null
     var msg by byokResult
     Label("服务地址（OpenAI 兼容）")
-    Field(url, { url = it }, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以", enabled = !testing)
+    Field(d.url, { d.url = it }, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以", enabled = !testing)
     Label("模型 ID")
-    Field(model, { model = it }, "例如 deepseek-chat", enabled = !testing)
-    Label(if (saved != null) "API Key：已保存（…${saved.takeLast(4)}）" else "API Key：还没填")
-    Field(key, { key = it }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true, enabled = !testing)
+    Field(d.model, { d.model = it }, "例如 deepseek-chat", enabled = !testing)
+    Label(when {
+        saved != null -> "API Key：已保存（…${saved.takeLast(4)}）"
+        d.clearKey -> "API Key：保存后清除（不需要 key 的服务可以空着）"
+        else -> "API Key：没填（不需要 key 的服务可以空着）"
+    })
+    Field(d.key, { d.key = it }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true, enabled = !testing)
     // save what is in the boxes; null when something is wrong (and says what)
     fun save(): String? {
-        val u = url.trim(); val m = model.trim(); val k = key.trim()
+        val u = d.url.trim(); val m = d.model.trim(); val k = d.key.trim()
         val (bad, _) = ByokTranslator.chatUrl(u)
         when {
             bad != null -> { msg = "⚠ $bad"; return null }
             m.isEmpty() -> { msg = "⚠ 还没填模型 ID"; return null }
             m.any { it.isWhitespace() } -> { msg = "⚠ 模型 ID 里不要有空格"; return null }
             k.isNotEmpty() && !Jev.validKey(k) -> { msg = "⚠ key 里有空格、换行或特殊字符，请重新复制"; return null }
-            k.isEmpty() && saved == null -> { msg = "⚠ 还没填 API Key"; return null }
         }
         // one edit; a running session switches to the saved service from the next sentence, as one change
-        if (!prefs.saveByok(u, m, k.ifEmpty { null })) { msg = "⚠ key 没能存进钥匙串，什么都没改。请再试一次；钥匙串要求授权时请选「允许」。"; return null }
-        key = ""
+        if (!prefs.saveByok(u, m, k.ifEmpty { if (d.clearKey) "" else null }, d.userAgent, d.headers)) {
+            msg = "⚠ key 或请求头没能存进${if (isWindows) "加密文件" else "钥匙串"}，请再试一次；钥匙串要求授权时请选「允许」。"; return null
+        }
+        byokDraft.value = ByokDraft()
         return ByokTranslator.chatUrl(u).second
     }
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        val extra = listOfNotNull((d.userAgent ?: prefs.byokUserAgent).ifEmpty { null }?.let { "自定义 User-Agent" },
+            (d.headers ?: prefs.byokHeaders).size.takeIf { it > 0 }?.let { "$it 个请求头" },
+            "未保存".takeIf { d.userAgent != null || d.headers != null }).joinToString("、")
+        TextBtn("高级设置" + if (extra.isEmpty()) "" else "（$extra）", enabled = !testing && byokAdvanced.value == null) { byokAdvanced.value = ByokAdvancedDraft(d) }
         Grow()
         // running: "保存" switches the session from the next sentence (it tests a new model itself), so no test
-        // (two probes would bill twice) and no clearing the key (the session needs one)
-        TextBtn("清除 key", enabled = saved != null && !running && !testing) {
-            msg = if (prefs.clearByokKey()) null else "⚠ 没能从钥匙串删掉 key，请再试一次。"
-        }
+        // (two probes would bill twice); clearing the key is a draft change like the rest, saved by 保存
+        TextBtn("清除 key", enabled = saved != null && !testing) { d.clearKey = true; d.key = "" }
         Btn("保存", enabled = !testing) {
             if (save() != null) msg = if (running) "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。" else null
         }
         Btn(if (testing) "测试中…" else "测试连接", primary = true, enabled = !running && !testing) {
             val chatUrl = save() ?: return@Btn
-            val m = prefs.byokModel; val k = prefs.byokKey ?: return@Btn
-            val t = ByokTranslator(chatUrl, m, k, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
+            val m = prefs.byokModel; val service = prefs.byokService() ?: return@Btn
+            val t = ByokTranslator(service, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
                 maxTokens = mtMaxTokens(prefs.targetLang))
             byokTest.value = t; msg = null
             Thread {
@@ -593,7 +661,7 @@ private fun Byok(running: Boolean) {
     val known = chat?.let { prefs.byokVariant(it, prefs.byokModel) }
     Hint(msg ?: when {
         testing -> "正在依次尝试关闭思考的参数（最多 6 次，每次最多 8 秒，每次都会计费）…"
-        chat == null || prefs.byokModel.isEmpty() || saved == null -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 6 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
+        chat == null || prefs.byokModel.isEmpty() -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 6 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
         known == ByokTranslator.NONE_WORKED -> "⚠ 上次测试：已知的参数都关不掉这个模型的思考，翻译可能很慢。仍然可以使用。"
         known != null -> "上次测试可用（用的参数：${ByokTranslator.variant(known)?.label}，那次没检测到思考）。实际请求地址：$chat"
         else -> "还没测试，第一次开始字幕时会自动测。实际请求地址：$chat"

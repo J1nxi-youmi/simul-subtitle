@@ -51,7 +51,7 @@ class CaptionService private constructor(private val sysaudio: File) {
     /** A BYOK first-use probe in progress (at start or after "保存" while running), so stop can cancel it. */
     private var probing: ByokTranslator? = null
     /** The running session's settings versions and BYOK probe (shares [cancelLock]); null outside a session. */
-    @Volatile private var order: SetupOrder<Triple<String, String, String>, ByokTranslator.ThinkingOff?>? = null
+    @Volatile private var order: SetupOrder<ByokService, ByokTranslator.ThinkingOff?>? = null
     /** The running session's rebuild trigger; null before its pipeline exists and after it ended. */
     @Volatile private var onSetupChange: (() -> Unit)? = null
     /** the sysaudio child, under [cancelLock]: destroyed by stop, also while it is being launched */
@@ -83,7 +83,6 @@ class CaptionService private constructor(private val sysaudio: File) {
     private val pauseOver: Runnable = Runnable { refresh() }
     private var pauseTimer: javax.swing.Timer? = null
     /** the translator in use: the service its probe accepted */
-    private fun mtService(byok: Triple<String, String, String>) = "${byok.first}\n${byok.second}\n${byok.third}"
     /** Last real result of the translator / Jev in this session (null: not asked yet); main thread only. */
     private var mtState: ServiceCall? = null
     private var jevState: ServiceCall? = null
@@ -125,11 +124,11 @@ class CaptionService private constructor(private val sysaudio: File) {
             val jevEnds = prefs.jevOn; val jevCheck = prefs.jevCheck
             val wantJev = jevEnds || jevCheck
             // a change from here on is seen by the snapshot below or rebuilt after the start
-            val order = SetupOrder<Triple<String, String, String>, ByokTranslator.ThinkingOff?>(cancelLock).also { this.order = it }
+            val order = SetupOrder<ByokService, ByokTranslator.ThinkingOff?>(cancelLock).also { this.order = it }
             val v0 = order.version()
             val s0 = Snap(prefs, wantJev)
-            if (s0.byokUrl == null || s0.byokModel.isEmpty() || s0.byokKey == null) {
-                setStatus("⚠ LLM API 还没填完整（地址、key、模型 ID），请到设置「翻译」里填好"); Log.w(TAG, "byok incomplete"); return
+            if (s0.byok == null || s0.byok.model.isEmpty()) {
+                setStatus("⚠ LLM API 还没填完整（地址、模型 ID），请到设置「翻译」里填好"); Log.w(TAG, "byok incomplete"); return
             }
             val t0 = monoMs()
             // the models ship inside the app (or come from ./models when run from the repo)
@@ -151,7 +150,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             sl?.write(mapOf("ev" to "session_start", "app" to APP_VERSION,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
                 "mt_engine" to "byok",
-                "load_ms" to (t2 - t0), "proxy" to s0.byokUrl?.let { runCatching { java.net.ProxySelector.getDefault().select(java.net.URI(it)).toString() }.getOrNull() },
+                "load_ms" to (t2 - t0), "proxy" to s0.byok?.url?.let { runCatching { java.net.ProxySelector.getDefault().select(java.net.URI(it)).toString() }.getOrNull() },
                 "device" to "${if (isWindows) "Windows" else "Mac"} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
 
             /**
@@ -163,13 +162,13 @@ class CaptionService private constructor(private val sysaudio: File) {
              */
             val probeExec = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "jpsub-probe") }
             /** The BYOK service of the setup published last (session / setup worker thread only). */
-            var inUse: Triple<String, String, String>? = null
+            var inUse: ByokService? = null
 
             /** Runs probe [token] of [t]; false: stopped, closed or overtaken by a newer save (nothing recorded). */
-            fun runProbe(t: Triple<String, String, String>, token: Long, system: String, target: Target): Boolean {
+            fun runProbe(t: ByokService, token: Long, system: String, target: Target): Boolean {
                 val asking = "第一次用这个模型，正在试怎样关闭思考…"
                 val before = status
-                val probe = ByokTranslator(t.first, t.second, t.third, system, null, maxTokens = mtMaxTokens(target))
+                val probe = ByokTranslator(t, system, null, maxTokens = mtMaxTokens(target))
                 synchronized(cancelLock) {
                     // registered under the lock a newer save or the session end cancels under: neither slips in between
                     if (stopping || !order.current(token)) return false
@@ -192,8 +191,8 @@ class CaptionService private constructor(private val sysaudio: File) {
                         if (stopping || !order.endProbe(t, token, variant, trouble)) return false
                     }
                     when {
-                        variant != null -> prefs.setByokVariant(t.first, t.second, variant.name)
-                        none -> prefs.setByokVariant(t.first, t.second, ByokTranslator.NONE_WORKED)
+                        variant != null -> prefs.setByokVariant(t.url, t.model, variant.name)
+                        none -> prefs.setByokVariant(t.url, t.model, ByokTranslator.NONE_WORKED)
                     }
                     return true
                 } finally {
@@ -203,25 +202,25 @@ class CaptionService private constructor(private val sysaudio: File) {
             }
 
             /** A built setup, the warnings it comes with, the BYOK service it really uses and its log entry. */
-            class Built(val setup: Setup, val notice: String, val byok: Triple<String, String, String>, val byokEv: Map<String, Any?>)
+            class Built(val setup: Setup, val notice: String, val byok: ByokService, val byokEv: Map<String, Any?>)
 
             /**
              * The translator for BYOK and the service it uses. [wait]: probe a new service here (the start); otherwise
              * start its probe in the background and keep the service in use (with the new prompt) until it is done.
              * null: stopped, or overtaken by a newer change (whose own rebuild follows).
              */
-            fun byok(s: Snap, version: Int, wait: Boolean, notices: MutableList<String>): Triple<ByokTranslator, Triple<String, String, String>, Map<String, Any?>>? {
-                val t = Triple(s.byokUrl!!, s.byokModel, s.byokKey!!)
+            fun byok(s: Snap, version: Int, wait: Boolean, notices: MutableList<String>): Triple<ByokTranslator, ByokService, Map<String, Any?>>? {
+                val t = s.byok!!
                 val system = byokSystem(s.scene, s.source, s.target)
-                fun known(k: Triple<String, String, String>): Pair<Boolean, ByokTranslator.ThinkingOff?> {
-                    val stored = prefs.byokVariant(k.first, k.second)
+                fun known(k: ByokService): Pair<Boolean, ByokTranslator.ThinkingOff?> {
+                    val stored = prefs.byokVariant(k.url, k.model)
                     if (stored != null) return true to ByokTranslator.variant(stored)
                     return if (order.knows(k)) true to order.result(k) else false to null
                 }
                 // the log names the service really used (never the key): the one saved last may still be in its probe
-                fun use(k: Triple<String, String, String>, variant: ByokTranslator.ThinkingOff?) = Triple(
-                    ByokTranslator(k.first, k.second, k.third, system, variant, maxTokens = mtMaxTokens(s.target)), k,
-                    mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.first, "mt_model" to k.second))
+                fun use(k: ByokService, variant: ByokTranslator.ThinkingOff?) = Triple(
+                    ByokTranslator(k, system, variant, maxTokens = mtMaxTokens(s.target)), k,
+                    mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.url, "mt_model" to k.model) + k.log())
                 var (ready, variant) = known(t)
                 if (!ready) {
                     val keep = inUse
@@ -249,7 +248,7 @@ class CaptionService private constructor(private val sysaudio: File) {
                     }
                 }
                 order.trouble(t)?.let { notices += it }
-                if (variant == null && prefs.byokVariant(t.first, t.second) == ByokTranslator.NONE_WORKED)
+                if (variant == null && prefs.byokVariant(t.url, t.model) == ByokTranslator.NONE_WORKED)
                     notices += "⚠ 关不掉这个模型的思考，翻译可能很慢或经常失败"
                 return use(t, variant)
             }
@@ -282,7 +281,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             while (!stopping && (built == null || !order.publish(v) { true })) {
                 v = order.version()
                 val s = Snap(prefs, wantJev)
-                if (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null) return
+                if (s.byok == null || s.byok.model.isEmpty()) return
                 firstSnap = s
                 built = make(s, v, wait = true)
             }
@@ -292,7 +291,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             inUse = built.byok
             jevEndsOn = jevEnds; jevCheckOn = jevCheck
             // the services really in use (BYOK: the one its probe accepted, not a newly saved one still probed)
-            var mtId = mtService(built.byok); var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
+            var mtId = built.byok; var jevId = firstSnap.jevKey?.let { firstSnap.provider.name + "\n" + it }
             first.judge.let { j -> main.post { activeJudge = j; refresh() } }
             // the settings in use are not the ones session_start logged: say so, like a change while running
             logUsed(built, firstSnap, change = firstSnap !== s0)
@@ -344,13 +343,13 @@ class CaptionService private constructor(private val sysaudio: File) {
                     if (v == published || stopping) return@Runnable
                     val s = Snap(prefs, wantJev)
                     // BYOK is only switched by "保存", which checks the fields; a half-filled one keeps the current setup
-                    if (s.byokUrl == null || s.byokModel.isEmpty() || s.byokKey == null) return@Runnable
+                    if (s.byok == null || s.byok.model.isEmpty()) return@Runnable
                     val b = make(s, v, wait = false) ?: return@Runnable
                     // the version check and the publication under the lock every change bumps the version under: a newer
                     // change or the session end either comes before (this setup is dropped) or after (it rebuilds again)
                     // another translator or Jev service: its light starts unknown (grey), never the old one's. The
                     // switch is queued on the main thread before the new setup can produce any result
-                    val m = mtService(b.byok); val j = s.jevKey?.let { s.provider.name + "\n" + it }
+                    val m = b.byok; val j = s.jevKey?.let { s.provider.name + "\n" + it }
                     val mtNew = m != mtId; val jevNew = j != jevId
                     val judge = b.setup.judge
                     val activate = Runnable {
@@ -601,11 +600,8 @@ class CaptionService private constructor(private val sysaudio: File) {
         val target = prefs.targetLang
         val dedupe = prefs.dedupeJoin
         val contextN = if (prefs.contextOn) prefs.contextSentences else 0
-        // the three BYOK fields from one read, so the address of one save never goes out with the key of another
-        private val byok = prefs.byokTriple()
-        val byokUrl = ByokTranslator.chatUrl(byok.first).second
-        val byokModel = byok.second
-        val byokKey = byok.third
+        // the BYOK fields from one read, so the address of one save never goes out with the key of another
+        val byok = prefs.byokService()
         val provider = prefs.jevProvider
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
@@ -613,7 +609,7 @@ class CaptionService private constructor(private val sysaudio: File) {
         fun log() = mapOf("scene" to scene.label, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.stored,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
             "dedupe_join" to dedupe, "context_sentences" to contextN,
-            "mt_model" to byokModel, "mt_url" to byokUrl)
+            "mt_model" to byok?.model, "mt_url" to byok?.url)
     }
 
     companion object {

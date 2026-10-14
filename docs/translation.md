@@ -13,7 +13,7 @@
 
 ## 协议与关闭思考
 
-- 协议：OpenAI 兼容的 `POST {地址}/v1/chat/completions`，`Authorization: Bearer {key}`。地址结尾有没有 `/v1` 都可以；只接受 `https://`，不带用户名、`?` 参数和 `#`；不跟随重定向，免得把 key 发到别的地方。
+- 协议：OpenAI 兼容的 `POST {地址}/v1/chat/completions`，`Authorization: Bearer {key}`；key 空着时不发 `Authorization`（给不需要 key 的服务用）。地址结尾有没有 `/v1` 都可以；只接受 `https://`，不带用户名、`?` 参数和 `#`；不跟随重定向，免得把 key 发到别的地方。
 - **关闭思考**：没有统一的参数。第一次使用某个「地址 + 模型」时（点「测试连接」或第一次开始字幕），用一句固定的日语依次尝试下面的参数，第一种**正常结束、有译文、且没检测到思考内容**的就记下来，以后都用它。这只说明那次回复里没看到思考，不能证明服务真的执行了关闭（服务可能忽略参数、把思考藏起来）。最多尝试 6 次、每次最多 8 秒，每次都是一次计费请求：
   1. `thinking: {type: disabled}`（DeepSeek 等）
   2. `chat_template_kwargs: {enable_thinking: false, thinking: false}`（vLLM / SGLang 部署的 Qwen3、DeepSeek 等）
@@ -26,6 +26,25 @@
 - 测试时每种参数最多等 8 秒，不受首字限制；正式翻译仍是首字 5 秒 / 总共 8 秒。中途遇到超时、5xx 等不确定的结果时不记结论，下次再试。
 - 服务的回复原文（流式内容、思考内容、错误回复，都可能夹带 key）一律不写进使用记录，只记去掉思考和 key 后的译文、HTTP 状态、计时和 usage。
 - key 在手机上用 Android Keystore 加密保存，在 Mac 上存在钥匙串里，在 Windows 上用 DPAPI 加密保存；都不写进使用记录；译文里如果出现 key 会被删掉。
+
+## 高级设置：User-Agent 和请求头
+
+LLM API 下面的「高级设置」可以改每个请求带的 User-Agent，再加最多 20 个自己的请求头；翻译、测试连接、生成术语都会带上（Jev 不用）。在高级设置里点「好」只是改好，要再点 LLM API 的「保存」才和地址、模型、key 一起存下（「清除 key」也一样），字幕运行中从下一句开始一起换过去，不会出现新地址配旧请求头或旧 key 的一句。
+
+- **User-Agent**：空着就用 `SimulSub/{版本号}`。有的服务的防火墙会拦下不认识的 User-Agent（常见是 HTTP 412），这时按服务的文档填。
+- **请求头**：一行一个名字和值，例如服务要求的 `X-Api-Key`。名字只能用英文字母、数字和 `-` `_` 等符号；值不能有换行或中文。`Authorization`（由 key 生成）、`Content-Type`、`Host`、`Content-Length`、`User-Agent`（填在上面的框里）这类由 App 自己设置的不能改。
+- 请求头的值可能也是 key，和 key 一样加密保存（Android Keystore / Mac 钥匙串 / Windows DPAPI）；使用记录只记 User-Agent 和请求头的名字（`byok` 事件的 `mt_user_agent`、`mt_headers`），不记值。
+
+### 例子：B 站 Index 的免费翻译接口
+
+公开的免费接口，没有任何服务保证，可能随时限流、停服或改规则：
+
+- 服务地址：`https://index-translate.bilibili.com/v1`
+- 模型 ID：`Index-Translate-35B-A3B`
+- API Key：空着
+- 高级设置 → User-Agent：`Index-Translate-Client/1.0`（它的文档要求带上，免得被公网防火墙拦下）
+
+它是专门的翻译模型：字幕翻译没问题，「生成术语」多半做不好。
 
 ## 提示词
 

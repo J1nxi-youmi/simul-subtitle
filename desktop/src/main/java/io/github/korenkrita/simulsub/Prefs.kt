@@ -104,26 +104,34 @@ class Prefs private constructor(private val file: File) {
     var byokUrl: String get() = str("byokUrl").orEmpty(); set(v) = put("byokUrl" to v.trim())
     var byokModel: String get() = str("byokModel").orEmpty(); set(v) = put("byokModel" to v.trim())
     val byokKey: String? get() { rev.intValue; return Keychain.get("byokKey") }
-    fun clearByokKey(): Boolean = synchronized(byokLock) { Keychain.set("byokKey", null).also { if (it) put("byokKey" to null) } }
     /** BYOK's fields and key change together: a running session must never pair a new key with an old address */
     private val byokLock = Any()
     /**
      * "保存": the fields, then byokSaved, so a running session never takes a half-saved set. False when the keychain
-     * refused the key; then nothing is saved and the session keeps the old set.
+     * refused the key or the headers; then nothing else is saved and the session keeps the old set. [key] null keeps
+     * the saved one; [headers] null keeps the saved ones (stored with the key: they may hold one).
      */
-    fun saveByok(url: String, model: String, key: String?): Boolean = synchronized(byokLock) {
-        if (!key.isNullOrBlank() && !Keychain.set("byokKey", key.trim())) return false
+    fun saveByok(url: String, model: String, key: String?, userAgent: String? = null,
+                 headers: List<Pair<String, String>>? = null): Boolean = synchronized(byokLock) {
+        if (key != null && !Keychain.set("byokKey", key.trim().ifEmpty { null })) return false
+        if (headers != null && !Keychain.set("byokHeaders", if (headers.isEmpty()) null else ByokService.storeHeaders(headers))) return false
         put("byokUrl" to url.trim(), "byokModel" to model.trim())
+        if (userAgent != null) put("byokUserAgent" to userAgent.trim().ifEmpty { null })
         put("byokSaved" to System.nanoTime())
         true
     }
-    fun byokTriple(): Triple<String, String, String?> = synchronized(byokLock) {
+    val byokUserAgent: String get() = str("byokUserAgent").orEmpty()
+    val byokHeaders: List<Pair<String, String>> get() { rev.intValue; return ByokService.parseHeaders(Keychain.get("byokHeaders")) }
+    /** The saved service read as one (null: the address is not valid); the key may be "" (a service without one). */
+    fun byokService(): ByokService? = synchronized(byokLock) {
         val (u, m) = get { optString("byokUrl") to optString("byokModel") }
-        Triple(u, m, Keychain.get("byokKey"))
+        val url = ByokTranslator.chatUrl(u).second ?: return null
+        ByokService(url, m, Keychain.get("byokKey").orEmpty(), byokUserAgent, byokHeaders)
     }
     fun byokVariant(url: String, model: String): String? = str("byokVariant:$url|$model")
     fun setByokVariant(url: String, model: String, name: String?) = put("byokVariant:$url|$model" to name)
-    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty() && byokKey != null
+    /** address and model are there (the key may be left empty, for a free service) */
+    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()
 
     fun listen(l: (String) -> Unit) = listeners.add(l)
     fun unlisten(l: (String) -> Unit) = listeners.remove(l)

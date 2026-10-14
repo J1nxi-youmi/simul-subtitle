@@ -327,13 +327,13 @@ const val MAX_GENERATE = 100
  * found first as 测试连接 does and given to [remember] (a variant name or NONE_WORKED; nothing when inconclusive).
  * Left: the new terms (possibly none), right: why it failed, for the user.
  */
-fun generateTerms(url: String, model: String, key: String, stored: String?, remember: (String) -> Unit, label: String,
+fun generateTerms(service: ByokService, stored: String?, remember: (String) -> Unit, label: String,
                   background: String, have: Set<String>, max: Int, source: Lang?, target: Target)
     : Pair<List<Pair<String, String>>?, String?> {
     val n = max.coerceIn(1, MAX_GENERATE)
     var variant = ByokTranslator.variant(stored)
     if (stored == null) {
-        val p = ByokTranslator(url, model, key, byokSystem(Scene.GENERAL, source, target), null, maxTokens = mtMaxTokens(target))
+        val p = ByokTranslator(service, byokSystem(Scene.GENERAL, source, target), null, maxTokens = mtMaxTokens(target))
         val steps = mutableListOf<ByokTranslator.Step>()
         variant = p.probe(steps)
         when {
@@ -343,7 +343,7 @@ fun generateTerms(url: String, model: String, key: String, stored: String?, reme
             else -> steps.lastOrNull()?.result?.let { if (it.stop == 'f') return null to ByokTranslator.why(it) }
         }
     }
-    val t = ByokTranslator(url, model, key, termsSystem(label, background, have, n, source, target), variant,
+    val t = ByokTranslator(service, termsSystem(label, background, have, n, source, target), variant,
         deadlineMs = 60_000, maxTokens = 40 * n + 200, firstContentMs = 30_000)
     val r = t.translate("列出术语。") ?: return null to "没有收到回复"
     if (r.stop == 'f' && r.text.isEmpty()) return null to when {
@@ -401,10 +401,66 @@ fun byokUser(text: String, notes: List<String> = emptyList(), previous: List<Str
  * [probe] found for this URL + model (null: none worked, the request carries no switch and may think and be slow).
  * Reasoning in an answer is never shown; it is only flagged ([MtResult.thinking]).
  */
+/**
+ * The user's LLM API as saved: chat URL (see [ByokTranslator.chatUrl]), model, key ("" = none: no Authorization header,
+ * for a free service), the User-Agent ("" = [ByokTranslator.defaultUserAgent]) and extra request headers. A data class:
+ * a session compares the one it uses with the one saved last.
+ */
+data class ByokService(val url: String, val model: String, val key: String, val userAgent: String = "",
+                       val headers: List<Pair<String, String>> = emptyList()) {
+    /** What goes out with each request besides the body. */
+    fun requestHeaders(): Map<String, String> = buildMap {
+        put("User-Agent", userAgent.ifEmpty { ByokTranslator.defaultUserAgent })
+        for ((k, v) in headers) put(k, v)
+        if (key.isNotEmpty()) put("Authorization", "Bearer $key")
+    }
+    /** for the session log: the User-Agent and the names of the extra headers, never their values (they may be keys) */
+    /** never the key or the header values */
+    override fun toString() = "ByokService($url, $model, key=${if (key.isEmpty()) "none" else "…"}, ua=$userAgent, headers=${headers.map { it.first }})"
+    fun log(): Map<String, Any?> = mapOf("mt_user_agent" to (userAgent.ifEmpty { null }), "mt_headers" to headers.map { it.first }.ifEmpty { null })
+
+    companion object {
+        const val MAX_HEADERS = 20
+        /** set by OkHttp or by the app: the key, the body, the connection */
+        private val RESERVED = setOf("authorization", "content-type", "content-length", "content-encoding", "host",
+            "connection", "transfer-encoding", "accept-encoding", "user-agent", "cookie", "proxy-authorization", "te",
+            "upgrade", "keep-alive", "expect")
+        private fun token(c: Char) = c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in "!#$%&'*+-.^_`|~"
+
+        /** null when [name] may be sent as an extra header, otherwise why not (in words for the user) */
+        fun badName(name: String): String? = when {
+            name.isEmpty() -> "请求头名字不能空着"
+            !name.all(::token) -> "请求头名字「$name」只能用英文字母、数字和 - _ 等符号，不能有空格或冒号"
+            name.lowercase() in RESERVED -> if (name.equals("user-agent", true)) "User-Agent 请填在上面的框里"
+                else if (name.equals("authorization", true)) "Authorization 由 API Key 自动生成，不能在这里填" else "「$name」由 App 自己设置，不能改"
+            else -> null
+        }
+        /** null when [value] may be sent; printable ASCII and spaces (a header line cannot hold a line break) */
+        fun badValue(name: String, value: String): String? =
+            if (value.all { it == ' ' || it == '\t' || it in '!'..'~' }) null else "「$name」的值里有换行或中文等字符，请求头里放不下"
+        fun badUserAgent(ua: String): String? =
+            if (ua.all { it == ' ' || it in '!'..'~' }) null else "User-Agent 里只能有英文字母、数字、空格和常见符号"
+        /** null when the typed User-Agent and headers (blank rows already dropped) may be saved, otherwise why not */
+        fun badAdvanced(ua: String, headers: List<Pair<String, String>>): String? = badUserAgent(ua)
+            ?: headers.firstNotNullOfOrNull { (k, v) -> badName(k) ?: badValue(k, v) }
+            ?: headers.groupBy { it.first.lowercase() }.values.firstOrNull { it.size > 1 }?.let { "「${it[0].first}」填了两次" }
+            ?: if (headers.size > MAX_HEADERS) "请求头最多 $MAX_HEADERS 个" else null
+
+        /** The extra headers kept as one string (stored encrypted, like the key): a JSON list of [name, value]. */
+        fun storeHeaders(h: List<Pair<String, String>>): String = Json.encode(h.map { listOf(it.first, it.second) })
+        fun parseHeaders(s: String?): List<Pair<String, String>> = runCatching {
+            (Json.parse(s ?: return emptyList()) as List<*>).mapNotNull { e ->
+                val l = e as? List<*> ?: return@mapNotNull null
+                val k = l.getOrNull(0) as? String ?: return@mapNotNull null
+                val v = l.getOrNull(1) as? String ?: return@mapNotNull null
+                if (badName(k) == null && badValue(k, v) == null) k to v else null
+            }.take(MAX_HEADERS)
+        }.getOrDefault(emptyList())
+    }
+}
+
 class ByokTranslator(
-    private val url: String,
-    private val model: String,
-    private val apiKey: String,
+    private val service: ByokService,
     private val system: String,
     private val variant: ThinkingOff?,
     private val deadlineMs: Long = 8_000,
@@ -412,6 +468,10 @@ class ByokTranslator(
     private val firstContentMs: Long = FIRST_CONTENT_MS,
 ) : Mt {
     private val calls = Calls(deadlineMs)
+    private val url = service.url
+    private val model = service.model
+    /** masked out of every reply: the key and the extra header values (a header may carry a key too) */
+    private val secrets = (listOf(service.key) + service.headers.map { it.second }).filter { it.isNotEmpty() }.distinct()
 
     override fun translate(prompt: String): MtResult? = call(prompt, variant, firstContentMs)
 
@@ -426,7 +486,7 @@ class ByokTranslator(
         // of an earlier, abandoned call must not touch the next one)
         // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
         val r = try {
-            calls.post(url, body, mapOf("Authorization" to "Bearer $apiKey"),
+            calls.post(url, body, service.requestHeaders(),
                 firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = SseStream::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
         // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
@@ -440,7 +500,7 @@ class ByokTranslator(
         var clean = if (open) "" else res.raw
         while (true) {
             // the mask has no key characters, so each pass strictly shrinks or ends (a key like "*" could grow it)
-            val next = stripThink(clean).replace(apiKey, "")
+            val next = secrets.fold(stripThink(clean)) { t, k -> t.replace(k, "") }
             if (next == clean) break
             clean = next
         }
@@ -515,12 +575,15 @@ class ByokTranslator(
         const val PROBE_TEXT = "こんにちは、今日もよろしくお願いします。"
         /** Stored instead of a variant when the service answered but every switch still thought: do not probe again. */
         const val NONE_WORKED = "-"
+        /** Sent when the user set none: "SimulSub/<version>", set by each app at start. */
+        @Volatile var defaultUserAgent = "SimulSub"
 
         /** A failed call in words for the user (no response text: it may hold anything). */
         fun why(r: MtResult): String = when {
-            r.http == 401 || r.http == 403 -> "key 不对或没有权限（HTTP ${r.http}）"
+            r.http == 401 || r.http == 403 -> "key 不对、没填或没有权限（HTTP ${r.http}）"
             r.http == 404 -> "地址或模型 ID 不对（HTTP 404）"
             r.http == 429 -> "请求太频繁或额度用完（HTTP 429）"
+            r.http == 412 -> "被服务的防火墙拦下了（HTTP 412），可能要在「高级设置」里填它要求的 User-Agent"
             r.http != null && r.http != 0 && r.http != 200 -> "服务返回错误（HTTP ${r.http}）"
             r.error?.startsWith("deadline") == true -> "8 秒内没有翻完"
             r.error?.startsWith("no content") == true -> "${FIRST_CONTENT_MS / 1000} 秒内没有收到译文"

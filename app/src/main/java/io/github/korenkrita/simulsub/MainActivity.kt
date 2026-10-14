@@ -340,9 +340,9 @@ class MainActivity : Activity() {
 
         generate.setOnClickListener {
             if (generating) return@setOnClickListener
-            val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
-            val k = prefs.byokKey
-            if (chat == null || prefs.byokModel.isEmpty() || k == null) { status.text = "先在上面「LLM API」里填好服务并保存。"; return@setOnClickListener }
+            val service = prefs.byokService()
+            if (service == null || service.model.isEmpty()) { status.text = "先在上面「LLM API」里填好服务并保存。"; return@setOnClickListener }
+            val chat = service.url
             val label = name.text.toString().trim()
             if (label.isEmpty() && background.text.isBlank()) { status.text = "先写名字或背景说明，LLM 才知道要哪类术语。"; return@setOnClickListener }
             val n = count.text.toString().toIntOrNull()
@@ -354,7 +354,7 @@ class MainActivity : Activity() {
             val bg = background.text.toString(); val src = prefs.sourceLang; val tgt = termsLang
             val have = Scene.sources(rows())
             Thread {
-                val (got, err) = generateTerms(chat, model, k, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n, room), src, tgt)
+                val (got, err) = generateTerms(service, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n, room), src, tgt)
                 main.post {
                     generating = false; generate.isEnabled = true
                     if (!dialog.isShowing || isDestroyed) return@post
@@ -857,11 +857,22 @@ class MainActivity : Activity() {
                 box.addView(this)
             }
         }
-        val url = field("服务地址（OpenAI 兼容）", prefs.byokUrl, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以")
-        val model = field("模型 ID", prefs.byokModel, "例如 deepseek-chat")
-        val saved = prefs.byokKey
-        val key = field(if (saved != null) "API Key：已保存（…${saved.takeLast(4)}）" else "API Key：还没填", "",
-            if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true)
+        val d = byokDraft ?: ByokDraft(prefs.byokUrl, prefs.byokModel).also { byokDraft = it }
+        val url = field("服务地址（OpenAI 兼容）", d.url, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以")
+        val model = field("模型 ID", d.model, "例如 deepseek-chat")
+        val saved = prefs.byokKey?.takeUnless { d.clearKey }
+        val key = field(when {
+            saved != null -> "API Key：已保存（…${saved.takeLast(4)}）"
+            d.clearKey -> "API Key：保存后清除（不需要 key 的服务可以空着）"
+            else -> "API Key：没填（不需要 key 的服务可以空着）"
+        }, d.key, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true)
+        // kept in the draft as typed, so re-rendering (any setting on this page) does not lose it
+        fun keep() { d.url = url.text.toString(); d.model = model.text.toString(); d.key = key.text.toString() }
+        for (f in listOf(url, model, key)) f.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) = keep()
+        })
         val result = hint("")
         // save what is in the boxes; null when something is wrong (and says what)
         fun save(): String? {
@@ -872,11 +883,10 @@ class MainActivity : Activity() {
                 m.isEmpty() -> { result.text = "⚠ 还没填模型 ID"; return null }
                 m.any { it.isWhitespace() } -> { result.text = "⚠ 模型 ID 里不要有空格"; return null }
                 k.isNotEmpty() && !Jev.validKey(k) -> { result.text = "⚠ key 里有空格、换行或特殊字符，请重新复制"; return null }
-                k.isEmpty() && saved == null -> { result.text = "⚠ 还没填 API Key"; return null }
             }
             // one edit; a running session switches to the saved service from the next sentence, as one change
-            prefs.saveByok(u, m, k.ifEmpty { null })
-            if (k.isNotEmpty()) key.setText("")
+            prefs.saveByok(u, m, k.ifEmpty { if (d.clearKey) "" else null }, d.userAgent, d.headers)
+            byokDraft = null; key.setText("")
             return ByokTranslator.chatUrl(u).second
         }
         val testing = byokTest != null
@@ -884,10 +894,20 @@ class MainActivity : Activity() {
         // Running: "保存" switches the session to what was saved from the next sentence (it tests a new model itself),
         // so the test button is off (two probes would bill twice) and so is clearing the key (the session needs one).
         listOf(url, model, key).forEach { it.isEnabled = !testing }
+        // on a line of its own: four buttons do not fit a phone's width
+        val extra = listOfNotNull((d.userAgent ?: prefs.byokUserAgent).ifEmpty { null }?.let { "自定义 User-Agent" },
+            (d.headers ?: prefs.byokHeaders).size.takeIf { it > 0 }?.let { "$it 个请求头" },
+            "未保存".takeIf { d.userAgent != null || d.headers != null }).joinToString("、")
+        box.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "高级设置" + if (extra.isEmpty()) "（User-Agent、请求头）" else "（$extra）"
+            textSize = 15f; isEnabled = !testing; isAllCaps = false
+            setOnClickListener { editByokAdvanced(d) }
+        })
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = "清除 key"; textSize = 16f; isEnabled = saved != null && !running && !testing
-            setOnClickListener { prefs.byokKey = null; renderTranslate() }
+            // a draft change like the rest: saved (and a running session switched) only by 保存
+            text = "清除 key"; textSize = 16f; isEnabled = saved != null && !testing
+            setOnClickListener { d.clearKey = true; d.key = ""; renderTranslate() }
         })
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
             text = "保存"; textSize = 16f; isEnabled = !testing
@@ -906,15 +926,15 @@ class MainActivity : Activity() {
         val known = chat?.let { prefs.byokVariant(it, prefs.byokModel) }
         result.text = byokResult?.also { byokResult = null } ?: when {
             testing -> "正在依次尝试关闭思考的参数（最多 6 次，每次最多 8 秒，每次都会计费）…"
-            chat == null || prefs.byokModel.isEmpty() || prefs.byokKey == null -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 6 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
+            chat == null || prefs.byokModel.isEmpty() -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 6 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
             known == ByokTranslator.NONE_WORKED -> "⚠ 上次测试：已知的参数都关不掉这个模型的思考，翻译可能很慢。仍然可以使用。"
             known != null -> "上次测试可用（用的参数：${ByokTranslator.variant(known)?.label}，那次没检测到思考）。实际请求地址：$chat"
             else -> "还没测试，第一次开始字幕时会自动测。实际请求地址：$chat"
         }
         test.setOnClickListener {
             val chatUrl = save() ?: return@setOnClickListener
-            val m = prefs.byokModel; val k = prefs.byokKey ?: return@setOnClickListener
-            val t = ByokTranslator(chatUrl, m, k, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
+            val m = prefs.byokModel; val service = prefs.byokService() ?: return@setOnClickListener
+            val t = ByokTranslator(service, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
                 maxTokens = mtMaxTokens(prefs.targetLang))
             byokTest?.cancel(); byokTest = t
             renderTranslate() // shows "testing" and locks the boxes
@@ -944,6 +964,83 @@ class MainActivity : Activity() {
     }
     /** The finished test's outcome, shown once by the next render. */
     private var byokResult: String? = null
+    /**
+     * What the LLM API boxes hold but 保存 has not saved yet, so a re-render (高级设置 closing, a test) keeps it:
+     * address, model, a typed key, "clear the saved key", and the 高级设置 (null: unchanged). All of it is saved by one
+     * 保存, so a running session never pairs one service's headers or key with another's address.
+     */
+    private class ByokDraft(var url: String, var model: String) {
+        var key = ""; var clearKey = false
+        var userAgent: String? = null; var headers: List<Pair<String, String>>? = null
+    }
+    private var byokDraft: ByokDraft? = null
+
+    /**
+     * 高级设置 of the LLM API: the User-Agent (empty = ours) and extra request headers, one row of two boxes each. 好
+     * checks them and puts them in [draft]; the LLM API's 保存 saves them with the rest of the service (the headers
+     * sealed like the key), and a running session takes them from the next sentence.
+     */
+    private fun editByokAdvanced(draft: ByokDraft) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((22 * dpx).toInt(), (4 * dpx).toInt(), (22 * dpx).toInt(), 0)
+        }
+        fun box(v: String, h: String) = android.widget.EditText(this).apply {
+            setText(v); hint = h; isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val ua = box(draft.userAgent ?: prefs.byokUserAgent, ByokTranslator.defaultUserAgent)
+        val rowsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun rows() = (0 until rowsBox.childCount).map {
+            val r = rowsBox.getChildAt(it) as LinearLayout
+            (r.getChildAt(0) as android.widget.EditText).text.toString().trim() to (r.getChildAt(2) as android.widget.EditText).text.toString().trim()
+        }
+        fun addRow(k: String, v: String) {
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(box(k, "名字"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = ":"; textSize = 15f; setTextColor(getColor(R.color.muted)); setPadding((6 * dpx).toInt(), 0, (6 * dpx).toInt(), 0)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            })
+            row.addView(box(v, "值"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.4f))
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "×"; textSize = 18f; setTextColor(getColor(R.color.text2)); minWidth = 0; minimumWidth = 0
+                setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0); contentDescription = "删掉这个请求头"
+                setOnClickListener { rowsBox.removeView(row) }
+            })
+            rowsBox.addView(row)
+        }
+        (draft.headers ?: prefs.byokHeaders).forEach { addRow(it.first, it.second) }
+        if (rowsBox.childCount == 0) addRow("", "")
+        val status = hint("")
+        form.addView(label("User-Agent", 8)); form.addView(ua)
+        form.addView(hint("空着就用 ${ByokTranslator.defaultUserAgent}。有的服务会拦下不认识的 User-Agent，例如 B 站 Index 的免费接口要求填 Index-Translate-Client/1.0。"))
+        form.addView(label("自定义请求头"))
+        form.addView(hint("左边写名字，右边写值，每个请求都会带上。值和 key 一样加密保存，使用记录里只记名字。"))
+        form.addView(rowsBox)
+        form.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "+ 加一个"; textSize = 14f
+            setOnClickListener { if (rowsBox.childCount < ByokService.MAX_HEADERS) addRow("", "") }
+        })
+        form.addView(status)
+        val dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("LLM API 高级设置")
+            .setView(android.widget.ScrollView(this).apply { addView(form) })
+            .setNegativeButton("取消", null)
+            .setPositiveButton("好", null)
+            .show()
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val agent = ua.text.toString().trim()
+            val headers = rows().filter { it.first.isNotEmpty() || it.second.isNotEmpty() }
+            val err = ByokService.badAdvanced(agent, headers)
+            if (err != null) { status.text = "⚠ $err"; return@setOnClickListener }
+            // into the draft: saved with the address, model and key by the LLM API's 保存
+            draft.userAgent = agent; draft.headers = headers
+            byokResult = "高级设置改好了，点「保存」才会生效。"
+            dialog.dismiss(); renderTranslate()
+        }
+    }
 
     // ---- session logs --------------------------------------------------------------------------------------
 

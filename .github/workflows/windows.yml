@@ -1,0 +1,38 @@
+# The Windows zip (tools/win-app/build.sh) on a GitHub Windows runner, uploaded as the run's artifact.
+name: windows
+on:
+  push:
+    branches: [windows]
+  workflow_dispatch:
+jobs:
+  zip:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/cache@v4
+        with:
+          path: |
+            models
+            tools/win-app/build/*.jar
+          key: win-deps-${{ hashFiles('setup.sh', 'tools/win-app/build.sh') }}
+      - run: tools/win-app/build.sh
+      # quick check of the helper: it must start, find an output device or say why, and exit
+      - run: |
+          R=tools/win-app/build/resources/windows-x64
+          "$R/sysaudio.exe" 2 > /tmp/pcm 2> /tmp/err || true
+          cat /tmp/err; ls -la /tmp/pcm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SimulSub-windows-x64
+          path: desktop/build/compose/binaries/main/SimulSub-*-windows-x64.zip
+          compression-level: 0

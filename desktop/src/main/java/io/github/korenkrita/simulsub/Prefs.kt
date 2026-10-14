@@ -2,16 +2,24 @@ package io.github.korenkrita.simulsub
 
 import androidx.compose.runtime.mutableIntStateOf
 import org.json.JSONObject
+import com.sun.jna.platform.win32.Crypt32Util
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Where the app keeps its settings and logs: ~/Library/Application Support/SimulSub (or -Dsimulsub.data). */
+/**
+ * Where the app keeps its settings and logs: ~/Library/Application Support/SimulSub, %APPDATA%\SimulSub on Windows
+ * (or -Dsimulsub.data).
+ */
 val dataDir: File = File(System.getProperty("simulsub.data")
-    ?: "${System.getProperty("user.home")}/Library/Application Support/SimulSub").also { it.mkdirs() }
+    ?: if (isWindows) "${System.getenv("APPDATA") ?: System.getProperty("user.home")}\\SimulSub"
+    else "${System.getProperty("user.home")}/Library/Application Support/SimulSub").also { it.mkdirs() }
 
 /**
  * The phone's settings with the same names and defaults, kept in settings.json; keys (Jev, BYOK) go to the macOS
- * Keychain instead. Every read also reads [rev], so a composable that shows a setting follows its changes.
+ * Keychain (on Windows: keys.json, encrypted for this Windows user) instead. Every read also reads [rev], so a composable that shows a setting follows its changes.
  * Listeners get the changed key on the thread that changed it, like SharedPreferences.
  */
 class Prefs private constructor(private val file: File) {
@@ -138,6 +146,7 @@ object Keychain {
     private val cache = HashMap<String, String?>()
 
     @Synchronized fun get(account: String): String? = cache.getOrPut(account) {
+        if (isWindows) return@getOrPut Dpapi.get(account)
         runCatching {
             val p = ProcessBuilder("/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", account, "-w")
                 .redirectError(ProcessBuilder.Redirect.DISCARD).start()
@@ -150,6 +159,7 @@ object Keychain {
     @Synchronized fun set(account: String, value: String?): Boolean {
         cache.remove(account)
         val del = value.isNullOrEmpty()
+        if (isWindows) return Dpapi.set(account, value?.ifEmpty { null }).also { if (it) cache[account] = value?.ifEmpty { null } }
         val cmd = if (del) "delete-generic-password -s ${q(SERVICE)} -a ${q(account)}"
             else "add-generic-password -U -s ${q(SERVICE)} -a ${q(account)} -w ${q(value!!)}"
         val ok = runCatching {
@@ -166,4 +176,29 @@ object Keychain {
 
     /** a word for `security -i`: double-quoted, with \ and " escaped (keys are checked to be printable ASCII) */
     private fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+/**
+ * Windows' place for [Keychain]: keys.json in [dataDir], each value encrypted with DPAPI for the Windows user (only
+ * this user on this computer can read it back). Written whole to a temporary file, then moved over the old one.
+ */
+private object Dpapi {
+    private val file get() = File(dataDir, "keys.json")
+
+    private fun all(): JSONObject = runCatching { JSONObject(file.readText()) }.getOrDefault(JSONObject())
+
+    fun get(account: String): String? = runCatching {
+        val b64 = all().optString(account).ifEmpty { return null }
+        String(Crypt32Util.cryptUnprotectData(Base64.getDecoder().decode(b64)), Charsets.UTF_8)
+    }.getOrNull()
+
+    fun set(account: String, value: String?): Boolean = runCatching {
+        val o = all()
+        if (value == null) o.remove(account)
+        else o.put(account, Base64.getEncoder().encodeToString(Crypt32Util.cryptProtectData(value.toByteArray(Charsets.UTF_8))))
+        val tmp = File(dataDir, "keys.json.part")
+        tmp.writeText(o.toString())
+        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        true
+    }.getOrDefault(false)
 }

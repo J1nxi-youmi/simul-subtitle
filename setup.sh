@@ -21,7 +21,9 @@ MODELS=(
   "asr/tokens.txt $ASR/tokens.txt 26631 144f8a4f639373a1bdf7eabb2437482ef64b0cc5db24ad27cce65f293e4faa24"
   "vad/silero_vad.onnx $GH/asr-models/silero_vad.onnx 643854 9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
 )
-ok() { [ "$(wc -c < "$1" | tr -d ' ')" = "$2" ] && [ "$(shasum -a 256 "$1" | cut -d' ' -f1)" = "$3" ]; }
+# shasum on the Mac, sha256sum in Git Bash on Windows (tools/win-app)
+sha() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi; }
+ok() { [ "$(wc -c < "$1" | tr -d ' ')" = "$2" ] && [ "$(sha "$1" | cut -d' ' -f1)" = "$3" ]; }
 
 mkdir -p app/libs models/asr models/vad
 # the build that links onnxruntime into libsherpa-onnx-jni.so: one 24 MB library instead of 22 + 4.8 MB

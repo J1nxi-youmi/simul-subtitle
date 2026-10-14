@@ -57,7 +57,10 @@ private val prefs get() = Prefs.prefs
 private const val REPO = "https://github.com/KorenKrita/simul-subtitle"
 
 private fun open(url: String) = runCatching { Desktop.getDesktop().browse(URI(url)) }
-private fun reveal(f: File) = runCatching { ProcessBuilder("/usr/bin/open", "-R", f.path).start() }
+private fun reveal(f: File) = runCatching {
+    if (isWindows) ProcessBuilder("explorer.exe", "/select,", f.path).start()
+    else ProcessBuilder("/usr/bin/open", "-R", f.path).start()
+}
 private fun sizeText(b: Long) = if (b >= 1e6) "%.1f MB".format(b / 1e6) else "%.0f KB".format(b / 1e3)
 
 /** Starts captions from the home screen, the menu bar or the toolbar; null when it cannot, with the reason. */
@@ -94,7 +97,7 @@ fun app() = application {
         // closing the window keeps the app (and its captions) in the menu bar
         Window(onCloseRequest = { mainOpen = false }, state = state, title = "同传字幕") {
             // the title bar is the system's: follow the page colour, not just macOS's own setting
-            LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
+            if (!isWindows) LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
             Themed(dark) {
                 Box(Modifier.fillMaxSize().background(C.bg)) { MainScreen(startError) { startError = it } }
             }
@@ -174,10 +177,10 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
         val ready = prefs.byokReady
         when {
             running && ended -> status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
-            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，菜单栏图标里可以停止。")
+            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，${if (isWindows) "任务栏右下角" else "菜单栏"}的图标里可以停止。")
             !ready -> status(C.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
             startError != null -> status(C.err, "还不能开始", startError)
-            else -> status(C.brand, "可以开始了", "点下面的按钮开始。第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
+            else -> status(C.brand, "可以开始了", "点下面的按钮开始。" + if (isWindows) "" else "第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
         }
         // what is spoken → what the captions are in (a running session: from the next sentence)
         val sources = Lang.SOURCES
@@ -491,7 +494,7 @@ private fun TranslateTab() {
                         }
                     }
                 }
-                Hint("只发送识别出的文字和译文，不发送声音。key 保存在这台 Mac 的钥匙串里，不会写进使用记录。")
+                Hint("只发送识别出的文字和译文，不发送声音。key ${if (isWindows) "加密保存在这台电脑上，只有你的 Windows 账户能读出" else "保存在这台 Mac 的钥匙串里"}，不会写进使用记录。")
             }
         }
     }
@@ -616,7 +619,7 @@ private fun LogsTab() {
                     TextBtn("删除", danger = true) { confirm = null; if (!SessionLog.delete(f)) msg = "删除失败：记录正在写入或文件被占用"; tick++ }
                 } else {
                     TextBtn("删除", enabled = !active) { confirm = f }
-                    TextBtn("在访达中显示", enabled = !active) { reveal(f) }
+                    TextBtn(if (isWindows) "在文件夹中显示" else "在访达中显示", enabled = !active) { reveal(f) }
                 }
             }
         }
@@ -646,11 +649,11 @@ private fun LogsTab() {
 private fun AboutTab() {
     Group("使用说明") {
         Text("0. 第一次用：在「设置 › 翻译 › LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n" +
-            "1. 点首页的「开始字幕」。第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。\n" +
+            "1. 点首页的「开始字幕」。" + (if (isWindows) "" else "第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。") + "\n" +
             "2. 字幕浮在所有窗口上面：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n" +
             "3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个解锁按钮，点它就解锁。\n" +
-            "4. 字幕听的是这台 Mac 播放出来的所有声音，不用麦克风；同时有别的 App 在放声音时，它的声音也会出现在字幕里。\n" +
-            "5. 关掉这个窗口字幕也会继续，菜单栏的同传字幕图标里可以开始、停止，或重新打开这个窗口。\n" +
+            "4. 字幕听的是${thisComputer}播放出来的所有声音，不用麦克风；同时有别的 App 在放声音时，它的声音也会出现在字幕里。\n" +
+            "5. 关掉这个窗口字幕也会继续，${if (isWindows) "任务栏右下角" else "菜单栏"}的同传字幕图标里可以开始、停止，或重新打开这个窗口。\n" +
             "6. 在「记录」里打开「记录每次使用」后，每次使用会留下一份文字记录（不含声音和 key），可以发给开发者帮助反馈问题。默认不记录。",
             fontSize = 14.sp, lineHeight = 22.sp, color = C.text)
     }
@@ -676,7 +679,7 @@ private fun AboutTab() {
 
 // ---- updates -----------------------------------------------------------------------------------------------
 
-/** The latest release as update.json describes it; the Mac only needs its version and notes. */
+/** The latest release as update.json describes it; the desktop only needs its version and notes. */
 private class Release(val code: Int, val name: String, val notes: String)
 
 private sealed class Update {
@@ -734,7 +737,8 @@ private fun UpdateBox(r: Release) {
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("打开下载页", primary = true) { open("$REPO/releases/tag/v${r.name}") }
         }
-        Hint("下载页里的 .dmg 是 Mac 版。打开后把同传字幕拖进「应用程序」替换旧版即可，设置会保留。")
+        Hint(if (isWindows) "下载页里的 windows-x64.zip 是 Windows 版。先退出同传字幕，解压后用新的文件夹替换旧的即可，设置会保留。"
+            else "下载页里的 .dmg 是 Mac 版。打开后把同传字幕拖进「应用程序」替换旧版即可，设置会保留。")
     }
 }
 

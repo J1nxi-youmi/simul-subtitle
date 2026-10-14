@@ -71,7 +71,7 @@ fun palette(id: String?) = PALETTES.firstOrNull { it.id == id } ?: PALETTES[0]
 
 const val MIN_SP = 5f
 const val MAX_SP = 36f
-/** The phone's sp → points on the Mac: the same number reads about as large at a desk as on the phone in the hand. */
+/** The phone's sp → points on the desktop: the same number reads about as large at a desk as on the phone in the hand. */
 private const val SP_SCALE = 1.6f
 
 /**
@@ -306,7 +306,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
         alwaysOnTop = true, resizable = false, focusable = false) {
         // this window's own display scale: sizes are measured in its pixels (another display may scale differently)
         val density = androidx.compose.ui.platform.LocalDensity.current.density
-        LaunchedEffect(Unit) { window.rootPane.putClientProperty("apple.awt.windowShadow", false) }
+        if (!isWindows) LaunchedEffect(Unit) { window.rootPane.putClientProperty("apple.awt.windowShadow", false) }
         val toolbarView = @Composable {
             Toolbar(o, prefs, onLock = { locked = true; toolbar = false }, onStop = onStop,
                 modifier = Modifier.wrapContentSize().onSizeChanged { barW = (it.width / density).roundToInt(); barH = (it.height / density).roundToInt() }

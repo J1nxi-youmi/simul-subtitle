@@ -151,7 +151,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             sl?.write(mapOf("ev" to "session_start", "app" to APP_VERSION,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
                 "mt_engine" to "byok",
-                "load_ms" to (t2 - t0), "device" to "Mac ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
+                "load_ms" to (t2 - t0), "device" to "${if (isWindows) "Windows" else "Mac"} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}") + s0.log())
 
             /**
              * BYOK probes: a URL + model used for the first time is first probed for the switch that turns thinking off
@@ -621,7 +621,7 @@ class CaptionService private constructor(private val sysaudio: File) {
          */
         private val setupKeys = setOf("scene", "scenes", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
             "sourceLang", "targetLang")
-        // Apple silicon: ASR stays on two of the performance cores
+        // Apple silicon: ASR stays on two of the performance cores (and two threads on a Windows PC too)
         private const val ASR_THREADS = 2
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */

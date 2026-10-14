@@ -1,7 +1,9 @@
-// The desktop app (macOS, Apple silicon): system audio → the shared core → a transparent always-on-top caption window.
+// The desktop app (macOS on Apple silicon, Windows x64): system audio → the shared core → a transparent always-on-top
+// caption window.
 // From the repo, with the libraries tools/mac-e2e/run.sh builds and the models ./setup.sh downloads:
 //   tools/mac-capture/build.sh && tools/mac-e2e/run.sh && ./gradlew :desktop:run
 // The dmg: tools/mac-app/build.sh (it builds the native libraries itself and passes -Psimulsub.dist).
+// The Windows zip: tools/win-app/build.sh on Windows (Git Bash, MSVC), run by .github/workflows/windows.yml.
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
@@ -18,7 +20,8 @@ val appVersion = Regex("versionName = \"([^\"]+)\"").find(appGradle)!!.groupValu
 val appCode = Regex("versionCode = (\\d+)").find(appGradle)!!.groupValues[1]
 
 val macE2e = rootProject.layout.projectDirectory.dir("tools/mac-e2e/build")
-// tools/mac-app/build.sh's output: resources/macos-arm64 (the dylibs and sysaudio) and sherpa-jvm.jar
+// tools/mac-app's or win-app's output: resources/macos-arm64 or windows-x64 (the native libraries, sysaudio and the
+// models) and sherpa-jvm.jar
 val dist = (findProperty("simulsub.dist") as String?)?.let { file(it) }
 
 dependencies {
@@ -26,6 +29,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation("org.json:json:20240303")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Windows: the keys, encrypted with DPAPI (Crypt32Util)
+    implementation("net.java.dev.jna:jna-platform:5.14.0")
     implementation(files((dist ?: macE2e.asFile).resolve("sherpa-jvm.jar")))
 }
 
@@ -49,7 +54,7 @@ compose.desktop {
             // jpackage wants MAJOR > 0: the bundle's own version is 1.<versionCode> (it only orders builds for macOS);
             // the app, the Release and the dmg's file name show versionName (-Dsimulsub.version)
             packageVersion = "1.$appCode"
-            description = "同传字幕：把 Mac 播放的日语和英语实时变成字幕"
+            description = "同传字幕：把电脑播放的日语和英语实时变成字幕"
             vendor = "KorenKrita"
             copyright = "© KorenKrita"
             modules("java.net.http", "jdk.crypto.ec", "java.naming")

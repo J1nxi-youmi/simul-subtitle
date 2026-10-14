@@ -258,7 +258,36 @@ class MainActivity : Activity() {
             filters = arrayOf(android.text.InputFilter.LengthFilter(Scene.MAX_LABEL))
         }
         val background = area(old?.background ?: "", "这是什么内容、谁在说话、在聊什么，翻译会参考", 2)
-        val terms = area(Scene.termText(old?.terms.orEmpty()), "一行一条：原文→译文，例如 ボス→头目", 3)
+        // the terms: one row of two boxes each (原文 | 译文), the arrow between them is ours
+        val termBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun termBox(field: Int) = (0 until termBox.childCount).map { (termBox.getChildAt(it) as LinearLayout).getChildAt(field) as android.widget.EditText }
+        fun rows() = termBox(0).zip(termBox(2)) { a, b -> a.text.toString() to b.text.toString() }
+        fun addRow(src: String, dst: String) {
+            fun box(v: String, h: String) = android.widget.EditText(this).apply {
+                setText(v); hint = h; isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
+                filters = arrayOf(android.text.InputFilter.LengthFilter(Scene.MAX_TERM))
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(box(src, "原文"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = Scene.TERM_SEP; textSize = 15f; setTextColor(getColor(R.color.muted)); setPadding((6 * dpx).toInt(), 0, (6 * dpx).toInt(), 0)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            })
+            row.addView(box(dst, "译文"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "×"; textSize = 18f; setTextColor(getColor(R.color.text2)); minWidth = 0; minimumWidth = 0
+                setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0); contentDescription = "删掉这条"
+                setOnClickListener { termBox.removeView(row) }
+            })
+            termBox.addView(row)
+        }
+        old?.terms?.forEach { addRow(it.first, it.second) }
+        if (termBox.childCount == 0) addRow("", "")
+        val addTerm = MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "+ 加一条"; textSize = 14f
+            setOnClickListener { if (termBox.childCount < Scene.MAX_TERMS) addRow("", "") }
+        }
         val count = android.widget.EditText(this).apply {
             setText("20"); isSingleLine = true; inputType = android.text.InputType.TYPE_CLASS_NUMBER; textSize = 15f
             filters = arrayOf(android.text.InputFilter.LengthFilter(3)); contentDescription = "最多生成几条"
@@ -267,7 +296,8 @@ class MainActivity : Activity() {
         val status = hint("")
         form.addView(label("名字", 8)); form.addView(name)
         form.addView(label("背景说明")); form.addView(background)
-        form.addView(label("术语")); form.addView(terms)
+        form.addView(label("术语")); form.addView(hint("左边写视频里说的词，右边写想要的译法，例如 ボス 和 头目。"))
+        form.addView(termBox); form.addView(addTerm)
         form.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(generate)
@@ -299,25 +329,27 @@ class MainActivity : Activity() {
             if (label.isEmpty() && background.text.isBlank()) { status.text = "先写名字或背景说明，LLM 才知道要哪类术语。"; return@setOnClickListener }
             val n = count.text.toString().toIntOrNull()
             if (n == null || n < 1 || n > MAX_GENERATE) { status.text = "生成条数填 1 到 $MAX_GENERATE。"; return@setOnClickListener }
-            val room = Scene.MAX_TERMS - terms.text.lines().count { it.isNotBlank() }
+            val room = Scene.MAX_TERMS - rows().count { it.first.isNotBlank() || it.second.isNotBlank() }
             if (room <= 0) { status.text = "术语已经有 ${Scene.MAX_TERMS} 条，满了。"; return@setOnClickListener }
             generating = true; generate.isEnabled = false; status.text = "正在生成…（最多一分钟）"
-            val model = prefs.byokModel; val variant = ByokTranslator.variant(prefs.byokVariant(chat, model))
+            val model = prefs.byokModel; val stored = prefs.byokVariant(chat, model)
             val bg = background.text.toString(); val src = prefs.sourceLang; val tgt = prefs.targetLang
-            val have = Scene.sources(terms.text.toString())
+            val have = Scene.sources(rows())
             Thread {
-                val (got, err) = generateTerms(chat, model, k, variant, label, bg, have, minOf(n, room), src, tgt)
+                val (got, err) = generateTerms(chat, model, k, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n, room), src, tgt)
                 main.post {
                     generating = false; generate.isEnabled = true
                     if (!dialog.isShowing || isDestroyed) return@post
                     // appended to what is in the box now (the user may have typed meanwhile), skipping 原文 now there
-                    val (text, added) = appendTerms(terms.text.toString(), got.orEmpty())
+                    val now = rows()
+                    val (next, added) = appendTerms(now, got.orEmpty())
                     status.text = when {
                         err != null -> "⚠ 没能生成：$err"
                         added == 0 -> "没有生成新的术语（可能都已经有了，或者满了），可以把背景说明写详细些再试。"
                         else -> {
-                            val t = terms.text.toString()
-                            terms.append(text.substring(t.length))
+                            // a lone empty row (the one a new scene starts with) gives way to the generated ones
+                            if (now.size == 1 && now[0].first.isBlank() && now[0].second.isBlank()) termBox.removeAllViews()
+                            next.drop(now.size).forEach { addRow(it.first, it.second) }
                             "加了 $added 条，看一下有没有不对的，再点「保存」。"
                         }
                     }
@@ -325,7 +357,7 @@ class MainActivity : Activity() {
             }.start()
         }
         dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", name.text.toString(), background.text.toString(), terms.text.toString())
+            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", name.text.toString(), background.text.toString(), rows())
             if (s == null) { status.text = "⚠ $err"; return@setOnClickListener }
             val list = prefs.scenes
             prefs.scenes = if (list.any { it.id == s.id }) list.map { if (it.id == s.id) s else it } else list + s

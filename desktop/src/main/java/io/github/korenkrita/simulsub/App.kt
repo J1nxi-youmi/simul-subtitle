@@ -297,7 +297,8 @@ private fun CaptionTab() {
 private class SceneDraft(val old: Scene?) {
     var label by mutableStateOf(old?.label ?: "")
     var background by mutableStateOf(old?.background ?: "")
-    var terms by mutableStateOf(Scene.termText(old?.terms.orEmpty()))
+    /** the term rows as typed (原文, 译文); a new scene starts with one empty row */
+    var terms by mutableStateOf(old?.terms?.ifEmpty { null } ?: listOf("" to ""))
     var count by mutableStateOf("20")
     var status by mutableStateOf<String?>(null)
     var generating by mutableStateOf(false)
@@ -337,7 +338,17 @@ private fun Scenes() {
     Label("背景说明")
     Area(d.background, { d.background = it }, "这是什么内容、谁在说话、在聊什么，翻译会参考", 2)
     Label("术语")
-    Area(d.terms, { d.terms = it }, "一行一条：原文→译文，例如 ボス→头目", 4)
+    Hint("左边写视频里说的词，右边写想要的译法，例如 ボス 和 头目。")
+    // one row of two boxes each; the arrow between them is ours
+    d.terms.forEachIndexed { i, (src, dst) ->
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { Field(src, { v -> d.terms = d.terms.toMutableList().also { it[i] = v.take(Scene.MAX_TERM) to it[i].second } }, "原文") }
+            Text(Scene.TERM_SEP, color = C.muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 8.dp))
+            Box(Modifier.weight(1f)) { Field(dst, { v -> d.terms = d.terms.toMutableList().also { it[i] = it[i].first to v.take(Scene.MAX_TERM) } }, "译文") }
+            TextBtn("×") { d.terms = d.terms.toMutableList().also { it.removeAt(i) } }
+        }
+    }
+    TextBtn("+ 加一条") { if (d.terms.size < Scene.MAX_TERMS) d.terms = d.terms + ("" to "") }
     Spacer(Modifier.height(8.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Btn(if (d.generating) "生成中…" else "生成术语", enabled = !d.generating) {
@@ -348,22 +359,24 @@ private fun Scenes() {
                 chat == null || prefs.byokModel.isEmpty() || k == null -> "先在上面「LLM API」里填好服务并保存。"
                 d.label.isBlank() && d.background.isBlank() -> "先写名字或背景说明，LLM 才知道要哪类术语。"
                 n == null || n < 1 || n > MAX_GENERATE -> "生成条数填 1 到 $MAX_GENERATE。"
-                d.terms.lines().count { it.isNotBlank() } >= Scene.MAX_TERMS -> "术语已经有 ${Scene.MAX_TERMS} 条，满了。"
+                d.terms.count { it.first.isNotBlank() || it.second.isNotBlank() } >= Scene.MAX_TERMS -> "术语已经有 ${Scene.MAX_TERMS} 条，满了。"
                 else -> null
             }
             if (d.status != null) return@Btn
             d.generating = true; d.status = "正在生成…（最多一分钟）"
-            val model = prefs.byokModel; val variant = ByokTranslator.variant(prefs.byokVariant(chat!!, model))
+            val model = prefs.byokModel; val stored = prefs.byokVariant(chat!!, model)
             val label = d.label.trim(); val bg = d.background; val src = prefs.sourceLang; val tgt = prefs.targetLang
             val have = Scene.sources(d.terms)
-            val room = Scene.MAX_TERMS - d.terms.lines().count { it.isNotBlank() }
+            val room = Scene.MAX_TERMS - d.terms.count { it.first.isNotBlank() || it.second.isNotBlank() }
             Thread {
-                val (got, err) = generateTerms(chat, model, k!!, variant, label, bg, have, minOf(n!!, room), src, tgt)
+                val (got, err) = generateTerms(chat, model, k!!, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n!!, room), src, tgt)
                 java.awt.EventQueue.invokeLater {
                     d.generating = false
                     if (sceneDraft.value !== d) return@invokeLater // closed meanwhile
                     // appended to what is in the box now (the user may have typed meanwhile), skipping 原文 now there
-                    val (text, added) = appendTerms(d.terms, got.orEmpty())
+                    // a lone empty row (the one a new scene starts with) gives way to the generated ones
+                    val now = d.terms.takeUnless { it.size == 1 && it[0].first.isBlank() && it[0].second.isBlank() }.orEmpty()
+                    val (text, added) = appendTerms(now, got.orEmpty())
                     d.status = when {
                         err != null -> "⚠ 没能生成：$err"
                         added == 0 -> "没有生成新的术语（可能都已经有了，或者满了），可以把背景说明写详细些再试。"

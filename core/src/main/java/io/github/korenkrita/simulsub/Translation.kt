@@ -18,6 +18,8 @@ data class Scene(val id: String, val label: String, val background: String?, val
         const val MAX_BACKGROUND = 1000
         const val MAX_TERMS = 200
         const val MAX_TERM = 40
+        /** between 原文 and 译文 in the saved value and the prompts; [edit] refuses a term containing it */
+        const val TERM_SEP = "→"
         val GENERAL = Scene("GENERAL", "通用", null, emptyList())
         val VTUBER = Scene("VTUBER",
             "B站 VTuber 直播",
@@ -32,37 +34,32 @@ data class Scene(val id: String, val label: String, val background: String?, val
         val DEFAULTS = listOf(GENERAL, VTUBER)
 
         /**
-         * A scene from the editor's text: label one line, background as typed (blank = none), terms one per line as
-         * 原文→译文 (also -> or =). Left: the scene, or right: what is wrong, in words for the user.
+         * A scene from the editor: label one line, background as typed (blank = none), terms as the rows of the two
+         * boxes (原文, 译文); a row with both boxes empty is ignored. Left: the scene, or right: what is wrong, for the user.
          */
-        fun edit(id: String, label: String, background: String, terms: String): Pair<Scene?, String?> {
+        fun edit(id: String, label: String, background: String, terms: List<Pair<String, String>>): Pair<Scene?, String?> {
             val l = label.replace(Regex("\\s+"), " ").trim()
             if (l.isEmpty()) return null to "名字不能空着"
             if (l.length > MAX_LABEL) return null to "名字最多 $MAX_LABEL 个字"
             val b = background.trim()
             if (b.length > MAX_BACKGROUND) return null to "背景说明最多 $MAX_BACKGROUND 个字"
             val list = ArrayList<Pair<String, String>>()
-            for ((i, line) in terms.lines().withIndex()) {
-                if (line.isBlank()) continue
-                val parts = line.split(Regex("→|->|="), limit = 2).map { it.trim() }
-                if (parts.size < 2 || parts[0].isEmpty() || parts[1].isEmpty())
-                    return null to "术语第 ${i + 1} 行要写成「原文→译文」"
-                if (parts[0].length > MAX_TERM || parts[1].length > MAX_TERM) return null to "术语第 ${i + 1} 行太长（每边最多 $MAX_TERM 个字）"
-                list += parts[0] to parts[1]
+            for ((i, t) in terms.withIndex()) {
+                val src = t.first.trim(); val dst = t.second.trim()
+                if (src.isEmpty() && dst.isEmpty()) continue
+                if (src.isEmpty()) return null to "第 ${i + 1} 条术语没写原文"
+                if (dst.isEmpty()) return null to "第 ${i + 1} 条术语没写译文"
+                if (src.length > MAX_TERM || dst.length > MAX_TERM) return null to "第 ${i + 1} 条术语太长（每边最多 $MAX_TERM 个字）"
+                if ('\n' in src || '\n' in dst) return null to "第 ${i + 1} 条术语不能换行"
+                if (TERM_SEP in src || TERM_SEP in dst) return null to "第 ${i + 1} 条术语里不要写「$TERM_SEP」，左右分开填就行"
+                list += src to dst
             }
             if (list.size > MAX_TERMS) return null to "术语最多 $MAX_TERMS 条"
             return Scene(id, l, b.ifEmpty { null }, list) to null
         }
 
-        /** the editor's term text of [terms] */
-        fun termText(terms: List<Pair<String, String>>) = terms.joinToString("\n") { "${it.first}→${it.second}" }
-
-        /**
-         * The 原文 of every line of the editor's [text] as written (also a line not finished yet, like "ボス→"): what
-         * 生成术语 must not add again. Nothing is cleaned up, so a typed line keeps its exact 原文.
-         */
-        fun sources(text: String): Set<String> =
-            text.lines().mapNotNull { it.split(Regex("→|->|="), limit = 2)[0].trim().ifEmpty { null } }.toSet()
+        /** The 原文 of the editor's rows as typed (also of a row whose 译文 is still empty): what 生成术语 must not add again. */
+        fun sources(rows: List<Pair<String, String>>): Set<String> = rows.mapNotNull { it.first.trim().ifEmpty { null } }.toSet()
 
         /**
          * The scenes saved by the user (the settings value "scenes": built-ins they edited, by id, and their own)
@@ -74,10 +71,14 @@ data class Scene(val id: String, val label: String, val background: String?, val
                 (0 until a.length()).mapNotNull { i ->
                     val o = a.optJSONObject(i) ?: return@mapNotNull null
                     val t = o.opt("terms") as? org.json.JSONArray ?: return@mapNotNull null
-                    val lines = (0 until t.length()).map { t.opt(it) as? String ?: return@mapNotNull null }
+                    // each term is saved as "原文→译文"; [edit] keeps the arrow out of terms
+                    val rows = (0 until t.length()).map {
+                        val p = (t.opt(it) as? String)?.split(TERM_SEP)?.takeIf { p -> p.size == 2 } ?: return@mapNotNull null
+                        p[0] to p[1]
+                    }
                     if (listOf("id", "label", "background").any { o.opt(it) !is String }) return@mapNotNull null
-                    edit(o.getString("id"), o.getString("label"), o.getString("background"), lines.joinToString("\n")).first
-                        ?.takeIf { it.id.isNotEmpty() && it.terms.size == lines.size }
+                    edit(o.getString("id"), o.getString("label"), o.getString("background"), rows).first
+                        ?.takeIf { it.id.isNotEmpty() && it.terms.size == rows.size }
                 }
             }.orEmpty().distinctBy { it.id }
             return DEFAULTS.map { d -> mine.firstOrNull { it.id == d.id } ?: d } + mine.filter { !it.builtin }
@@ -87,7 +88,7 @@ data class Scene(val id: String, val label: String, val background: String?, val
         fun store(scenes: List<Scene>): String = org.json.JSONArray().apply {
             for (s in scenes) if (!s.shipped) put(org.json.JSONObject().put("id", s.id).put("label", s.label)
                 .put("background", s.background ?: "")
-                .put("terms", org.json.JSONArray().apply { s.terms.forEach { put("${it.first}→${it.second}") } }))
+                .put("terms", org.json.JSONArray().apply { s.terms.forEach { put("${it.first}$TERM_SEP${it.second}") } }))
         }.toString()
     }
 }
@@ -306,13 +307,27 @@ fun termsSystem(label: String, background: String, have: Set<String>, max: Int, 
 const val MAX_GENERATE = 100
 
 /**
- * 生成术语 with the user's LLM API: one request (any thread, blocking, up to a minute; [cancel] through the returned
- * translator is not needed, the editor waits). Left: the new terms (possibly none), right: why it failed, for the user.
+ * 生成术语 with the user's LLM API: one request (any thread, blocking, up to a minute). [stored] is the thinking switch
+ * saved for this URL + model (a variant name, [ByokTranslator.NONE_WORKED], or null = never tested): never tested, it is
+ * found first as 测试连接 does and given to [remember] (a variant name or NONE_WORKED; nothing when inconclusive).
+ * Left: the new terms (possibly none), right: why it failed, for the user.
  */
-fun generateTerms(url: String, model: String, key: String, variant: ByokTranslator.ThinkingOff?, label: String,
+fun generateTerms(url: String, model: String, key: String, stored: String?, remember: (String) -> Unit, label: String,
                   background: String, have: Set<String>, max: Int, source: Lang?, target: Target)
     : Pair<List<Pair<String, String>>?, String?> {
     val n = max.coerceIn(1, MAX_GENERATE)
+    var variant = ByokTranslator.variant(stored)
+    if (stored == null) {
+        val p = ByokTranslator(url, model, key, byokSystem(Scene.GENERAL, source, target), null, maxTokens = mtMaxTokens(target))
+        val steps = mutableListOf<ByokTranslator.Step>()
+        variant = p.probe(steps)
+        when {
+            variant != null -> remember(variant.name)
+            p.exhausted(steps) -> remember(ByokTranslator.NONE_WORKED)
+            // nothing conclusive: the first failure says why (wrong key, unreachable, ...)
+            else -> steps.lastOrNull()?.result?.let { if (it.stop == 'f') return null to ByokTranslator.why(it) }
+        }
+    }
     val t = ByokTranslator(url, model, key, termsSystem(label, background, have, n, source, target), variant,
         deadlineMs = 60_000, maxTokens = 40 * n + 200, firstContentMs = 30_000)
     val r = t.translate("列出术语。") ?: return null to "没有收到回复"
@@ -336,22 +351,22 @@ fun newTerms(answer: String, have: Set<String>, max: Int): List<Pair<String, Str
         val l = line.trim().replace(Regex("^([-*•·]|\\d+[.、)）])\\s*"), "").trim('`', ' ')
         val p = l.split(Regex("→|->|="), limit = 2).map { it.trim() }
         if (p.size < 2 || p[0].isEmpty() || p[1].isEmpty() || p[0].length > Scene.MAX_TERM || p[1].length > Scene.MAX_TERM) continue
+        if (Scene.TERM_SEP in p[1]) continue // "a→b→c" is not one term
         if (seen.add(p[0])) out += p[0] to p[1]
     }
     return out
 }
 
 /**
- * The editor's term text after 生成术语: [editor] as it is now (typed meanwhile too) with the [generated] terms whose 原文
- * is not in it appended, as many as still fit [Scene.MAX_TERMS]. Nothing already there is changed or removed.
- * Left: the new text, right: how many were added.
+ * The editor's rows after 生成术语: [rows] as they are now (typed meanwhile too) with the [generated] terms whose 原文 is
+ * not among them added at the end, as many as still fit [Scene.MAX_TERMS]. No row already there is changed or removed.
+ * Left: the new rows, right: how many were added.
  */
-fun appendTerms(editor: String, generated: List<Pair<String, String>>): Pair<String, Int> {
-    val have = Scene.sources(editor).toMutableSet()
-    val room = Scene.MAX_TERMS - editor.lines().count { it.isNotBlank() }
+fun appendTerms(rows: List<Pair<String, String>>, generated: List<Pair<String, String>>): Pair<List<Pair<String, String>>, Int> {
+    val have = Scene.sources(rows).toMutableSet()
+    val room = Scene.MAX_TERMS - rows.count { it.first.isNotBlank() || it.second.isNotBlank() }
     val add = generated.filter { have.add(it.first) }.take(room.coerceAtLeast(0))
-    if (add.isEmpty()) return editor to 0
-    return editor + (if (editor.isEmpty() || editor.endsWith("\n")) "" else "\n") + Scene.termText(add) to add.size
+    return rows + add to add.size
 }
 
 /** BYOK user message: the parts that change, oldest first, the current sentence and its one-off notes last. */

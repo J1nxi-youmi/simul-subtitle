@@ -29,6 +29,10 @@ fun main() {
     // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
     // (-Djava.net.useSystemProxies=false in JAVA_TOOL_OPTIONS turns it off)
     if (System.getProperty("java.net.useSystemProxies") == null) System.setProperty("java.net.useSystemProxies", "true")
+    // Windows: trust the certificates Windows trusts, as the browser does. A proxy app that re-encrypts HTTPS (an
+    // "accelerator", a MITM rule) installs its root there; with Java's own list the handshake through it fails.
+    if (isWindows && System.getProperty("javax.net.ssl.trustStoreType") == null)
+        System.setProperty("javax.net.ssl.trustStoreType", "Windows-ROOT")
     // macOS: the menu bar icon is a template image, drawn white or black to match the menu bar
     System.setProperty("apple.awt.enableTemplateImages", "true")
     // Windows: Direct3D (skiko's default there) draws the transparent caption window wrong: the toolbar is cut off

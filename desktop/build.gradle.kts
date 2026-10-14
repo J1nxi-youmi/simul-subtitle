@@ -60,6 +60,8 @@ compose.desktop {
             vendor = "KorenKrita"
             copyright = if (windows) "(c) KorenKrita" else "© KorenKrita"
             modules("java.net.http", "jdk.crypto.ec", "java.naming")
+            // Windows: the Windows-ROOT trust store (Main.kt), only in Windows' JDK
+            if (windows) modules("jdk.crypto.mscapi")
             dist?.let { appResourcesRootDir.set(it.resolve("resources")) }
             // the exe's icon (the zip's folder, see tools/win-app); icons/make.py draws both
             windows { iconFile.set(project.file("icons/icon.ico")) }

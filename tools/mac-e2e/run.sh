@@ -5,6 +5,7 @@
 #   tools/mac-e2e/run.sh [file.wav]     default: synthesise Japanese test sentences with `say -v Kyoko`
 #   tools/mac-capture/build/sysaudio 30 | tools/mac-e2e/run.sh -   live: what the Mac plays (see tools/mac-capture)
 #   JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh   negative check: must exit non-zero
+#   TARGET='custom:Traditional Chinese' tools/mac-e2e/run.sh   caption language: a preset code (ko) or custom:<name>
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
 W="$HERE/build"; mkdir -p "$W/native"
@@ -50,5 +51,5 @@ if [ -z "$WAV" ]; then
 fi
 
 "$JH/bin/java" ${JAVA_OPTS:-} -Djava.library.path="$W/native" -Dwav="$WAV" -Dmodels="$ROOT/models" \
-  -cp "$C:$STD:$W/sherpa-jvm.jar" E2EKt
+  -Dtarget="${TARGET:-zh}" -cp "$C:$STD:$W/sherpa-jvm.jar" E2EKt
 # exit status is the JVM's: non-zero if a final was refused, lost, reordered or a worker failed

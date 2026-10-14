@@ -158,6 +158,8 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
     val running by CaptionService.runningState
     val ended by CaptionService.endedState
     Text("把视频、直播里的日语和英语，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
+    /** the language name being typed for 其他; null while that editor is closed */
+    var typing by remember { mutableStateOf<String?>(null) }
     // one card: status, the two languages, the one action, and the LLM API it translates with
     Card {
         @Composable fun status(color: Color, title: String, body: String) {
@@ -184,7 +186,28 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
                 prefs.sourceLang = sources[it]
             }
             Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
-            Dropdown(Lang.entries.map { it.zh }, prefs.targetLang.ordinal, modifier = Modifier.weight(1f)) { prefs.targetLang = Lang.entries[it] }
+            // the presets, the typed language in use (if any), and 其他 to type one below
+            val presets = Lang.entries.map { Target.of(it) }
+            val current = prefs.targetLang
+            val targets = if (current in presets) presets else presets + current
+            Dropdown(targets.map { it.zh } + "自己填…", targets.indexOf(current), modifier = Modifier.weight(1f)) {
+                if (it == targets.size) typing = current.takeIf { c -> c.lang == null }?.name ?: ""
+                else { typing = null; prefs.targetLang = targets[it] }
+            }
+        }
+        // 其他: a language name typed in, saved with 确定; 取消 or a blank name keeps the language in use. Shown again by
+        // picking 其他 once more (a typed language in use is in the list, so 其他 is never the selected item).
+        typing?.let { t ->
+            Spacer(Modifier.height(10.dp))
+            Field(t, { v -> typing = v.take(Target.MAX_NAME) }, "例如 繁体中文、粤语、文言文")
+            Hint("写上想要的语言，会原样交给你填的 LLM 去翻译。中文术语表只用于列表里的「中文」。")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Grow()
+                TextBtn("取消") { typing = null }
+                Btn("确定", primary = true, enabled = Target.custom(t) != null) {
+                    Target.custom(t)?.let { prefs.targetLang = it }; typing = null
+                }
+            }
         }
         Hint(if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。" else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。")
         Spacer(Modifier.height(12.dp))

@@ -49,7 +49,7 @@
 - **Floating subtitles**: shown over the video like movie subtitles; move them anywhere, change size, colour and background.
 - **As people speak**: text appears while someone is talking and becomes a final subtitle when the sentence ends.
 - **Speech stays on the phone**: audio is recognised on the device and **never uploaded**.
-- **22 caption languages**: Chinese, English, Japanese, Korean, French, German, Spanish, Russian, Arabic, Thai, Vietnamese…
+- **Any caption language**: 22 presets (Chinese, English, Japanese, Korean, French, German, Spanish, Russian, Arabic, Thai, Vietnamese…), or pick 自己填… and type one (e.g. Traditional Chinese, Cantonese).
 - **Bring your own translation model**: enter the address, model ID and key of any OpenAI-compatible service (e.g. DeepSeek, Qwen); you pay your provider for your own usage.
 
 ## Get started in three steps

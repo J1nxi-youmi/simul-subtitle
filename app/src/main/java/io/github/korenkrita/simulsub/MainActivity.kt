@@ -213,12 +213,41 @@ class MainActivity : Activity() {
             text = "→"; textSize = 16f; setTextColor(getColor(R.color.muted)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0)
         })
-        val targets = Lang.entries
-        box.addView(weighted(dropdown(targets.map { it.zh }, prefs.targetLang.ordinal, true, wrap = true) {
-            if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate() }
+        // the presets, the typed language in use (if any), and 其他 to type one; the list is rebuilt after each change,
+        // so a cancelled 其他 shows the language in use again
+        val presets = Lang.entries.map { Target.of(it) }
+        val current = prefs.targetLang
+        val targets = if (current in presets) presets else presets + current
+        val items = targets.map { it.zh } + "自己填…"
+        box.addView(weighted(dropdown(items, targets.indexOf(current), true, wrap = true) {
+            if (it == targets.size) askTargetName()
+            else if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate(); main.post { renderLang() } }
         }).apply { contentDescription = "字幕翻译成" })
         findViewById<TextView>(R.id.langHint).text = if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。"
             else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。"
+    }
+
+    /** 其他（自己填）: a language name typed in, saved with 确定; cancel or a blank name keeps the language in use. */
+    private fun askTargetName() {
+        val now = prefs.targetLang.takeIf { it.lang == null }?.name ?: ""
+        val input = android.widget.EditText(this).apply {
+            setText(now); setSelection(now.length); isSingleLine = true; hint = "例如 繁体中文、粤语、文言文"
+            filters = arrayOf(android.text.InputFilter.LengthFilter(Target.MAX_NAME))
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            setPadding((22 * dpx).toInt(), (8 * dpx).toInt(), (22 * dpx).toInt(), 0); addView(input)
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("字幕翻译成")
+            .setMessage("写上想要的语言，会原样交给你填的 LLM 去翻译。中文术语表只用于列表里的「中文」。")
+            .setView(box)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定") { _, _ ->
+                Target.custom(input.text.toString())?.let { if (it != prefs.targetLang) { prefs.targetLang = it; renderTranslate() } }
+            }
+            // whatever happened, the dropdown shows the language in use again (not 其他)
+            .setOnDismissListener { renderLang() }
+            .show()
     }
 
     /** The home card's last row: the LLM API translations go to (or that none is set up yet); opens 设置 › 翻译. */

@@ -90,7 +90,7 @@ class Jev(
     private val beforeSend: () -> Unit = {},
     /** the session's languages; Japanese→Chinese uses the wording tuned on the test sets */
     private val source: Lang? = Lang.JA,
-    private val target: Lang = Lang.ZH,
+    private val target: Target = Target.ZH,
     /** monotonic ms for pauses; the app passes one that keeps counting in deep sleep (elapsedRealtime) */
     private val clock: () -> Long = ::monoMs,
     private val wall: () -> Long = System::currentTimeMillis,
@@ -305,8 +305,8 @@ class Jev(
         )
 
         /** The check for a language pair: Japanese→Chinese keeps the tested wording, others name their languages. */
-        fun mistranslationQuestion(source: Lang?, target: Lang): Map<String, Any> {
-            if (source == Lang.JA && target == Lang.ZH) return MISTRANSLATION
+        fun mistranslationQuestion(source: Lang?, target: Target): Map<String, Any> {
+            if (source == Lang.JA && target.lang == Lang.ZH) return MISTRANSLATION
             val src = source?.en ?: "Japanese or English"
             return mapOf(
                 "type" to "choice",

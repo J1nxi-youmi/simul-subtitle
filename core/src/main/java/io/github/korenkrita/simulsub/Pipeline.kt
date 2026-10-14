@@ -69,7 +69,7 @@ class Setup(
     val scene: Scene = Scene.GENERAL,
     /** null = auto (Japanese or English) */
     val source: Lang? = Lang.JA,
-    val target: Lang = Lang.ZH,
+    val target: Target = Target.ZH,
     /** null: no Jev for this setup (not configured, or paused because its key is missing) */
     val judge: Judge? = null,
     val dedupeJoin: Boolean = false,
@@ -113,7 +113,7 @@ class Pipeline(
     scene: Scene = Scene.GENERAL,
     /** null = auto (Japanese or English); only the translator and the join of kept drafts use it */
     source: Lang? = Lang.JA,
-    target: Lang = Lang.ZH,
+    target: Target = Target.ZH,
     /**
      * Optional cloud judge (Jev). With it: endOfSpeech drafts are asked "unfinished?" on a separate thread and the
      * answer is offered to the segmenter through [holdHint]; every final translation is checked once and, for the

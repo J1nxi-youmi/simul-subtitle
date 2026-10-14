@@ -3,6 +3,8 @@ package io.github.korenkrita.simulsub
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TranslationTest {
@@ -23,21 +25,51 @@ class TranslationTest {
 
     @Test
     fun theSystemMessageNamesTheLanguagesAndTheTermListIsOnlyForAChineseTarget() {
-        val zh = byokSystem(Scene.VTUBER, Lang.JA, Lang.ZH)
+        val zh = byokSystem(Scene.VTUBER, Lang.JA, Target.ZH)
         assertTrue(zh, zh.contains("日语翻译成自然、口语化的中文") && zh.contains("館長→舰长") && zh.contains("这是日本虚拟主播"))
-        val en = byokSystem(Scene.VTUBER, Lang.JA, Lang.EN)
+        val en = byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN))
         assertTrue(en, !en.contains("舰长") && en.contains("翻译成自然、口语化的英语"))
         // another or an unknown source language: the background does not say the streamer is Japanese
-        val auto = byokSystem(Scene.VTUBER, null, Lang.ZH)
+        val auto = byokSystem(Scene.VTUBER, null, Target.ZH)
         assertTrue(auto, auto.contains("外语") && auto.contains("这是虚拟主播（VTuber）") && !auto.contains("日本虚拟主播"))
-        assertFalse(byokSystem(Scene.GENERAL, Lang.JA, Lang.ZH).contains("背景"))
+        assertFalse(byokSystem(Scene.GENERAL, Lang.JA, Target.ZH).contains("背景"))
+    }
+
+    @Test
+    fun aTypedTargetGoesIntoThePromptAsItIsWithoutTheChineseOnlyParts() {
+        val t = Target.custom("  繁体中文（台湾用语）\n")!!
+        assertEquals("繁体中文（台湾用语）", t.name)
+        val s = byokSystem(Scene.VTUBER, Lang.JA, t)
+        assertTrue(s, s.contains("翻译成自然、口语化的繁体中文（台湾用语）") && !s.contains("館長→舰长"))
+        // a typed "中文" is still a typed language: no term list, the general check notes, the longer cap
+        val typed = Target.custom("中文")!!
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, typed).contains("館長→舰长"))
+        assertEquals(FIX_NOTES_GENERAL["negation"], fixNote("negation", Lang.JA, typed))
+        assertEquals(256, mtMaxTokens(typed)); assertEquals(160, mtMaxTokens(Target.ZH))
+        // one target, one system message for every sentence (prefix caching); another target, another message
+        assertEquals(s, byokSystem(Scene.VTUBER, Lang.JA, Target.custom("繁体中文（台湾用语）")!!))
+        assertNotEquals(s, byokSystem(Scene.VTUBER, Lang.JA, Target.custom("粤语")!!))
+    }
+
+    @Test
+    fun targetsAreStoredAsAPresetCodeOrATypedName() {
+        // presets keep the codes stored before typed names existed
+        assertEquals(Target.of(Lang.KO), Target.parse("ko"))
+        assertEquals("ko", Target.of(Lang.KO).stored)
+        val t = Target.custom("粤语")!!
+        assertEquals(t, Target.parse(t.stored))
+        assertNotEquals(Target.ZH, Target.parse(Target.custom("中文")!!.stored))
+        assertNull(Target.custom("   "))
+        assertNull(Target.custom("x".repeat(Target.MAX_NAME + 1)))
+        assertNull(Target.parse("custom:  "))
+        assertNull(Target.parse("xx")); assertNull(Target.parse(null))
     }
 
     @Test
     fun fixNotesWithJapaneseExamplesOnlyForJapaneseToChinese() {
-        assertEquals(FIX_NOTES["negation"], fixNote("negation", Lang.JA, Lang.ZH))
-        assertEquals(FIX_NOTES_GENERAL["negation"], fixNote("negation", Lang.EN, Lang.ZH))
-        assertEquals(FIX_NOTES_GENERAL["reversal"], fixNote("reversal", Lang.JA, Lang.EN))
-        assertEquals(null, fixNote("ok", Lang.JA, Lang.ZH))
+        assertEquals(FIX_NOTES["negation"], fixNote("negation", Lang.JA, Target.ZH))
+        assertEquals(FIX_NOTES_GENERAL["negation"], fixNote("negation", Lang.EN, Target.ZH))
+        assertEquals(FIX_NOTES_GENERAL["reversal"], fixNote("reversal", Lang.JA, Target.of(Lang.EN)))
+        assertEquals(null, fixNote("ok", Lang.JA, Target.ZH))
     }
 }

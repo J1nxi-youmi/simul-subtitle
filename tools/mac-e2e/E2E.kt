@@ -18,7 +18,8 @@ fun main() {
     val scene = Scene.valueOf(System.getProperty("scene") ?: "VTUBER")
     // -Dsource=<ja|en|auto> -Dtarget=<code>: languages as in the app (default ja -> zh)
     val source = (System.getProperty("source") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: error("source $it") }
-    val target = Lang.of(System.getProperty("target") ?: "zh") ?: error("target")
+    // -Dtarget=ko for a preset, -Dtarget=custom:粤语 for a typed language
+    val target = Target.parse(System.getProperty("target") ?: "zh") ?: error("target")
     // translation: an OpenAI-compatible service, as in the app (BYOK_URL, BYOK_MODEL, BYOK_KEY); the switch that
     // turns thinking off is probed first, as the app does on a first use
     val url = ByokTranslator.chatUrl(System.getenv("BYOK_URL") ?: error("BYOK_URL")).let { it.second ?: error("BYOK_URL: ${it.first}") }

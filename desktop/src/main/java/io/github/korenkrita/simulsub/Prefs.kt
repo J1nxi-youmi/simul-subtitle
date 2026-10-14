@@ -60,7 +60,8 @@ class Prefs private constructor(private val file: File) {
     var sourceLang: Lang?
         get() = (str("sourceLang") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
         set(v) = put("sourceLang" to (v?.code ?: "auto"))
-    var targetLang: Lang get() = Lang.of(str("targetLang")) ?: Lang.ZH; set(v) = put("targetLang" to v.code)
+    /** a preset language, or one the user typed ("custom:<name>") */
+    var targetLang: Target get() = Target.parse(str("targetLang")) ?: Target.ZH; set(v) = put("targetLang" to v.stored)
     var scene: Scene
         get() = runCatching { Scene.valueOf(str("scene") ?: "") }.getOrDefault(Scene.GENERAL)
         set(v) = put("scene" to v.name)

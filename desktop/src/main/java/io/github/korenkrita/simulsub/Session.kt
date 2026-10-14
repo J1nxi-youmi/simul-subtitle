@@ -165,7 +165,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             var inUse: Triple<String, String, String>? = null
 
             /** Runs probe [token] of [t]; false: stopped, closed or overtaken by a newer save (nothing recorded). */
-            fun runProbe(t: Triple<String, String, String>, token: Long, system: String, target: Lang): Boolean {
+            fun runProbe(t: Triple<String, String, String>, token: Long, system: String, target: Target): Boolean {
                 val asking = "第一次用这个模型，正在试怎样关闭思考…"
                 val before = status
                 val probe = ByokTranslator(t.first, t.second, t.third, system, null, maxTokens = mtMaxTokens(target))
@@ -607,7 +607,7 @@ class CaptionService private constructor(private val sysaudio: File) {
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
 
-        fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.code,
+        fun log() = mapOf("scene" to scene.name, "source_lang" to (source?.code ?: "auto"), "target_lang" to target.stored,
             "jev" to jevKey?.let { provider.name }, "jev_model" to jevKey?.let { provider.model },
             "dedupe_join" to dedupe, "context_sentences" to contextN,
             "mt_model" to byokModel, "mt_url" to byokUrl)

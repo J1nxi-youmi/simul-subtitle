@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -328,15 +329,19 @@ class JevTest {
     @Test
     fun questionsFollowTheSessionLanguagesAndJapaneseToChineseKeepsTheTunedWording() {
         assertSame(Jev.UNFINISHED, Jev.unfinishedQuestion(Lang.JA))
-        assertSame(Jev.MISTRANSLATION, Jev.mistranslationQuestion(Lang.JA, Lang.ZH))
+        assertSame(Jev.MISTRANSLATION, Jev.mistranslationQuestion(Lang.JA, Target.ZH))
         val en = Jev.unfinishedQuestion(Lang.EN)["instructions"] as String
         assertTrue(en, en.contains("English livestream") && !en.contains("けど"))
         assertTrue((Jev.unfinishedQuestion(null)["instructions"] as String).contains("Japanese or English livestream"))
-        val m = Jev.mistranslationQuestion(Lang.EN, Lang.JA)["instructions"] as String
+        val m = Jev.mistranslationQuestion(Lang.EN, Target.of(Lang.JA))["instructions"] as String
         assertTrue(m, m.contains("English VTuber") && m.contains("Japanese machine translation"))
+        // a typed target is named as typed; a typed "中文" is not the tuned Japanese→Chinese check
+        val c = Jev.mistranslationQuestion(Lang.JA, Target.custom("粤语")!!)["instructions"] as String
+        assertTrue(c, c.contains("粤语 machine translation"))
+        assertNotSame(Jev.MISTRANSLATION, Jev.mistranslationQuestion(Lang.JA, Target.custom("中文")!!))
         // the request sends the question of the configured pair
         reply = { 200 to """{"answers":{"x":{"type":"choice","choice":"ok","confidence":0.9}}}""" }
-        Jev(JevProvider.ZEN, "", url = "http://127.0.0.1:$port/zen/v1/systemone", source = Lang.EN, target = Lang.KO).mistranslation("hi", "안녕")
+        Jev(JevProvider.ZEN, "", url = "http://127.0.0.1:$port/zen/v1/systemone", source = Lang.EN, target = Target.of(Lang.KO)).mistranslation("hi", "안녕")
         assertTrue(lastBody.get()!!, lastBody.get()!!.contains("Korean machine translation"))
     }
 
@@ -583,9 +588,9 @@ class JevTest {
 
     @Test
     fun byokPromptKeepsTheFixedPartFirstAndTheSentenceLast() {
-        val a = byokSystem(Scene.VTUBER, Lang.JA, Lang.ZH)
+        val a = byokSystem(Scene.VTUBER, Lang.JA, Target.ZH)
         assertTrue(a.contains("スパチャ→SC")); assertTrue(a.contains("背景"))
-        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Lang.EN).contains("→SC")) // the term list is Chinese-only
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains("→SC")) // the term list is Chinese-only
         val u = byokUser("今", listOf("note"), listOf("前1", "前2"))
         assertTrue(u.indexOf("前1") < u.indexOf("今")); assertTrue(u.indexOf("今") < u.indexOf("note"))
         assertEquals("【当前句】\n今", byokUser("今"))

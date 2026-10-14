@@ -74,9 +74,10 @@ class Prefs(ctx: Context) {
     var sourceLang: Lang?
         get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
         set(v) = sp.edit().putString("sourceLang", v?.code ?: "auto").apply()
-    var targetLang: Lang
-        get() = Lang.of(sp.getString("targetLang", null)) ?: Lang.ZH
-        set(v) = sp.edit().putString("targetLang", v.code).apply()
+    /** a preset language, or one the user typed ("custom:<name>") */
+    var targetLang: Target
+        get() = Target.parse(sp.getString("targetLang", null)) ?: Target.ZH
+        set(v) = sp.edit().putString("targetLang", v.stored).apply()
 
     /** What the subtitles are about (translator background + term list); read when a session starts. */
     var scene: Scene

@@ -559,7 +559,7 @@ class PipelineTest {
             }
         }
         val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, source = Lang.EN, target = Lang.ZH)
+        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, source = Lang.EN, target = Target.ZH)
         p.start()
         try {
             p.submit(AsrJob(1, 1, false, FloatArray(30_000), monoMs()))

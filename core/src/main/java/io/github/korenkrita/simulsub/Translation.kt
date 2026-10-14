@@ -39,6 +39,31 @@ enum class Lang(val code: String, val zh: String, val en: String) {
     }
 }
 
+/**
+ * What the captions are translated into: a preset [Lang], or a language the user typed in ([lang] null, [name] as
+ * typed: it goes into the prompt and the Jev question as it is). Only the Chinese preset gets the Chinese-only parts
+ * (term list, the tuned Japanese→Chinese check and its notes, the shorter output cap); a typed "中文" does not.
+ */
+data class Target(val lang: Lang?, val name: String) {
+    val zh: String get() = lang?.zh ?: name
+    val en: String get() = lang?.en ?: name
+    /** the settings value: a preset's code, or "custom:<name>" */
+    val stored: String get() = lang?.code ?: "$CUSTOM$name"
+
+    companion object {
+        private const val CUSTOM = "custom:"
+        const val MAX_NAME = 40
+        val ZH = of(Lang.ZH)
+        fun of(l: Lang) = Target(l, l.zh)
+        /** A typed language name: one line, trimmed; null when empty or longer than [MAX_NAME]. */
+        fun custom(name: String): Target? =
+            name.replace(Regex("\\s+"), " ").trim().takeIf { it.isNotEmpty() && it.length <= MAX_NAME }?.let { Target(null, it) }
+        /** A [stored] value (an old preset code too); null for anything else. */
+        fun parse(s: String?): Target? =
+            if (s != null && s.startsWith(CUSTOM)) custom(s.removePrefix(CUSTOM)) else Lang.of(s)?.let(::of)
+    }
+}
+
 /** A model may still emit a think block or a stray "</think>"; it is never shown. */
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
@@ -46,7 +71,7 @@ fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "
  * Output cap of one translation. 160 tokens covered the longest Chinese output measured (segments are up to ~10 s with
  * Jev). Other targets (Thai, Hindi, Arabic…) take more tokens per sentence: 256, not tuned or measured.
  */
-fun mtMaxTokens(target: Lang) = if (target == Lang.ZH) 160 else 256
+fun mtMaxTokens(target: Target) = if (target.lang == Lang.ZH) 160 else 256
 
 /** Translation: no translated text this long after sending fails the caption. */
 const val FIRST_CONTENT_MS = 5_000L
@@ -171,22 +196,22 @@ val FIX_NOTES_GENERAL = mapOf(
     "reversal" to "注意保持原文的肯定/否定和转折关系，不要把意思翻反。",
     "literal_metaphor" to "原文里的比喻或直播用语不要按字面直译，按语境意译。",
 )
-fun fixNote(choice: String, source: Lang?, target: Lang) =
-    (if (source == Lang.JA && target == Lang.ZH) FIX_NOTES else FIX_NOTES_GENERAL)[choice]
+fun fixNote(choice: String, source: Lang?, target: Target) =
+    (if (source == Lang.JA && target.lang == Lang.ZH) FIX_NOTES else FIX_NOTES_GENERAL)[choice]
 
 /**
  * BYOK system message: everything that is the same for every sentence of a session (instructions, languages, scene
  * background, the scene's whole term list), so that every request starts with the same bytes and a service with prefix
- * caching can reuse it. The Chinese-only term list is given only for a Chinese target.
+ * caching can reuse it. The Chinese-only term list is given only for the Chinese preset target.
  */
-fun byokSystem(scene: Scene, source: Lang?, target: Lang): String = buildString {
+fun byokSystem(scene: Scene, source: Lang?, target: Target): String = buildString {
     val src = source?.zh ?: "外语"
     append("你是直播字幕翻译。把【当前句】的${src}翻译成自然、口语化的${target.zh}，准确保留原意、肯定否定和人物关系；")
     append("保留人名，不凭空补充内容。字幕要简短，可以省略无意义的口头重复。")
     append("【前文】只用于理解当前句的指代和省略，不要翻译、不要输出。【注意】是这一句的额外要求。")
     append("只输出当前句的译文，不要解释、注释或其他文字。")
     scene.background?.let { append("\n\n背景：" + if (source == Lang.JA) it else it.replace("日本虚拟主播", "虚拟主播")) }
-    if (target == Lang.ZH && scene.terms.isNotEmpty())
+    if (target.lang == Lang.ZH && scene.terms.isNotEmpty())
         append("\n\n术语（原文出现时必须这样译）：" + scene.terms.joinToString("、") { "${it.first}→${it.second}" })
 }
 
@@ -214,7 +239,7 @@ class ByokTranslator(
     private val system: String,
     private val variant: ThinkingOff?,
     private val deadlineMs: Long = 8_000,
-    private val maxTokens: Int = mtMaxTokens(Lang.ZH),
+    private val maxTokens: Int = mtMaxTokens(Target.ZH),
     private val firstContentMs: Long = FIRST_CONTENT_MS,
 ) : Mt {
     private val calls = Calls(deadlineMs)

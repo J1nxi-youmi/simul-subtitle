@@ -666,17 +666,6 @@ class MainActivity : Activity() {
         minimumHeight = (48 * dpx).toInt()
     }
 
-    /** One list row: the name on the left, a dropdown at the end (magpie's row with a pop-up button). The two share
-     *  the row by weight, so a long choice under a large system font wraps instead of squeezing the name to nothing. */
-    private fun pickRow(title: String, items: List<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = (56 * dpx).toInt()
-        setPadding((14 * dpx).toInt(), (6 * dpx).toInt(), (10 * dpx).toInt(), (6 * dpx).toInt())
-        addView(TextView(this@MainActivity).apply { text = title; textSize = 15f; setTextColor(getColor(R.color.text)) },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
-        addView(dropdown(items, sel, enabled, true, onPick).apply { dropDownHorizontalOffset = 0 },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f).apply { marginStart = (8 * dpx).toInt() })
-    }
 
     /** A segment of [choice], recoloured to magpie's .seg: an unchosen option is plain text on the grey track (no
      *  fill, no outline); the chosen one is the card-coloured thumb. No stroke at all: the group pulls each button

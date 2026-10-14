@@ -45,18 +45,18 @@ import androidx.compose.ui.unit.sp
 
 /** magpie's palette, as the phone's res/values(-night)/colors.xml. */
 class Palette2(
-    val brand: Color, val onBrand: Color, val brandSoft: Color, val bg: Color, val card: Color, val card2: Color, val pill: Color,
-    val line: Color, val line2: Color, val segTrack: Color, val segThumb: Color, val ctlFg: Color, val text: Color, val text2: Color,
+    val brand: Color, val onBrand: Color, val brandSoft: Color, val bg: Color, val card: Color, val pill: Color,
+    val line: Color, val line2: Color, val segTrack: Color, val segThumb: Color, val text: Color, val text2: Color,
     val muted: Color, val faint: Color, val ok: Color, val warn: Color, val warnSoft: Color, val err: Color, val errSoft: Color,
     val dark: Boolean,
 )
 
-val LIGHT = Palette2(Color(0xFF4F46E5), Color(0xFFFFFFFF), Color(0xFFEEEDFD), Color(0xFFF4F4F6), Color(0xFFFFFFFF), Color(0xFFF9F9FB),
-    Color(0xFFF1F1F4), Color(0xFFE3E3E8), Color(0xFFECECF0), Color(0xFFE6E6EB), Color(0xFFFFFFFF), Color(0xFF63636B), Color(0xFF1C1C21),
+val LIGHT = Palette2(Color(0xFF4F46E5), Color(0xFFFFFFFF), Color(0xFFEEEDFD), Color(0xFFF4F4F6), Color(0xFFFFFFFF),
+    Color(0xFFF1F1F4), Color(0xFFE3E3E8), Color(0xFFECECF0), Color(0xFFE6E6EB), Color(0xFFFFFFFF), Color(0xFF1C1C21),
     Color(0xFF4B4B53), Color(0xFF85858D), Color(0xFFB9B9C2), Color(0xFF189A58), Color(0xFFB45309), Color(0xFFFBF0DF), Color(0xFFD64545),
     Color(0xFFFBE9E9), dark = false)
-val DARK = Palette2(Color(0xFFA5B4FC), Color(0xFF14142A), Color(0xFF2B2C47), Color(0xFF1A1A1E), Color(0xFF232327), Color(0xFF1F1F23),
-    Color(0xFF2D2D33), Color(0xFF333339), Color(0xFF2C2C32), Color(0xFF29292D), Color(0xFF444448), Color(0xFFA1A1AA), Color(0xFFEDEDF1),
+val DARK = Palette2(Color(0xFFA5B4FC), Color(0xFF14142A), Color(0xFF2B2C47), Color(0xFF1A1A1E), Color(0xFF232327),
+    Color(0xFF2D2D33), Color(0xFF333339), Color(0xFF2C2C32), Color(0xFF29292D), Color(0xFF444448), Color(0xFFEDEDF1),
     Color(0xFFB9B9C1), Color(0xFF8B8B94), Color(0xFF56565F), Color(0xFF6FD99B), Color(0xFFF2B544), Color(0xFF3F3220), Color(0xFFF28B82),
     Color(0xFF45272A), dark = true)
 
@@ -149,12 +149,6 @@ fun Themed(dark: Boolean, content: @Composable () -> Unit) {
     }
 }
 
-/** a label on the left, a dropdown on the right (首页「语言」) */
-@Composable fun PickRow(title: String, items: List<String>, selected: Int, onPick: (Int) -> Unit) =
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, fontSize = 15.sp, modifier = Modifier.weight(1f))
-        Dropdown(items, selected, modifier = Modifier.weight(1.4f), onPick = onPick)
-    }
 
 /** magpie's slider: ink on a grey line */
 @Composable fun Slider2(value: Float, range: ClosedFloatingPointRange<Float>, steps: Int, enabled: Boolean = true, onChange: (Float) -> Unit) =

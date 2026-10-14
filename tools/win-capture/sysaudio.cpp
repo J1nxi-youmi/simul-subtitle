@@ -3,12 +3,14 @@
 //   sysaudio.exe [seconds]     stops after <seconds> (default: until the reader goes away or the process is ended)
 // Loopback delivers nothing while nothing plays: the gaps are written as silence, so that the stream keeps real time
 // and a sentence that ends with the sound still ends. A change of the default device (headphones in or out) is
-// followed. Build (MSVC, static runtime): cl /nologo /O2 /EHsc /MT sysaudio.cpp ole32.lib
+// followed. Every 5 s stderr says how much sound arrived (packets, silent ones, peak), to tell "nothing plays on this
+// device" from a fault. Build (MSVC, static runtime): cl /nologo /O2 /EHsc /MT sysaudio.cpp ole32.lib
 #define WIN32_LEAN_AND_MEAN
 #define _USE_MATH_DEFINES
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -98,7 +100,16 @@ static bool capture(double seconds, ULONGLONG started) {
     hr = client->Start();
     if (FAILED(hr)) fail("IAudioClient::Start", hr);
     double rate = format->nSamplesPerSec;
-    fprintf(stderr, "sysaudio: capturing %d Hz x %d (%s%d) -> 16 kHz mono\n", (int)rate, channels,
+    // the device's name as Windows' sound settings show it (UTF-8)
+    char name[256] = "?";
+    IPropertyStore* props = nullptr;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &props))) {
+        PROPVARIANT v; PropVariantInit(&v);
+        if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR)
+            WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, name, sizeof name, nullptr, nullptr);
+        PropVariantClear(&v); props->Release();
+    }
+    fprintf(stderr, "sysaudio: capturing \"%s\" %d Hz x %d (%s%d) -> 16 kHz mono\n", name, (int)rate, channels,
             isFloat ? "float" : "int", bits);
     fflush(stderr);
 
@@ -108,6 +119,9 @@ static bool capture(double seconds, ULONGLONG started) {
     ULONGLONG lastData = GetTickCount64();
     double silent = 0; // input frames of silence written since lastData
     bool lost = false;
+    // the last 5 s: packets, silent packets, frames, peak
+    ULONGLONG statAt = GetTickCount64();
+    unsigned packets = 0, silentPackets = 0; double frames5 = 0; float peak = 0;
     for (;;) {
         Sleep(10);
         result.clear();
@@ -117,7 +131,9 @@ static bool capture(double seconds, ULONGLONG started) {
             hr = cap->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
             if (FAILED(hr)) break;
             mono.assign(frames, 0.f);
-            if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
+            packets++; frames5 += frames;
+            if (flags & AUDCLNT_BUFFERFLAGS_SILENT) silentPackets++;
+            else {
                 for (UINT32 f = 0; f < frames; f++) {
                     float s = 0;
                     for (int c = 0; c < channels; c++) {
@@ -127,6 +143,7 @@ static bool capture(double seconds, ULONGLONG started) {
                         else s += ((int*)data)[i] / 2147483648.f;
                     }
                     mono[f] = s / channels;
+                    if (fabsf(mono[f]) > peak) peak = fabsf(mono[f]);
                 }
             }
             cap->ReleaseBuffer(frames);
@@ -145,6 +162,12 @@ static bool capture(double seconds, ULONGLONG started) {
             }
         }
         write(result);
+        if (now - statAt >= 5000) {
+            fprintf(stderr, "sysaudio: 5 s: %u packets (%u silent), %.1f s of sound, peak %.4f\n", packets, silentPackets,
+                    frames5 / rate, peak);
+            fflush(stderr);
+            statAt = now; packets = silentPackets = 0; frames5 = 0; peak = 0;
+        }
         if (seconds > 0 && (GetTickCount64() - started) / 1000.0 >= seconds) break;
     }
     client->Stop();

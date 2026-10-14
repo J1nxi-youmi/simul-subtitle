@@ -438,6 +438,8 @@ class CaptionService private constructor(private val sysaudio: File) {
         Thread({
             p.errorStream.bufferedReader().forEachLine { l ->
                 System.err.println("sysaudio: $l"); errTail.addLast(l); while (errTail.size > 5) errTail.pollFirst()
+                // which device it records and how much sound arrives: the log shows it while the session runs
+                log?.write(mapOf("ev" to "sysaudio", "line" to l))
             }
         }, "jpsub-sysaudio-err").apply { isDaemon = true }.start()
         try {

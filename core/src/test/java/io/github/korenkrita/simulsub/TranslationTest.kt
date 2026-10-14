@@ -29,10 +29,10 @@ class TranslationTest {
         // nothing saved: the two built-ins, as shipped
         assertEquals(Scene.DEFAULTS, Scene.all(null))
         // a row with only one box filled, or the arrow typed into a box, is refused with what is wrong
-        assertEquals("第 3 条术语没写译文", Scene.edit("u1", "x", "", listOf("a" to "b", "" to "", "c" to " ")).second)
-        assertEquals("第 1 条术语没写原文", Scene.edit("u1", "x", "", listOf(" " to "b")).second)
-        assertEquals("第 1 条术语里不要写「→」，左右分开填就行", Scene.edit("u1", "x", "", listOf("a→b" to "c")).second)
-        val game = Scene.edit("u1", " 游戏  实况 ", "主播在玩 RPG", listOf(" ヘルパー " to "帮手", "" to "", "ボス" to "头目")).first!!
+        assertEquals("第 3 条术语没写译文", Scene.edit("u1", "x", "", listOf("a" to "b", "" to "", "c" to " "), Target.ZH).second)
+        assertEquals("第 1 条术语没写原文", Scene.edit("u1", "x", "", listOf(" " to "b"), Target.ZH).second)
+        assertEquals("第 1 条术语里不要写「→」，左右分开填就行", Scene.edit("u1", "x", "", listOf("a→b" to "c"), Target.ZH).second)
+        val game = Scene.edit("u1", " 游戏  实况 ", "主播在玩 RPG", listOf(" ヘルパー " to "帮手", "" to "", "ボス" to "头目"), Target.ZH).first!!
         assertEquals("游戏 实况", game.label); assertEquals(listOf("ヘルパー" to "帮手", "ボス" to "头目"), game.terms)
         val vt = Scene.VTUBER.copy(terms = Scene.VTUBER.terms + ("メン限" to "会限"))
         val saved = Scene.store(listOf(Scene.GENERAL, vt, game))
@@ -41,7 +41,7 @@ class TranslationTest {
         assertEquals(listOf(Scene.GENERAL, vt, game), Scene.all(saved))
         // 恢复默认 = the shipped one again, so it is not saved any more
         assertEquals(listOf(Scene.GENERAL, Scene.VTUBER, game), Scene.all(Scene.store(listOf(Scene.GENERAL, Scene.VTUBER, game))))
-        assertEquals("名字不能空着", Scene.edit("u2", "  ", "", emptyList()).second)
+        assertEquals("名字不能空着", Scene.edit("u2", "  ", "", emptyList(), Target.ZH).second)
         assertEquals(Scene.DEFAULTS, Scene.all("not json"))
         // an entry not as store() writes it is skipped, so the built-in stays as shipped
         assertEquals(Scene.DEFAULTS, Scene.all("""[{"id":"VTUBER","label":"x","background":"","terms":"broken"}]"""))
@@ -51,21 +51,31 @@ class TranslationTest {
     }
 
     @Test
-    fun termsTheUserWroteGoToEveryCaptionLanguage() {
-        val game = Scene.edit("u1", "游戏实况", "主播在玩 RPG", listOf("ボス" to "Boss")).first!!
+    fun termsGoOnlyToTheLanguageTheyAreWrittenIn() {
+        // the same rule for every scene: the list is given when the captions are in its language, else not at all
+        val game = Scene.edit("u1", "游戏实况", "主播在玩 RPG", listOf("ボス" to "Boss"), Target.of(Lang.EN)).first!!
         assertTrue(byokSystem(game, Lang.JA, Target.of(Lang.EN)).contains("ボス→Boss"))
-        assertTrue(byokSystem(game, Lang.JA, Target.custom("粤语")!!).contains("ボス→Boss"))
-        // an edited built-in is the user's too; the shipped list stays Chinese-only
-        val vt = Scene.VTUBER.copy(terms = listOf("館長" to "captain"))
-        assertTrue(byokSystem(vt, Lang.JA, Target.of(Lang.EN)).contains("館長→captain"))
-        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains("館長→"))
+        assertFalse(byokSystem(game, Lang.JA, Target.ZH).contains("ボス→"))
+        val yue = game.copy(termsLang = Target.custom("粤语")!!)
+        assertTrue(byokSystem(yue, Lang.JA, Target.custom("粤语")!!).contains("ボス→Boss"))
+        assertFalse(byokSystem(yue, Lang.JA, Target.custom("中文")!!).contains("ボス→"))
+        // the built-in's list is Chinese, edited or not
+        val vt = Scene.VTUBER.copy(terms = Scene.VTUBER.terms + ("メン限" to "会限"))
+        assertTrue(byokSystem(vt, Lang.JA, Target.ZH).contains("メン限→会限"))
+        assertFalse(byokSystem(vt, Lang.JA, Target.of(Lang.EN)).contains("→"))
+        // switched to English terms: given for English only
+        val vtEn = Scene.VTUBER.copy(terms = listOf("館長" to "captain"), termsLang = Target.of(Lang.EN))
+        assertTrue(byokSystem(vtEn, Lang.JA, Target.of(Lang.EN)).contains("館長→captain"))
+        assertFalse(byokSystem(vtEn, Lang.JA, Target.ZH).contains("館長→"))
+        // stored and read back with its language
+        assertEquals(listOf(Scene.GENERAL, vtEn, yue), Scene.all(Scene.store(listOf(Scene.GENERAL, vtEn, yue))))
+        assertEquals(Scene.DEFAULTS, Scene.all("""[{"id":"VTUBER","label":"x","background":"","terms":[],"termsLang":"xx"}]"""))
         // a background the user wrote is given as it is, whatever the spoken language
-        val bg = Scene.edit("u2", "x", "日本虚拟主播的直播", emptyList()).first!!
+        val bg = Scene.edit("u2", "x", "日本虚拟主播的直播", emptyList(), Target.ZH).first!!
         assertTrue(byokSystem(bg, Lang.EN, Target.ZH).contains("背景：日本虚拟主播的直播"))
         // the shipped background is still the shipped one after only the name or the terms were edited
         val renamed = Scene.VTUBER.copy(label = "我的 VTuber")
-        assertEquals(byokSystem(Scene.VTUBER, Lang.EN, Target.ZH).substringAfter("背景：").substringBefore("\n\n术语"),
-            byokSystem(renamed, Lang.EN, Target.ZH).substringAfter("背景：").substringBefore("\n\n术语"))
+        assertEquals(byokSystem(Scene.VTUBER, Lang.EN, Target.ZH), byokSystem(renamed, Lang.EN, Target.ZH))
         assertFalse(byokSystem(renamed, null, Target.ZH).contains("日本虚拟主播"))
     }
 
@@ -87,7 +97,7 @@ class TranslationTest {
         // never past the save limit
         val full = (1 until Scene.MAX_TERMS).map { "w$it" to "v" }
         val (t2, n2) = appendTerms(full, listOf("x" to "1", "y" to "2"))
-        assertEquals(1, n2); assertNotNull(Scene.edit("u", "a", "", t2).first)
+        assertEquals(1, n2); assertNotNull(Scene.edit("u", "a", "", t2, Target.ZH).first)
         assertEquals(0, appendTerms(t2, listOf("z" to "3")).second)
         // an answer line with two arrows is not one term
         assertEquals(emptyList<Pair<String, String>>(), newTerms("a→b→c", emptySet(), 5))

@@ -200,7 +200,7 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
         typing?.let { t ->
             Spacer(Modifier.height(10.dp))
             Field(t, { v -> typing = v.take(Target.MAX_NAME) }, "例如 繁体中文、粤语、文言文")
-            Hint("写上想要的语言，会原样交给你填的 LLM 去翻译。中文术语表只用于列表里的「中文」。")
+            Hint("写上想要的语言，会原样交给你填的 LLM 去翻译。")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Grow()
                 TextBtn("取消") { typing = null }
@@ -299,6 +299,8 @@ private class SceneDraft(val old: Scene?) {
     var background by mutableStateOf(old?.background ?: "")
     /** the term rows as typed (原文, 译文); a new scene starts with one empty row */
     var terms by mutableStateOf(old?.terms?.ifEmpty { null } ?: listOf("" to ""))
+    /** the language the 译文 are in (a new scene: the captions' language at the time) */
+    var termsLang by mutableStateOf(old?.termsLang ?: prefs.targetLang)
     var count by mutableStateOf("20")
     var status by mutableStateOf<String?>(null)
     var generating by mutableStateOf(false)
@@ -325,10 +327,7 @@ private fun Scenes() {
         Btn("新建", enabled = d == null) { sceneDraft.value = SceneDraft(null) }
     }
     if (d == null) {
-        Hint(if (scene.terms.isEmpty() && scene.background == null) "告诉翻译这是什么内容，并给常见词定好译法：点「编辑」写说明和术语，或「新建」一个自己的场景。"
-            else "这个场景有${if (scene.background != null) "背景说明" else ""}${if (scene.background != null && scene.terms.isNotEmpty()) "和" else ""}" +
-                "${if (scene.terms.isNotEmpty()) " ${scene.terms.size} 条术语" else ""}，翻译时会一起交给 LLM。" +
-                if (scene.shipped && scene.terms.isNotEmpty()) "自带的术语只在翻成「中文」时使用。" else "")
+        Hint(scene.summary(prefs.targetLang))
         return
     }
     Spacer(Modifier.height(10.dp))
@@ -338,6 +337,15 @@ private fun Scenes() {
     Label("背景说明")
     Area(d.background, { d.background = it }, "这是什么内容、谁在说话、在聊什么，翻译会参考", 2)
     Label("术语")
+    // the language the 译文 are in: the terms are used only when the captions are in it
+    val captions = prefs.targetLang
+    val langs = (Target.PRESETS + d.termsLang + captions).distinct()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("译文是", color = C.text, fontSize = 14.sp, modifier = Modifier.padding(end = 10.dp))
+        Dropdown(langs.map { it.zh }, langs.indexOf(d.termsLang), modifier = Modifier.weight(1f)) { d.termsLang = langs[it] }
+    }
+    Hint(if (d.termsLang == captions) "现在字幕翻成${captions.zh}，这些术语会用上。"
+        else "现在字幕翻成${captions.zh}，这些${d.termsLang.zh}术语不会用上；字幕换成${d.termsLang.zh}才用。")
     Hint("左边写视频里说的词，右边写想要的译法，例如 ボス 和 头目。")
     // one row of two boxes each; the arrow between them is ours
     d.terms.forEachIndexed { i, (src, dst) ->
@@ -365,7 +373,7 @@ private fun Scenes() {
             if (d.status != null) return@Btn
             d.generating = true; d.status = "正在生成…（最多一分钟）"
             val model = prefs.byokModel; val stored = prefs.byokVariant(chat!!, model)
-            val label = d.label.trim(); val bg = d.background; val src = prefs.sourceLang; val tgt = prefs.targetLang
+            val label = d.label.trim(); val bg = d.background; val src = prefs.sourceLang; val tgt = d.termsLang
             val have = Scene.sources(d.terms)
             val room = Scene.MAX_TERMS - d.terms.count { it.first.isNotBlank() || it.second.isNotBlank() }
             Thread {
@@ -417,7 +425,7 @@ private fun Scenes() {
         Grow()
         TextBtn("取消") { sceneDraft.value = null }
         Btn("保存", primary = true) {
-            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", d.label, d.background, d.terms)
+            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", d.label, d.background, d.terms, d.termsLang)
             if (s == null) { d.status = "⚠ $err"; return@Btn }
             val list = prefs.scenes
             prefs.scenes = if (list.any { it.id == s.id }) list.map { if (it.id == s.id) s else it } else list + s

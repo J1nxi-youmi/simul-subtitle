@@ -4,11 +4,23 @@ package io.github.korenkrita.simulsub
 
 /**
  * What the subtitles are about: the background text and the term list given to the translator. Two come with the app
- * ([DEFAULTS], editable and resettable by [id]); the user adds their own. The term list of a scene the user wrote (a
- * new one, or a built-in once edited) is given for every caption language, since its translations are the user's; the
- * shipped VTuber list only for the Chinese preset.
+ * ([DEFAULTS], editable and resettable by [id]); the user adds their own. The terms' 译文 are in one language,
+ * [termsLang]: the list is given only when the captions are in that language ([termsFor]), for every scene alike.
  */
-data class Scene(val id: String, val label: String, val background: String?, val terms: List<Pair<String, String>>) {
+data class Scene(val id: String, val label: String, val background: String?, val terms: List<Pair<String, String>>,
+                 val termsLang: Target = Target.ZH) {
+    /** the term list when the captions are in [target], else none (its 译文 would be in another language) */
+    fun termsFor(target: Target): List<Pair<String, String>> = if (target == termsLang) terms else emptyList()
+
+    /** 内容类型's line under the picker: what this scene gives the translator when the captions are in [target] */
+    fun summary(target: Target): String = when {
+        terms.isEmpty() && background == null -> "告诉翻译这是什么内容，并给常见词定好译法：点「编辑」写说明和术语，或「新建」一个自己的场景。"
+        terms.isEmpty() -> "这个场景有背景说明，翻译时会一起交给 LLM。"
+        target != termsLang -> (if (background != null) "背景说明会交给 LLM；" else "") +
+            "这 ${terms.size} 条术语是${termsLang.zh}的，现在字幕翻成${target.zh}，不会用上。"
+        else -> (if (background != null) "背景说明和 " else "") + "${terms.size} 条术语会在翻译时一起交给 LLM。"
+    }
+
     /** one of [DEFAULTS] exactly as shipped */
     val shipped: Boolean get() = this in DEFAULTS
     val builtin: Boolean get() = DEFAULTS.any { it.id == id }
@@ -35,9 +47,10 @@ data class Scene(val id: String, val label: String, val background: String?, val
 
         /**
          * A scene from the editor: label one line, background as typed (blank = none), terms as the rows of the two
-         * boxes (原文, 译文); a row with both boxes empty is ignored. Left: the scene, or right: what is wrong, for the user.
+         * boxes (原文, 译文) whose 译文 are in [termsLang]; a row with both boxes empty is ignored. Left: the scene, or
+         * right: what is wrong, for the user.
          */
-        fun edit(id: String, label: String, background: String, terms: List<Pair<String, String>>): Pair<Scene?, String?> {
+        fun edit(id: String, label: String, background: String, terms: List<Pair<String, String>>, termsLang: Target): Pair<Scene?, String?> {
             val l = label.replace(Regex("\\s+"), " ").trim()
             if (l.isEmpty()) return null to "名字不能空着"
             if (l.length > MAX_LABEL) return null to "名字最多 $MAX_LABEL 个字"
@@ -55,7 +68,7 @@ data class Scene(val id: String, val label: String, val background: String?, val
                 list += src to dst
             }
             if (list.size > MAX_TERMS) return null to "术语最多 $MAX_TERMS 条"
-            return Scene(id, l, b.ifEmpty { null }, list) to null
+            return Scene(id, l, b.ifEmpty { null }, list, termsLang) to null
         }
 
         /** The 原文 of the editor's rows as typed (also of a row whose 译文 is still empty): what 生成术语 must not add again. */
@@ -76,8 +89,9 @@ data class Scene(val id: String, val label: String, val background: String?, val
                         val p = (t.opt(it) as? String)?.split(TERM_SEP)?.takeIf { p -> p.size == 2 } ?: return@mapNotNull null
                         p[0] to p[1]
                     }
-                    if (listOf("id", "label", "background").any { o.opt(it) !is String }) return@mapNotNull null
-                    edit(o.getString("id"), o.getString("label"), o.getString("background"), rows).first
+                    if (listOf("id", "label", "background", "termsLang").any { o.opt(it) !is String }) return@mapNotNull null
+                    val lang = Target.parse(o.getString("termsLang")) ?: return@mapNotNull null
+                    edit(o.getString("id"), o.getString("label"), o.getString("background"), rows, lang).first
                         ?.takeIf { it.id.isNotEmpty() && it.terms.size == rows.size }
                 }
             }.orEmpty().distinctBy { it.id }
@@ -87,7 +101,7 @@ data class Scene(val id: String, val label: String, val background: String?, val
         /** the settings value of [scenes] (only what differs from the shipped built-ins) */
         fun store(scenes: List<Scene>): String = org.json.JSONArray().apply {
             for (s in scenes) if (!s.shipped) put(org.json.JSONObject().put("id", s.id).put("label", s.label)
-                .put("background", s.background ?: "")
+                .put("background", s.background ?: "").put("termsLang", s.termsLang.stored)
                 .put("terms", org.json.JSONArray().apply { s.terms.forEach { put("${it.first}$TERM_SEP${it.second}") } }))
         }.toString()
     }
@@ -113,7 +127,8 @@ enum class Lang(val code: String, val zh: String, val en: String) {
 /**
  * What the captions are translated into: a preset [Lang], or a language the user typed in ([lang] null, [name] as
  * typed: it goes into the prompt and the Jev question as it is). Only the Chinese preset gets the Chinese-only parts
- * (term list, the tuned Japanese→Chinese check and its notes, the shorter output cap); a typed "中文" does not.
+ * (the tuned Japanese→Chinese check and its notes, the shorter output cap); a typed "中文" does not. Terms follow
+ * [Scene.termsLang], which may be any target.
  */
 data class Target(val lang: Lang?, val name: String) {
     val zh: String get() = lang?.zh ?: name
@@ -275,7 +290,7 @@ fun fixNote(choice: String, source: Lang?, target: Target) =
 /**
  * BYOK system message: everything that is the same for every sentence of a session (instructions, languages, scene
  * background, the scene's whole term list), so that every request starts with the same bytes and a service with prefix
- * caching can reuse it. The Chinese-only term list is given only for the Chinese preset target.
+ * caching can reuse it. The term list only when the captions are in its language ([Scene.termsFor]).
  */
 fun byokSystem(scene: Scene, source: Lang?, target: Target): String = buildString {
     val src = source?.zh ?: "外语"
@@ -285,9 +300,9 @@ fun byokSystem(scene: Scene, source: Lang?, target: Target): String = buildStrin
     append("只输出当前句的译文，不要解释、注释或其他文字。")
     // the shipped background names a Japanese streamer; for another spoken language the nationality goes
     scene.background?.let { append("\n\n背景：" + if (source == Lang.JA || it != Scene.VTUBER.background) it else it.replace("日本虚拟主播", "虚拟主播")) }
-    // the shipped list translates into Chinese; terms the user wrote are theirs, for whatever they caption into
-    if (scene.terms.isNotEmpty() && (target.lang == Lang.ZH || !scene.shipped))
-        append("\n\n术语（原文出现时必须这样译）：" + scene.terms.joinToString("、") { "${it.first}→${it.second}" })
+    // the terms are in one language: given only when the captions are in it
+    val terms = scene.termsFor(target)
+    if (terms.isNotEmpty()) append("\n\n术语（原文出现时必须这样译）：" + terms.joinToString("、") { "${it.first}→${it.second}" })
 }
 
 /**

@@ -590,7 +590,7 @@ class JevTest {
     fun byokPromptKeepsTheFixedPartFirstAndTheSentenceLast() {
         val a = byokSystem(Scene.VTUBER, Lang.JA, Target.ZH)
         assertTrue(a.contains("スパチャ→SC")); assertTrue(a.contains("背景"))
-        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains("→SC")) // the term list is Chinese-only
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains("→SC")) // the built-in term list is Chinese
         val u = byokUser("今", listOf("note"), listOf("前1", "前2"))
         assertTrue(u.indexOf("前1") < u.indexOf("今")); assertTrue(u.indexOf("今") < u.indexOf("note"))
         assertEquals("【当前句】\n今", byokUser("今"))

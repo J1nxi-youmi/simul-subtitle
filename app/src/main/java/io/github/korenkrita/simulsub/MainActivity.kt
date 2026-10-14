@@ -226,7 +226,7 @@ class MainActivity : Activity() {
         }
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle("字幕翻译成")
-            .setMessage("写上想要的语言，会原样交给你填的 LLM 去翻译。中文术语表只用于列表里的「中文」。")
+            .setMessage("写上想要的语言，会原样交给你填的 LLM 去翻译。")
             .setView(box)
             .setNegativeButton("取消", null)
             .setPositiveButton("确定") { _, _ ->
@@ -296,7 +296,25 @@ class MainActivity : Activity() {
         val status = hint("")
         form.addView(label("名字", 8)); form.addView(name)
         form.addView(label("背景说明")); form.addView(background)
-        form.addView(label("术语")); form.addView(hint("左边写视频里说的词，右边写想要的译法，例如 ボス 和 头目。"))
+        // the language the 译文 are in: the terms are used only when the captions are in it
+        val captions = prefs.targetLang
+        var termsLang = old?.termsLang ?: captions
+        val langs = (Target.PRESETS + termsLang + captions).distinct()
+        val langHint = hint("")
+        fun showLangHint() {
+            langHint.text = if (termsLang == captions) "现在字幕翻成${captions.zh}，这些术语会用上。"
+                else "现在字幕翻成${captions.zh}，这些${termsLang.zh}术语不会用上；字幕换成${termsLang.zh}才用。"
+        }
+        showLangHint()
+        form.addView(label("术语"))
+        form.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply { text = "译文是"; textSize = 15f; setTextColor(getColor(R.color.text)); setPadding(0, 0, (12 * dpx).toInt(), 0) })
+            addView(dropdown(langs.map { it.zh }, langs.indexOf(termsLang), true) { termsLang = langs[it]; showLangHint() }
+                .apply { contentDescription = "术语的译文是哪种语言" }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        form.addView(langHint)
+        form.addView(hint("左边写视频里说的词，右边写想要的译法，例如 ボス 和 头目。"))
         form.addView(termBox); form.addView(addTerm)
         form.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -333,7 +351,7 @@ class MainActivity : Activity() {
             if (room <= 0) { status.text = "术语已经有 ${Scene.MAX_TERMS} 条，满了。"; return@setOnClickListener }
             generating = true; generate.isEnabled = false; status.text = "正在生成…（最多一分钟）"
             val model = prefs.byokModel; val stored = prefs.byokVariant(chat, model)
-            val bg = background.text.toString(); val src = prefs.sourceLang; val tgt = prefs.targetLang
+            val bg = background.text.toString(); val src = prefs.sourceLang; val tgt = termsLang
             val have = Scene.sources(rows())
             Thread {
                 val (got, err) = generateTerms(chat, model, k, stored, { prefs.setByokVariant(chat, model, it) }, label, bg, have, minOf(n, room), src, tgt)
@@ -357,7 +375,7 @@ class MainActivity : Activity() {
             }.start()
         }
         dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", name.text.toString(), background.text.toString(), rows())
+            val (s, err) = Scene.edit(old?.id ?: "u${System.currentTimeMillis()}", name.text.toString(), background.text.toString(), rows(), termsLang)
             if (s == null) { status.text = "⚠ $err"; return@setOnClickListener }
             val list = prefs.scenes
             prefs.scenes = if (list.any { it.id == s.id }) list.map { if (it.id == s.id) s else it } else list + s
@@ -738,10 +756,7 @@ class MainActivity : Activity() {
             addView(pillButton("新建") { editScene(null) }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dpx).toInt() })
-        box.addView(hint(if (scene.terms.isEmpty() && scene.background == null) "告诉翻译这是什么内容，并给常见词定好译法：点「编辑」写说明和术语，或「新建」一个自己的场景。"
-            else "这个场景有${if (scene.background != null) "背景说明" else ""}${if (scene.background != null && scene.terms.isNotEmpty()) "和" else ""}" +
-                "${if (scene.terms.isNotEmpty()) " ${scene.terms.size} 条术语" else ""}，翻译时会一起交给 LLM。" +
-                if (scene.shipped && scene.terms.isNotEmpty()) "自带的术语只在翻成「中文」时使用。" else ""))
+        box.addView(hint(scene.summary(prefs.targetLang)))
 
         // translation context: on/off and how many finished sentences (a running session: from the next sentence)
         val ctxCount = label("")

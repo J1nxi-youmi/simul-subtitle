@@ -327,7 +327,8 @@ class Jev(
 }
 
 /**
- * One POST as the session log records it. [error] is a fixed code or an exception class name, never a message.
+ * One POST as the session log records it. [error] is a fixed code or an exception class name (a TLS one with its
+ * reason), never a message that could hold a header or the body.
  * [retryAfter]: the Retry-After header of a 429, as sent.
  */
 class HttpResult(val status: Int, val body: String?, val ms: Long, val error: String?, val firstContentMs: Long? = null,
@@ -472,6 +473,8 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
         // callTimeout cancels the call itself, so it is told apart by elapsed time, not isCanceled()
         monoMs() - t0 >= deadlineMs - 50 -> "deadline ${deadlineMs}ms"
         e.message == "Canceled" -> "cancelled"
+        // a TLS failure says why (handshake ended, unknown certificate…); its text never holds a header or the body
+        e is javax.net.ssl.SSLException -> "${e.javaClass.name}: ${e.message?.take(200)}"
         else -> e.javaClass.name
     }
 

@@ -27,7 +27,8 @@ val sysaudioFile: File = System.getProperty("compose.application.resources.dir")
 fun main() {
     // the translation service, Jev and the update check go through the system's proxy, as a browser does (a proxy
     // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
-    System.setProperty("java.net.useSystemProxies", "true")
+    // (-Djava.net.useSystemProxies=false in JAVA_TOOL_OPTIONS turns it off)
+    if (System.getProperty("java.net.useSystemProxies") == null) System.setProperty("java.net.useSystemProxies", "true")
     // macOS: the menu bar icon is a template image, drawn white or black to match the menu bar
     System.setProperty("apple.awt.enableTemplateImages", "true")
     // Windows: Direct3D (skiko's default there) draws the transparent caption window wrong: the toolbar is cut off

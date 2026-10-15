@@ -22,7 +22,7 @@ val dataDir: File = File(System.getProperty("simulsub.data")
  * Keychain (on Windows: keys.json, encrypted for this Windows user) instead. Every read also reads [rev], so a composable that shows a setting follows its changes.
  * Listeners get the changed key on the thread that changed it, like SharedPreferences.
  */
-class Prefs private constructor(private val file: File) {
+class Prefs internal constructor(private val file: File) {
     private val lock = Any()
     private val json: JSONObject = runCatching { JSONObject(file.readText()) }.getOrDefault(JSONObject())
     private val rev = mutableIntStateOf(0)
@@ -194,13 +194,14 @@ class Prefs private constructor(private val file: File) {
  * (`security -i`), never on a command line other processes could read. Cached: [Prefs] reads keys on every setup.
  */
 object Keychain {
-    private const val SERVICE = "SimulSub"
+    /** Tests point this at a service of their own, so they never touch the app's real secrets. */
+    internal var service: String = "SimulSub"
     private val cache = HashMap<String, String?>()
 
     @Synchronized fun get(account: String): String? = cache.getOrPut(account) {
         if (isWindows) return@getOrPut Dpapi.get(account)
         runCatching {
-            val p = ProcessBuilder("/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", account, "-w")
+            val p = ProcessBuilder("/usr/bin/security", "find-generic-password", "-s", service, "-a", account, "-w")
                 .redirectError(ProcessBuilder.Redirect.DISCARD).start()
             val out = p.inputStream.readBytes().decodeToString().trimEnd('\n')
             if (p.waitFor() == 0 && out.isNotEmpty()) out else null
@@ -212,8 +213,8 @@ object Keychain {
         cache.remove(account)
         val del = value.isNullOrEmpty()
         if (isWindows) return Dpapi.set(account, value?.ifEmpty { null }).also { if (it) cache[account] = value?.ifEmpty { null } }
-        val cmd = if (del) "delete-generic-password -s ${q(SERVICE)} -a ${q(account)}"
-            else "add-generic-password -U -s ${q(SERVICE)} -a ${q(account)} -w ${q(value!!)}"
+        val cmd = if (del) "delete-generic-password -s ${q(service)} -a ${q(account)}"
+            else "add-generic-password -U -s ${q(service)} -a ${q(account)} -w ${q(value!!)}"
         val ok = runCatching {
             val p = ProcessBuilder("/usr/bin/security", "-i").redirectErrorStream(true).start()
             p.outputStream.use { it.write((cmd + "\n").toByteArray()) }

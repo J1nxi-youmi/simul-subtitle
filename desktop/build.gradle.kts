@@ -32,6 +32,9 @@ dependencies {
     // Windows: the keys, encrypted with DPAPI (Crypt32Util)
     implementation("net.java.dev.jna:jna-platform:5.14.0")
     implementation(files((dist ?: macE2e.asFile).resolve("sherpa-jvm.jar")))
+    // Prefs is exercised against its own settings file and keychain service (see PrefsTest)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 compose.desktop {

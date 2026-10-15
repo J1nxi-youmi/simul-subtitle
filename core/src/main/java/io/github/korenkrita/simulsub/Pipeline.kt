@@ -52,12 +52,8 @@ data class Timing(
 interface Asr { fun recognize(samples: FloatArray): String }
 
 interface Mt {
-    /**
-     * One generation for a complete prompt; null when cancelled (only used on stop) or when nothing ran. [onText]
-     * gets the translated text so far as it arrives (partial captions); a call that is reused or cancelled never
-     * calls it.
-     */
-    fun translate(prompt: String, onText: (String) -> Unit = {}): MtResult?
+    /** One generation for a complete prompt; null when cancelled (only used on stop) or when nothing ran. */
+    fun translate(prompt: String): MtResult?
     fun cancel()
 }
 
@@ -487,14 +483,14 @@ class Pipeline(
 
     /** One MT call, logged with everything needed to replay it. */
     private fun translate(job: AsrJob, setup: Setup, attempt: Int, ja: String, notes: List<String>,
-                          previous: List<String>, onText: (String) -> Unit = {}): MtResult? {
+                          previous: List<String>): MtResult? {
         val prompt = byokUser(ja, notes, previous)
         // Greedy decoding with state cleared per call: the same prompt gives the same output. A final usually
         // repeats its last draft's text, so that segment's last good translation is reused instead of computed again.
         // The pipeline (and so this cache) lives for one session, with one translator.
         val hit = lastMt?.takeIf { it.seg == job.segmentId && it.prompt == prompt && it.setup == setup.version }
         val t0 = clock()
-        val r = hit?.result ?: setup.mt.translate(prompt, onText)
+        val r = hit?.result ?: setup.mt.translate(prompt)
         log(mapOf("ev" to "mt", "seg" to job.segmentId, "rev" to job.revision, "final" to job.isFinal, "attempt" to attempt,
             "prompt" to prompt, "request" to r?.request, "raw" to r?.raw, "stop" to r?.stop?.toString(),
             "http" to r?.http, "response" to r?.response, "error" to r?.error, "prompt_tokens" to r?.promptTokens,
@@ -610,24 +606,7 @@ class Pipeline(
             val job = j.q.job
             val start = clock()
             val ctx = previousFor(job.segmentId, j.setup.previousSentences)
-            var lastPartial = start - PARTIAL_MIN_MS
-            var partialError: Throwable? = null
-            val r = if (j.ja.isEmpty()) null else translate(job, j.setup, 1, j.ja, emptyList(), ctx) { soFar ->
-                // runs on the HTTP reader's thread: a stop ends it here, and anything it throws goes back to this
-                // thread below, where a failure stops the pipeline as everywhere else
-                try {
-                    // "only finished sentences" hides drafts: partial text is a draft, so it stays hidden there too
-                    val now = clock()
-                    if (!running || failed || !drafts() || now - lastPartial < PARTIAL_MIN_MS) return@translate
-                    val c = caption(j, false, job.revision, soFar, start, now, now - start)
-                    // a newer revision starts from its first words: the line keeps the longer text it shows until
-                    // this one has caught up, instead of shrinking to a few characters and growing again
-                    if (job.segmentId == shownSeg && c.zh.length < shownLen) return@translate
-                    lastPartial = now
-                    showDraft(c)
-                } catch (t: Throwable) { if (partialError == null) partialError = t }
-            }
-            partialError?.let { throw it }
+            val r = if (j.ja.isEmpty()) null else translate(job, j.setup, 1, j.ja, emptyList(), ctx)
             if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
             var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
@@ -639,7 +618,7 @@ class Pipeline(
             if (job.isFinal && checkTranslations) {
                 val real = r?.takeIf { it.usable } != null && zh.isNotEmpty()
                 // live mode shows the first translation while Jev checks it; "only finished sentences" hides it
-                if (real) showDraft(caption(j, false, job.revision, zh, start, end, end - start))
+                if (real) onCaption(caption(j, false, job.revision, zh, start, end, end - start))
                 synchronized(lock) { inCheck++; checkQueue.addLast(ToCheck(j, zh, real, start, end - start, ctx)) }
                 continue
             }
@@ -647,16 +626,11 @@ class Pipeline(
                 if (job.isFinal) pendingFinalAudioMs -= audioMs(job)
                 pendingFinals() + inFlightFinals
             }
-            caption(j, job.isFinal, job.revision, zh, start, end, end - start).let { if (job.isFinal) onCaption(it) else showDraft(it) }
+            onCaption(caption(j, job.isFinal, job.revision, zh, start, end, end - start))
             if (job.isFinal) synchronized(lock) { inFlightFinals-- }
             onBacklog(backlog - if (job.isFinal) 1 else 0)
         }
     }
-
-    /** the segment and length of the draft text the MT thread last showed (partial captions never shrink it) */
-    @Volatile private var shownSeg = -1L
-    @Volatile private var shownLen = 0
-    private fun showDraft(c: Caption) { shownSeg = c.segmentId; shownLen = c.zh.length; onCaption(c) }
 
     private fun caption(j: MtJob, final: Boolean, revision: Int, zh: String, start: Long, end: Long, mtMs: Long, checkMs: Long = 0): Caption {
         val job = j.q.job
@@ -705,12 +679,6 @@ class Pipeline(
          * idle translator wait. Finals are never skipped.
          */
         const val DRAFT_MIN_NEW_CHARS = 5
-        /**
-         * How often a streamed translation may update the line it is on. A service emits ~30 chunks per sentence; at
-         * 70 ms the picture changes a few times per sentence instead of flickering on every chunk. Only the first
-         * text still appears as soon as it arrives.
-         */
-        const val PARTIAL_MIN_MS = 70
         /**
          * A suspected loss is real when the whole result and the separately recognized new audio share at least this
          * much of each (by characters in order). From one Mac A/B of two VTuber clips, not tuned on a reference.
@@ -808,13 +776,7 @@ class CaptionBoard(private var minFinals: Int = DEFAULT_SENTENCES, private var m
             trim()
             return true
         }
-        // a draft at an older segment never shows; of the same segment only a newer revision does, except that the
-        // very same revision may grow (a streamed translation arrives word by word, still on that one revision)
-        if (d != null) {
-            if (c.segmentId < d.segmentId) return false
-            if (c.segmentId == d.segmentId && (c.revision < d.revision ||
-                    (c.revision == d.revision && c.zh.length <= d.zh.length))) return false
-        }
+        if (d != null && (c.segmentId < d.segmentId || (c.segmentId == d.segmentId && c.revision <= d.revision))) return false
         draft = c
         return true
     }

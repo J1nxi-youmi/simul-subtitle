@@ -228,14 +228,6 @@ object SseStream {
         return ((choice?.get("delta") as? Map<*, *>)?.get("content") as? String).orEmpty().isNotEmpty()
     }
 
-    /** The text one SSE line adds to the translation (null: not a line carrying translated text). */
-    fun contentDelta(line: String): String? {
-        val data = line.takeIf { it.startsWith("data:") }?.removePrefix("data:")?.trim() ?: return null
-        val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return null
-        val choice = (j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>
-        return ((choice?.get("delta") as? Map<*, *>)?.get("content") as? String)?.takeIf { it.isNotEmpty() }
-    }
-
     /**
      * OpenAI-style server-sent events: "data: {chunk}" lines up to "data: [DONE]"; other lines (comments, event
      * names, blank) are skipped. Null (not trusted) when the stream does not end with [DONE], a chunk is not a
@@ -537,10 +529,9 @@ class ByokTranslator(
     /** masked out of every reply: the key and the extra header values (a header may carry a key too) */
     private val secrets = (listOf(service.key) + service.headers.map { it.second }).filter { it.isNotEmpty() }.distinct()
 
-    override fun translate(prompt: String, onText: (String) -> Unit): MtResult? =
-        call(prompt, variant, firstContentMs, onText)
+    override fun translate(prompt: String): MtResult? = call(prompt, variant, firstContentMs)
 
-    private fun call(user: String, v: ThinkingOff?, firstMs: Long, onText: (String) -> Unit = {}): MtResult {
+    private fun call(user: String, v: ThinkingOff?, firstMs: Long): MtResult {
         val body = Json.encode(mapOf(
             "model" to model,
             "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
@@ -549,13 +540,10 @@ class ByokTranslator(
         ) + (v?.params ?: emptyMap()))
         val seen = StringBuilder() // this request's content so far, for the first-text check (one per call: a late reader
         // of an earlier, abandoned call must not touch the next one)
-        val shown = StringBuilder() // the same content for partial captions: hasAnswer appends to [seen] only until
-        // the first text, so it cannot serve both
         // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
         val r = try {
             calls.post(url, body, service.requestHeaders(),
-                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = SseStream::isDone,
-                onText = { d -> shown.append(d); partial(shown).takeIf { it.isNotEmpty() }?.let(onText) })
+                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = SseStream::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
         // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
         // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
@@ -565,7 +553,13 @@ class ByokTranslator(
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
         // what a caption may show: reasoning removed until nothing changes, then the key masked until it is gone, so
         // that MtResult.text (which strips once more) can no longer join anything into the key
-        val clean = cleaned(res.raw, open)
+        var clean = if (open) "" else res.raw
+        while (true) {
+            // the mask has no key characters, so each pass strictly shrinks or ends (a key like "*" could grow it)
+            val next = secrets.fold(stripThink(clean)) { t, k -> t.replace(k, "") }
+            if (next == clean) break
+            clean = next
+        }
         // an answer cut at the token cap inside reasoning is a conclusive "it thinks" for the probe, but no caption
         return MtResult(clean, if (open) 'f' else res.stop, res.promptTokens,
             res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = null, http = res.http,
@@ -587,36 +581,6 @@ class ByokTranslator(
         val lt = s.lastIndexOf('<')
         if (lt >= 0 && ("<think>".startsWith(s.substring(lt)) || "</think>".startsWith(s.substring(lt)))) s = s.substring(0, lt)
         return s.replace("</think>", "").isNotBlank()
-    }
-
-    /**
-     * What a caption may show of [raw]: complete reasoning blocks removed and the secrets masked, until nothing
-     * changes any more, so that [MtResult.text] (which strips once more) can no longer join anything into a key. An
-     * unclosed thinking block ([open]) shows nothing at all.
-     */
-    private fun cleaned(raw: String, open: Boolean): String {
-        if (open) return ""
-        var t = raw
-        while (true) {
-            // the mask has no key characters, so each pass strictly shrinks or ends (a key like "*" could grow it)
-            val next = secrets.fold(stripThink(t)) { s, k -> s.replace(k, "") }
-            if (next == t) return t
-            t = next
-        }
-    }
-
-    /**
-     * The text a partial caption may show, given everything generated so far ([seen], the raw deltas). An open
-     * thinking block shows nothing. A tag still arriving ("<thi", "</think") is cut first, since a tag split over
-     * chunks may also split a secret ("sk-te<think" + ">…</think>st"). Then the end that is the start of a secret is
-     * held back: a secret split across chunks is not found by replacing it until it is complete.
-     */
-    private fun partial(seen: StringBuilder): String {
-        var t = cleaned(seen.toString(), seen.lastIndexOf("<think>") > seen.lastIndexOf("</think>"))
-        val lt = t.lastIndexOf('<')
-        if (lt >= 0 && ("<think>".startsWith(t.substring(lt)) || "</think>".startsWith(t.substring(lt)))) t = t.substring(0, lt)
-        val hold = secrets.maxOfOrNull { k -> (minOf(k.length - 1, t.length) downTo 1).firstOrNull { t.endsWith(k.take(it)) } ?: 0 } ?: 0
-        return t.dropLast(hold)
     }
 
     override fun cancel() = calls.cancel()

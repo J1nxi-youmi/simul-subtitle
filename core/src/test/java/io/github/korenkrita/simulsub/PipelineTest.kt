@@ -25,7 +25,7 @@ class PipelineTest {
         val cancelled = AtomicBoolean(false)
         val inside = AtomicInteger(0)
         val calls = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+        override fun translate(prompt: String): MtResult? {
             inside.incrementAndGet()
             try {
                 calls.add(prompt)
@@ -42,7 +42,7 @@ class PipelineTest {
         val gate = CountDownLatch(1)
         val entered = CountDownLatch(1)
         val order = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+        override fun translate(prompt: String): MtResult? {
             order.add(source(prompt)); entered.countDown(); gate.await()
             return MtResult("zh(${source(prompt)})", 'e', 1, 1)
         }
@@ -186,64 +186,6 @@ class PipelineTest {
         assertTrue(done.await(3, TimeUnit.SECONDS))
         p.stop(); p.awaitStopped()
         assertTrue("the final was translated", mt.calls.any { source(it).startsWith("今日はゲーム配信を始めますよろしくお願いしますみなさん") })
-    }
-
-    /** Streams "译" + the source text in three steps, each later than the partial-caption throttle. */
-    private class StreamMt : Mt {
-        val calls = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(prompt: String, onText: (String) -> Unit): MtResult {
-            calls.add(prompt)
-            val full = "译" + source(prompt)
-            for (n in listOf(2, full.length / 2, full.length)) { onText(full.take(n)); Thread.sleep(Pipeline.PARTIAL_MIN_MS + 30L) }
-            return MtResult(full, 'e', 1, 1)
-        }
-        override fun cancel() {}
-    }
-
-    private fun streamRun(texts: Map<Int, String>, jobs: List<AsrJob>, drafts: Boolean = true): List<Caption> {
-        val asr = object : Asr { override fun recognize(samples: FloatArray) = texts.getValue(samples.size) }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, StreamMt(), { out.add(it); if (it.isFinal) done.countDown() }, drafts = { drafts })
-        p.start()
-        for (j in jobs) { p.submit(j); Thread.sleep(600) }
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        return out.toList()
-    }
-
-    @Test
-    fun aStreamedDraftGrowsOnItsLine() {
-        val out = streamRun(mapOf(1 to "今日はゲーム配信を始めます", 2 to "今日はゲーム配信を始めますよろしく"),
-            listOf(job(1, 1, false, 1), job(1, 2, true, 2)))
-        val first = out.filter { !it.isFinal && it.revision == 1 }.map { it.zh }
-        assertTrue("$first", first.size >= 2)
-        assertTrue("$first", first.zipWithNext().all { (a, b) -> b.startsWith(a) && b.length >= a.length })
-        assertEquals("译今日はゲーム配信を始めます", first.last())
-    }
-
-    @Test
-    fun onlyFinishedSentencesShowNoPartialText() {
-        val out = streamRun(mapOf(1 to "今日はゲーム配信を始めます"), listOf(job(1, 1, true, 1)), drafts = false)
-        assertEquals(listOf(true), out.map { it.isFinal })
-    }
-
-    @Test
-    fun aNewRevisionDoesNotShrinkTheLine() {
-        val out = streamRun(mapOf(1 to "今日はゲーム配信を始めます", 2 to "今日はゲーム配信を始めますよろしくね", 3 to "今日はゲーム配信を始めますよろしくね"),
-            listOf(job(1, 1, false, 1), job(1, 2, false, 2), job(1, 3, true, 3)))
-        val lengths = out.filter { !it.isFinal }.map { it.zh.length }
-        assertTrue("$lengths", out.any { !it.isFinal && it.revision == 2 })
-        assertTrue("$lengths", lengths.zipWithNext().all { (a, b) -> b >= a })
-    }
-
-    @Test
-    fun aReusedTranslationShowsNoPartialText() {
-        // the final repeats its last draft's text: that translation is reused, nothing is streamed for it
-        val out = streamRun(mapOf(1 to "今日はゲーム配信を始めます", 2 to "今日はゲーム配信を始めます"),
-            listOf(job(1, 1, false, 1), job(1, 2, true, 2)))
-        assertTrue("${out.map { "${it.revision}${it.isFinal}" }}", out.none { !it.isFinal && it.revision == 2 })
-        assertEquals("译今日はゲーム配信を始めます", out.last { it.isFinal }.zh)
     }
 
     @Test
@@ -538,7 +480,7 @@ class PipelineTest {
         val asr = object : Asr { override fun recognize(samples: FloatArray) = if (samples.size == 20) "" else "ja${samples.size}" }
         val sentinel = CountDownLatch(1)
         val mt = object : Mt {
-            override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+            override fun translate(prompt: String): MtResult? {
                 if (source(prompt) == "ja40") sentinel.countDown()
                 return if (source(prompt) == "ja30") null else MtResult("zh(${source(prompt)})", 'e', 1, 1)
             }
@@ -566,7 +508,7 @@ class PipelineTest {
         val inside = AtomicInteger(0); val maxInside = AtomicInteger(0)
         val threads = Collections.synchronizedSet(HashSet<String>()); val calls = Collections.synchronizedList(ArrayList<String>())
         val mt = object : Mt {
-            override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+            override fun translate(prompt: String): MtResult? {
                 val n = inside.incrementAndGet(); maxInside.accumulateAndGet(n, ::maxOf)
                 try { threads.add(Thread.currentThread().name); calls.add(prompt); Thread.sleep(20); return MtResult("zh(x)", 'e', 1, 1) }
                 finally { inside.decrementAndGet() }
@@ -590,7 +532,7 @@ class PipelineTest {
         // the retranslation (its prompt carries the fix note) blocks until the translator is cancelled by stop
         val cancelled = CountDownLatch(1); val retrying = CountDownLatch(1)
         val mt = object : Mt {
-            override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+            override fun translate(prompt: String): MtResult? {
                 if (prompt.contains(FIX_NOTES["negation"]!!)) { retrying.countDown(); cancelled.await(); return null }
                 return MtResult("zh(x)", 'e', 1, 1)
             }
@@ -610,7 +552,7 @@ class PipelineTest {
         val out = Collections.synchronizedList(ArrayList<Caption>())
         val failure = CountDownLatch(1)
         val mt = object : Mt {
-            override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+            override fun translate(prompt: String): MtResult? {
                 if (prompt.contains(FIX_NOTES["negation"]!!)) throw IllegalStateException("native crash")
                 return MtResult("zh(x)", 'e', 1, 1)
             }
@@ -1019,7 +961,7 @@ class PipelineTest {
     private class PickMt(val blocks: (String) -> Boolean) : Mt {
         val gate = CountDownLatch(1); val entered = CountDownLatch(1)
         val prompts = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+        override fun translate(prompt: String): MtResult? {
             prompts.add(prompt)
             if (blocks(prompt)) { entered.countDown(); gate.await() }
             return MtResult("zh(${source(prompt)})" + if (prompt.contains(FIX_NOTES["negation"]!!)) "-fixed" else "", 'e', 1, 1)
@@ -1236,7 +1178,7 @@ class PipelineTest {
     /** Returns null (cancel-like: nothing usable) for the first [failFirst] calls. */
     private class FlakyMt(var failFirst: Int) : Mt {
         val calls = Collections.synchronizedList(ArrayList<String>())
-        override fun translate(prompt: String, onText: (String) -> Unit): MtResult? {
+        override fun translate(prompt: String): MtResult? {
             calls.add(source(prompt))
             return if (calls.size <= failFirst) MtResult("", 'f', 0, 0) else MtResult("zh(${source(prompt)})", 'e', 1, 1)
         }
@@ -1305,7 +1247,7 @@ class PipelineTest {
         // showing only finals, as CaptionService.refresh() does (board.snapshot().filter { it.isFinal }).
         val judge = GateJudge(choice = "negation")
         val mt = object : Mt {
-            override fun translate(prompt: String, onText: (String) -> Unit) =
+            override fun translate(prompt: String) =
                 MtResult(if (prompt.contains(FIX_NOTES["negation"]!!)) "checked" else "unchecked", 'e', 1, 1)
             override fun cancel() {}
         }
@@ -1674,16 +1616,6 @@ class PipelineTest {
 class CaptionBoardTest {
     private fun cap(seg: Long, rev: Int, final: Boolean, zh: String = "z$seg.$rev") =
         Caption(seg, rev, final, "", zh, Timing(0, 0, 0, 0, 0, 0, 0))
-
-    @Test
-    fun aStreamedDraftGrowsOnItsRevisionButNeverShrinks() {
-        val b = CaptionBoard()
-        assertTrue(b.accept(cap(1, 1, false, "晚上")))
-        assertTrue(b.accept(cap(1, 1, false, "晚上好")))
-        assertFalse(b.accept(cap(1, 1, false, "晚上")))
-        assertFalse(b.accept(cap(1, 1, false, "早上好")))
-        assertEquals("晚上好", b.snapshot().single().zh)
-    }
 
     @Test
     fun revisionsOnlyMoveForward() {

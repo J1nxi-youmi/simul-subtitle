@@ -367,6 +367,8 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
     fun post(url: String, json: String, headers: Map<String, String>, beforeSend: () -> Unit = {},
              firstContentMs: Long? = null, isContent: (String) -> Boolean = { false },
              isEnd: (String) -> Boolean = { false },
+             /** the translated text one streamed line adds, given as each such line arrives (partial captions) */
+             onText: (String) -> Unit = {},
              /** a 429's headers arrived (its Retry-After, as sent): called at once, before its body is read */
              on429: (String?) -> Unit = {},
              /** asked right before the request goes out (after any wait in OkHttp's queue): false = not sent, "paused" */
@@ -422,7 +424,7 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
                         val src = response.body?.source()
                         r = when {
                             src == null -> HttpResult(response.code, null, monoMs() - t0, null, retryAfter = ra)
-                            firstContentMs != null && response.code == 200 -> readStream(src, t0, first, started, isContent, isEnd)
+                            firstContentMs != null && response.code == 200 -> readStream(src, t0, first, started, isContent, isEnd, onText)
                             // a real answer is a few KB; anything far larger is not one
                             src.request(MAX_RESPONSE + 1L) -> HttpResult(response.code, null, monoMs() - t0, "response over $MAX_RESPONSE bytes", retryAfter = ra)
                             else -> HttpResult(response.code, src.buffer.readUtf8(), monoMs() - t0, null, retryAfter = ra)
@@ -490,10 +492,12 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
 
     /**
      * Reads a streamed body line by line up to [isEnd], never holding more than [MAX_STREAM] bytes (also for one
-     * endless line), and records when the first line [isContent] accepts arrived.
+     * endless line), and records when the first line [isContent] accepts arrived. [onText] gets the translated text
+     * each line adds (default: the caller does not want partial text).
      */
     private fun readStream(src: okio.BufferedSource, t0: Long, first: java.util.concurrent.atomic.AtomicLong,
-                           started: CountDownLatch, isContent: (String) -> Boolean, isEnd: (String) -> Boolean): HttpResult {
+                           started: CountDownLatch, isContent: (String) -> Boolean, isEnd: (String) -> Boolean,
+                           onText: (String) -> Unit = {}): HttpResult {
         val out = StringBuilder(); var used = 0L
         while (true) {
             val nl = src.indexOf('\n'.code.toByte(), 0, MAX_STREAM - used + 1)
@@ -505,6 +509,7 @@ class Calls(private val deadlineMs: Long, dns: Dns = Dns.SYSTEM, /** tests: bypa
             val line = src.readUtf8(nl).removeSuffix("\r"); src.skip(1); used += nl + 1
             out.append(line).append('\n')
             if (first.get() < 0 && isContent(line)) { first.set(monoMs() - t0); started.countDown() }
+            SseStream.contentDelta(line)?.let(onText)
             if (isEnd(line)) break
         }
         return HttpResult(200, out.toString(), monoMs() - t0, null, first.get().takeIf { it >= 0 })

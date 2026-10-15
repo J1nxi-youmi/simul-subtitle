@@ -132,6 +132,16 @@ class TranslationTest {
     }
 
     @Test
+    fun aFragmentIsNotCompletedFromThePreviousLinesOnlyFromJapaneseIntoChinese() {
+        val rule = "不要根据【前文】把它补全成完整句子"
+        assertTrue(byokSystem(Scene.VTUBER, Lang.JA, Target.ZH).contains(rule))
+        assertFalse(byokSystem(Scene.VTUBER, Lang.EN, Target.ZH).contains(rule))
+        assertFalse(byokSystem(Scene.VTUBER, null, Target.ZH).contains(rule))
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.of(Lang.EN)).contains(rule))
+        assertFalse(byokSystem(Scene.VTUBER, Lang.JA, Target.custom("中文")!!).contains(rule))
+    }
+
+    @Test
     fun targetsAreStoredAsAPresetCodeOrATypedName() {
         assertEquals(Target.of(Lang.KO), Target.parse("ko"))
         assertEquals("ko", Target.of(Lang.KO).stored)

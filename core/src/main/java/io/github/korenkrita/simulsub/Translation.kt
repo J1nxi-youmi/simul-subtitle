@@ -311,6 +311,14 @@ fun byokSystem(scene: Scene, source: Lang?, target: Target): String = buildStrin
     // the terms are in one language: given only when the captions are in it
     val terms = scene.termsFor(target)
     if (terms.isNotEmpty()) append("\n\n术语（原文出现时必须这样译）：" + terms.joinToString("、") { "${it.first}→${it.second}" })
+    // A fragment of a few characters (a cut that caught only the end of a word) made the model retell 【前文】 as if it
+    // were the sentence: "日" came back as the whole previous line. Measured with a run-to-run control on a 15 min
+    // clip: 4-5 of 72 short lines did that without this rule, 0 with it; on the lines that did not, the answers it
+    // changed were as good or better (Index-Translate-35B, deepseek-v4.1-flash). Only tested from Japanese into the
+    // built-in Chinese, which its examples are written for.
+    if (source == Lang.JA && target.lang == Lang.ZH) append("\n\n如果【当前句】只有几个字（例如「あ」「日」「えっ」这类残缺片段），" +
+        "不要根据【前文】把它补全成完整句子，也不要复述【前文】的内容；但这几个字本身仍要翻译成自然的中文（例如「犬」→「狗」、" +
+        "「行く」→「去」），不要直接照抄原文。")
 }
 
 /**

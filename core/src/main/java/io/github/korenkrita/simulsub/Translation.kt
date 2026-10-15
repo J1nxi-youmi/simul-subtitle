@@ -402,6 +402,54 @@ fun byokUser(text: String, notes: List<String> = emptyList(), previous: List<Str
  * Reasoning in an answer is never shown; it is only flagged ([MtResult.thinking]).
  */
 /**
+ * One saved LLM API setting (设置 → LLM API → 配置), by name. Its address, model, key, User-Agent and headers are kept by
+ * each app under the BYOK storage names plus [suffix]. The first one ("" id) is the setting from before there were
+ * several, under the old names: an update finds it as 「默认」, nothing moved.
+ */
+data class LlmProfile(val id: String, val name: String) {
+    val suffix: String get() = if (id.isEmpty()) "" else ":$id"
+
+    companion object {
+        const val MAX_NAME = 20
+        const val MAX_PROFILES = 20
+        val FIRST = LlmProfile("", "默认")
+
+        /** the saved list; never empty: the first one when nothing (or nothing readable) was saved */
+        fun all(saved: String?): List<LlmProfile> {
+            val a = runCatching { org.json.JSONArray(saved ?: "[]") }.getOrNull() ?: return listOf(FIRST)
+            return (0 until a.length()).mapNotNull { i ->
+                val o = a.optJSONObject(i) ?: return@mapNotNull null
+                val id = o.optString("id"); val name = o.optString("name").trim().take(MAX_NAME)
+                // the id ends up in storage names (and a keychain account): only what [newId] makes
+                if (name.isEmpty() || !id.all { it in 'a'..'z' || it in '0'..'9' }) null else LlmProfile(id, name)
+            }.distinctBy { it.id }.ifEmpty { listOf(FIRST) }
+        }
+
+        fun store(list: List<LlmProfile>): String = org.json.JSONArray().apply {
+            for (p in list) put(org.json.JSONObject().put("id", p.id).put("name", p.name))
+        }.toString()
+
+        /** a typed name, trimmed; or why it cannot be one (empty, or another profile's, [self] aside) */
+        fun name(typed: String, list: List<LlmProfile>, self: String? = null): Pair<String?, String?> {
+            val n = typed.trim()
+            return when {
+                n.isEmpty() -> null to "名字不能为空"
+                n.length > MAX_NAME -> null to "名字最多 $MAX_NAME 个字"
+                list.any { it.id != self && it.name.equals(n, ignoreCase = true) } -> null to "已经有叫「$n」的配置了"
+                else -> n to null
+            }
+        }
+
+        /** an id none of [list] has */
+        fun newId(list: List<LlmProfile>, now: Long = System.currentTimeMillis()): String {
+            var n = now
+            while (list.any { it.id == "p$n" }) n++
+            return "p$n"
+        }
+    }
+}
+
+/**
  * The user's LLM API as saved: chat URL (see [ByokTranslator.chatUrl]), model, key ("" = none: no Authorization header,
  * for a free service), the User-Agent ("" = [ByokTranslator.defaultUserAgent]) and extra request headers. A data class:
  * a session compares the one it uses with the one saved last.

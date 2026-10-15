@@ -123,42 +123,73 @@ class Prefs(ctx: Context) {
     fun setJevKey(p: JevProvider, key: String?) =
         sp.edit().apply { if (key.isNullOrBlank()) remove("jevKey:${p.name}") else putString("jevKey:${p.name}", KeyBox.seal(key.trim())) }.apply()
 
-    /** BYOK: the user's OpenAI-compatible service. The key is sealed like the Jev keys. */
-    var byokUrl: String
-        get() = sp.getString("byokUrl", "") ?: ""
-        set(v) = sp.edit().putString("byokUrl", v.trim()).apply()
-    var byokModel: String
-        get() = sp.getString("byokModel", "") ?: ""
-        set(v) = sp.edit().putString("byokModel", v.trim()).apply()
-    var byokKey: String?
-        get() = sp.getString("byokKey", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
-        set(v) = sp.edit().apply { if (v.isNullOrBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(v.trim())) }.apply()
     /**
-     * "保存": all BYOK fields in one edit (null key = keep the saved one), plus the byokSaved marker a running session
-     * switches on. One edit, so a reader never sees the new address with the old key.
+     * BYOK: the user's OpenAI-compatible services, saved as [LlmProfile]s; the one in use is byokActive. Each one's
+     * fields are the storage names plus its suffix (the first one: the names from before). Keys are sealed like Jev's.
+     */
+    val byokProfiles: List<LlmProfile> get() = LlmProfile.all(sp.getString("byokProfiles", null))
+    val byokProfile: LlmProfile get() = byokProfiles.let { l -> l.firstOrNull { it.id == sp.getString("byokActive", "") } ?: l.first() }
+    private val sfx: String get() = byokProfile.suffix
+    val byokUrl: String get() = sp.getString("byokUrl$sfx", "") ?: ""
+    val byokModel: String get() = sp.getString("byokModel$sfx", "") ?: ""
+    val byokKey: String? get() = sp.getString("byokKey$sfx", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+    /**
+     * "保存": all fields of the profile in use in one edit (null key = keep the saved one), plus the byokSaved marker a
+     * running session switches on. One edit, so a reader never sees the new address with the old key.
      */
     fun saveByok(url: String, model: String, key: String?, userAgent: String? = null,
                  headers: List<Pair<String, String>>? = null) = sp.edit().apply {
-        putString("byokUrl", url.trim()); putString("byokModel", model.trim())
-        if (key != null) { if (key.isBlank()) remove("byokKey") else putString("byokKey", KeyBox.seal(key.trim())) }
-        if (userAgent != null) { if (userAgent.isBlank()) remove("byokUserAgent") else putString("byokUserAgent", userAgent.trim()) }
+        val s = sfx
+        putString("byokUrl$s", url.trim()); putString("byokModel$s", model.trim())
+        if (key != null) { if (key.isBlank()) remove("byokKey$s") else putString("byokKey$s", KeyBox.seal(key.trim())) }
+        if (userAgent != null) { if (userAgent.isBlank()) remove("byokUserAgent$s") else putString("byokUserAgent$s", userAgent.trim()) }
         // sealed like the key: a header may carry a second key
-        if (headers != null) { if (headers.isEmpty()) remove("byokHeaders") else putString("byokHeaders", KeyBox.seal(ByokService.storeHeaders(headers))) }
+        if (headers != null) { if (headers.isEmpty()) remove("byokHeaders$s") else putString("byokHeaders$s", KeyBox.seal(ByokService.storeHeaders(headers))) }
         putLong("byokSaved", System.nanoTime())
     }.apply()
-    val byokUserAgent: String get() = sp.getString("byokUserAgent", null).orEmpty()
+    private fun ready(s: String) =
+        ByokTranslator.chatUrl(sp.getString("byokUrl$s", "") ?: "").second != null && !sp.getString("byokModel$s", "").isNullOrEmpty()
+    /** use [p] from now on (a running session: from the next sentence, when [p] is filled in) */
+    fun useByokProfile(p: LlmProfile) = sp.edit().apply {
+        putString("byokActive", p.id)
+        if (ready(p.suffix)) putLong("byokSaved", System.nanoTime())
+    }.apply()
+    /** a new, empty profile named [name] (checked by [LlmProfile.name]), put in use */
+    fun addByokProfile(name: String): LlmProfile {
+        val list = byokProfiles
+        val p = LlmProfile(LlmProfile.newId(list), name)
+        sp.edit().putString("byokProfiles", LlmProfile.store(list + p)).putString("byokActive", p.id).apply()
+        return p
+    }
+    fun renameByokProfile(p: LlmProfile, name: String) =
+        sp.edit().putString("byokProfiles", LlmProfile.store(byokProfiles.map { if (it.id == p.id) it.copy(name = name) else it })).apply()
+    /** [p] and its fields (never the last one); the one in use: the first left takes over */
+    fun deleteByokProfile(p: LlmProfile) {
+        val left = byokProfiles.filter { it.id != p.id }.ifEmpty { return }
+        val wasActive = byokProfile.id == p.id
+        sp.edit().apply {
+            for (k in listOf("byokUrl", "byokModel", "byokKey", "byokUserAgent", "byokHeaders")) remove(k + p.suffix)
+            putString("byokProfiles", LlmProfile.store(left))
+            if (wasActive) {
+                putString("byokActive", left.first().id)
+                if (ready(left.first().suffix)) putLong("byokSaved", System.nanoTime())
+            }
+        }.apply()
+    }
+    val byokUserAgent: String get() = sp.getString("byokUserAgent$sfx", null).orEmpty()
     val byokHeaders: List<Pair<String, String>>
-        get() = ByokService.parseHeaders(sp.getString("byokHeaders", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() })
+        get() = ByokService.parseHeaders(sp.getString("byokHeaders$sfx", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() })
     /**
      * The saved service read together (one copy of the preferences), for a session building its translator; null when
      * the address is not valid. The key may be "" (a service without one).
      */
     fun byokService(): ByokService? {
         val all = sp.all
-        val url = ByokTranslator.chatUrl((all["byokUrl"] as? String).orEmpty()).second ?: return null
+        val s = LlmProfile.all(all["byokProfiles"] as? String).let { l -> l.firstOrNull { it.id == all["byokActive"] } ?: l.first() }.suffix
+        val url = ByokTranslator.chatUrl((all["byokUrl$s"] as? String).orEmpty()).second ?: return null
         fun open(k: String) = (all[k] as? String)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
-        return ByokService(url, (all["byokModel"] as? String).orEmpty(), open("byokKey").orEmpty(),
-            (all["byokUserAgent"] as? String).orEmpty(), ByokService.parseHeaders(open("byokHeaders")))
+        return ByokService(url, (all["byokModel$s"] as? String).orEmpty(), open("byokKey$s").orEmpty(),
+            (all["byokUserAgent$s"] as? String).orEmpty(), ByokService.parseHeaders(open("byokHeaders$s")))
     }
     /**
      * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and

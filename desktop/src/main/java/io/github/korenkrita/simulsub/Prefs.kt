@@ -101,9 +101,16 @@ class Prefs private constructor(private val file: File) {
     fun setJevKey(p: JevProvider, key: String?): Boolean =
         Keychain.set("jevKey:${p.name}", key?.trim()).also { if (it) put("jevKey:${p.name}" to null) }
 
-    var byokUrl: String get() = str("byokUrl").orEmpty(); set(v) = put("byokUrl" to v.trim())
-    var byokModel: String get() = str("byokModel").orEmpty(); set(v) = put("byokModel" to v.trim())
-    val byokKey: String? get() { rev.intValue; return Keychain.get("byokKey") }
+    /**
+     * BYOK: the user's OpenAI-compatible services, saved as [LlmProfile]s; the one in use is byokActive. Each one's
+     * fields are the storage names plus its suffix (the first one: the names from before). Keys in the keychain.
+     */
+    val byokProfiles: List<LlmProfile> get() = LlmProfile.all(str("byokProfiles"))
+    val byokProfile: LlmProfile get() = byokProfiles.let { l -> l.firstOrNull { it.id == str("byokActive") } ?: l.first() }
+    private val sfx: String get() = byokProfile.suffix
+    val byokUrl: String get() = str("byokUrl$sfx").orEmpty()
+    val byokModel: String get() = str("byokModel$sfx").orEmpty()
+    val byokKey: String? get() { rev.intValue; return Keychain.get("byokKey$sfx") }
     /** BYOK's fields and key change together: a running session must never pair a new key with an old address */
     private val byokLock = Any()
     /**
@@ -113,20 +120,53 @@ class Prefs private constructor(private val file: File) {
      */
     fun saveByok(url: String, model: String, key: String?, userAgent: String? = null,
                  headers: List<Pair<String, String>>? = null): Boolean = synchronized(byokLock) {
-        if (key != null && !Keychain.set("byokKey", key.trim().ifEmpty { null })) return false
-        if (headers != null && !Keychain.set("byokHeaders", if (headers.isEmpty()) null else ByokService.storeHeaders(headers))) return false
-        put("byokUrl" to url.trim(), "byokModel" to model.trim())
-        if (userAgent != null) put("byokUserAgent" to userAgent.trim().ifEmpty { null })
+        val s = sfx
+        if (key != null && !Keychain.set("byokKey$s", key.trim().ifEmpty { null })) return false
+        if (headers != null && !Keychain.set("byokHeaders$s", if (headers.isEmpty()) null else ByokService.storeHeaders(headers))) return false
+        put("byokUrl$s" to url.trim(), "byokModel$s" to model.trim())
+        if (userAgent != null) put("byokUserAgent$s" to userAgent.trim().ifEmpty { null })
         put("byokSaved" to System.nanoTime())
         true
     }
-    val byokUserAgent: String get() = str("byokUserAgent").orEmpty()
-    val byokHeaders: List<Pair<String, String>> get() { rev.intValue; return ByokService.parseHeaders(Keychain.get("byokHeaders")) }
+    private fun ready(s: String) =
+        ByokTranslator.chatUrl(str("byokUrl$s") ?: "").second != null && !str("byokModel$s").isNullOrEmpty()
+    /** use [p] from now on (a running session: from the next sentence, when [p] is filled in) */
+    fun useByokProfile(p: LlmProfile) = synchronized(byokLock) {
+        if (ready(p.suffix)) put("byokActive" to p.id, "byokSaved" to System.nanoTime()) else put("byokActive" to p.id)
+    }
+    /** a new, empty profile named [name] (checked by [LlmProfile.name]), put in use */
+    fun addByokProfile(name: String): LlmProfile = synchronized(byokLock) {
+        val list = byokProfiles
+        val p = LlmProfile(LlmProfile.newId(list), name)
+        put("byokProfiles" to LlmProfile.store(list + p), "byokActive" to p.id)
+        p
+    }
+    fun renameByokProfile(p: LlmProfile, name: String) = synchronized(byokLock) {
+        put("byokProfiles" to LlmProfile.store(byokProfiles.map { if (it.id == p.id) it.copy(name = name) else it }))
+    }
+    /** [p] and its fields (never the last one); the one in use: the first left takes over. False when the keychain refused. */
+    fun deleteByokProfile(p: LlmProfile): Boolean = synchronized(byokLock) {
+        val left = byokProfiles.filter { it.id != p.id }.ifEmpty { return false }
+        val s = p.suffix
+        if (!Keychain.set("byokKey$s", null) || !Keychain.set("byokHeaders$s", null)) return false
+        val wasActive = byokProfile.id == p.id
+        val kv = mutableListOf<Pair<String, Any?>>("byokUrl$s" to null, "byokModel$s" to null, "byokUserAgent$s" to null,
+            "byokProfiles" to LlmProfile.store(left))
+        if (wasActive) {
+            kv += "byokActive" to left.first().id
+            if (ready(left.first().suffix)) kv += "byokSaved" to System.nanoTime()
+        }
+        put(*kv.toTypedArray())
+        true
+    }
+    val byokUserAgent: String get() = str("byokUserAgent$sfx").orEmpty()
+    val byokHeaders: List<Pair<String, String>> get() { rev.intValue; return ByokService.parseHeaders(Keychain.get("byokHeaders$sfx")) }
     /** The saved service read as one (null: the address is not valid); the key may be "" (a service without one). */
     fun byokService(): ByokService? = synchronized(byokLock) {
-        val (u, m) = get { optString("byokUrl") to optString("byokModel") }
-        val url = ByokTranslator.chatUrl(u).second ?: return null
-        ByokService(url, m, Keychain.get("byokKey").orEmpty(), byokUserAgent, byokHeaders)
+        val a = str("byokActive"); val s = LlmProfile.all(str("byokProfiles")).let { l -> l.firstOrNull { it.id == a } ?: l.first() }.suffix
+        val url = ByokTranslator.chatUrl(str("byokUrl$s") ?: "").second ?: return null
+        ByokService(url, str("byokModel$s") ?: "", Keychain.get("byokKey$s").orEmpty(), str("byokUserAgent$s") ?: "",
+            ByokService.parseHeaders(Keychain.get("byokHeaders$s")))
     }
     fun byokVariant(url: String, model: String): String? = str("byokVariant:$url|$model")
     fun setByokVariant(url: String, model: String, name: String?) = put("byokVariant:$url|$model" to name)

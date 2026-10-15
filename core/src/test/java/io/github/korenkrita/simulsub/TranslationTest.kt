@@ -154,4 +154,34 @@ class TranslationTest {
         assertEquals(FIX_NOTES_GENERAL["reversal"], fixNote("reversal", Lang.JA, Target.of(Lang.EN)))
         assertEquals(null, fixNote("ok", Lang.JA, Target.ZH))
     }
+
+    @Test
+    fun llmProfilesStartAsTheOldSettingAndRoundTrip() {
+        // nothing saved yet (an update from 1.0, or a new install): the one setting there was, under the old names
+        assertEquals(listOf(LlmProfile.FIRST), LlmProfile.all(null))
+        assertEquals("", LlmProfile.FIRST.suffix)
+        val list = listOf(LlmProfile.FIRST, LlmProfile("p1700000000000", "DeepSeek"))
+        assertEquals(list, LlmProfile.all(LlmProfile.store(list)))
+        assertEquals(":p1700000000000", list[1].suffix)
+    }
+
+    @Test
+    fun llmProfilesDropWhatCannotBeAStorageName() {
+        // an id outside [a-z0-9] would end up inside a storage name or keychain account; a broken value is the first one
+        val saved = """[{"id":"a:b","name":"x"},{"id":"p1","name":"  "},{"id":"p2","name":"好"},{"id":"p2","name":"重复"}]"""
+        assertEquals(listOf(LlmProfile("p2", "好")), LlmProfile.all(saved))
+        assertEquals(listOf(LlmProfile.FIRST), LlmProfile.all("not json"))
+        assertEquals(listOf(LlmProfile.FIRST), LlmProfile.all("""[{"id":"A","name":"x"}]"""))
+    }
+
+    @Test
+    fun llmProfileNamesAreTrimmedAndUnique() {
+        val list = listOf(LlmProfile.FIRST, LlmProfile("p1", "DeepSeek"))
+        assertEquals("千问" to null, LlmProfile.name("  千问 ", list))
+        assertNull(LlmProfile.name(" ", list).first)
+        assertNull(LlmProfile.name("deepseek", list).first) // another one's, case aside
+        assertEquals("DeepSeek" to null, LlmProfile.name("DeepSeek", list, self = "p1")) // its own name again
+        assertNull(LlmProfile.name("x".repeat(LlmProfile.MAX_NAME + 1), list).first)
+        assertEquals("p6", LlmProfile.newId(listOf(LlmProfile("p5", "a")), now = 5))
+    }
 }

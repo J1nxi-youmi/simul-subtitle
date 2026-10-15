@@ -280,7 +280,7 @@ class CaptionService private constructor(private val sysaudio: File) {
             var built = make(s0, v0, wait = true)
             while (!stopping && (built == null || !order.publish(v) { true })) {
                 v = order.version()
-                val s = Snap(prefs, wantJev)
+                val s = Snap(prefs, wantJev, firstSnap.byok)
                 if (s.byok == null || s.byok.model.isEmpty()) return
                 firstSnap = s
                 built = make(s, v, wait = true)
@@ -341,7 +341,7 @@ class CaptionService private constructor(private val sysaudio: File) {
                 try {
                     val v = order.version()
                     if (v == published || stopping) return@Runnable
-                    val s = Snap(prefs, wantJev)
+                    val s = Snap(prefs, wantJev, inUse)
                     // BYOK is only switched by "保存", which checks the fields; a half-filled one keeps the current setup
                     if (s.byok == null || s.byok.model.isEmpty()) return@Runnable
                     val b = make(s, v, wait = false) ?: return@Runnable
@@ -594,14 +594,14 @@ class CaptionService private constructor(private val sysaudio: File) {
      * The settings a [Setup] is built from, read once so a setup never mixes two states of the preferences.
      * [log] leaves out the keys.
      */
-    private class Snap(prefs: Prefs, wantJev: Boolean) {
+    private class Snap(prefs: Prefs, wantJev: Boolean, fallback: ByokService? = null) {
         val scene = prefs.scene
         val source = prefs.sourceLang
         val target = prefs.targetLang
         val dedupe = prefs.dedupeJoin
         val contextN = if (prefs.contextOn) prefs.contextSentences else 0
-        // the BYOK fields from one read, so the address of one save never goes out with the key of another
-        val byok = prefs.byokService()
+        // the BYOK fields from one read; an unfilled profile in settings keeps the service already in use
+        val byok = prefs.byokService()?.takeIf { it.model.isNotEmpty() } ?: fallback
         val provider = prefs.jevProvider
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""

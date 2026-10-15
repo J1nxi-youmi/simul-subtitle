@@ -250,7 +250,10 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
         val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { java.net.URI(it).host }
         Row(Modifier.fillMaxWidth().clickable { openTranslate() }.padding(top = 10.dp, bottom = 2.dp, start = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text(if (ready) "翻译：${prefs.byokModel} · $host" else "翻译：还没填 LLM API", color = C.text2, fontSize = 14.sp,
+            Text(if (ready) {
+                val p = prefs.byokProfile.name.takeIf { prefs.byokProfiles.size > 1 }
+                "翻译：" + (if (p != null) "$p · " else "") + "${prefs.byokModel} · $host"
+            } else "翻译：还没填 LLM API", color = C.text2, fontSize = 14.sp,
                 modifier = Modifier.weight(1f), maxLines = 1)
             Text("›", color = C.muted, fontSize = 18.sp)
         }
@@ -465,7 +468,7 @@ private val byokResult = mutableStateOf<String?>(null)
 @Composable
 private fun TranslateTab() {
     val running by CaptionService.runningState
-    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
+    if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（切换配置或点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
     Group("LLM API") { Byok(running); ByokAdvanced() }
     Group("内容") {
         Label("内容类型")
@@ -585,21 +588,83 @@ private fun ByokAdvanced() {
 
 @Composable
 private fun Byok(running: Boolean) {
+    val profiles = prefs.byokProfiles
+    val active = prefs.byokProfile
+    var naming by remember { mutableStateOf<Boolean?>(null) }
+    var nameText by remember { mutableStateOf("") }
+    var nameErr by remember { mutableStateOf<String?>(null) }
+    var confirmDel by remember { mutableStateOf(false) }
+    val busy = byokTest.value != null || naming != null || confirmDel
+    Label("配置")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Dropdown(profiles.map { it.name }, profiles.indexOfFirst { it.id == active.id }.coerceAtLeast(0), enabled = !busy,
+            modifier = Modifier.weight(1f)) {
+            if (profiles[it].id != active.id) {
+                prefs.useByokProfile(profiles[it])
+                byokDraft.value = ByokDraft(); byokAdvanced.value = null
+                byokResult.value = "已切换到「${profiles[it].name}」，字幕从下一句开始用这个配置。".takeIf { running && prefs.byokReady }
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Btn("重命名", enabled = !busy) { byokAdvanced.value = null; naming = true; nameText = active.name; nameErr = null }
+        Spacer(Modifier.width(8.dp))
+        Btn("新建", enabled = !busy && profiles.size < LlmProfile.MAX_PROFILES) { byokAdvanced.value = null; naming = false; nameText = ""; nameErr = null }
+        if (profiles.size > 1) {
+            Spacer(Modifier.width(8.dp))
+            Btn("删除", danger = true, enabled = !busy) { byokAdvanced.value = null; confirmDel = true }
+        }
+    }
+    val testing = byokTest.value != null
+    naming?.let { rename ->
+        Label(if (rename) "重命名配置" else "新建配置")
+        Field(nameText, { nameText = it.take(LlmProfile.MAX_NAME); nameErr = null }, "例如 千问、DeepSeek", enabled = !testing)
+        nameErr?.let { Hint(it, C.err) }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Grow()
+            TextBtn("取消", enabled = !testing) { naming = null }
+            Btn("确定", primary = true, enabled = !testing) {
+                val (ok, e) = LlmProfile.name(nameText, profiles, self = active.id.takeIf { rename })
+                if (ok == null) { nameErr = "⚠ $e"; return@Btn }
+                if (rename) prefs.renameByokProfile(active, ok) else {
+                    prefs.addByokProfile(ok)
+                    byokDraft.value = ByokDraft(); byokAdvanced.value = null; byokResult.value = null
+                }
+                naming = null
+            }
+        }
+    }
+    if (confirmDel) {
+        Spacer(Modifier.height(8.dp))
+        Note("删除「${active.name}」？这个配置里的服务地址、模型 ID、API Key 和高级设置都会删掉。")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Grow()
+            TextBtn("取消", enabled = !testing) { confirmDel = false }
+            Btn("删除", danger = true, enabled = !testing) {
+                confirmDel = false
+                if (!prefs.deleteByokProfile(active)) {
+                    byokResult.value = "⚠ key 或请求头没能从${if (isWindows) "加密文件" else "钥匙串"}删掉，请再试一次；钥匙串要求授权时请选「允许」。"
+                    return@Btn
+                }
+                byokDraft.value = ByokDraft(); byokAdvanced.value = null
+                byokResult.value = "已切换到「${prefs.byokProfile.name}」，字幕从下一句开始用这个配置。".takeIf { running && prefs.byokReady }
+            }
+        }
+    }
+    Spacer(Modifier.height(6.dp))
     Hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
     val d = byokDraft.value
     val saved = prefs.byokKey?.takeUnless { d.clearKey }
-    val testing = byokTest.value != null
     var msg by byokResult
     Label("服务地址（OpenAI 兼容）")
-    Field(d.url, { d.url = it }, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以", enabled = !testing)
+    Field(d.url, { d.url = it }, "例如 https://api.deepseek.com，结尾有没有 /v1 都可以", enabled = !busy)
     Label("模型 ID")
-    Field(d.model, { d.model = it }, "例如 deepseek-chat", enabled = !testing)
+    Field(d.model, { d.model = it }, "例如 deepseek-chat", enabled = !busy)
     Label(when {
         saved != null -> "API Key：已保存（…${saved.takeLast(4)}）"
         d.clearKey -> "API Key：保存后清除（不需要 key 的服务可以空着）"
         else -> "API Key：没填（不需要 key 的服务可以空着）"
     })
-    Field(d.key, { d.key = it }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true, enabled = !testing)
+    Field(d.key, { d.key = it }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true, enabled = !busy)
     // save what is in the boxes; null when something is wrong (and says what)
     fun save(): String? {
         val u = d.url.trim(); val m = d.model.trim(); val k = d.key.trim()
@@ -621,15 +686,15 @@ private fun Byok(running: Boolean) {
         val extra = listOfNotNull((d.userAgent ?: prefs.byokUserAgent).ifEmpty { null }?.let { "自定义 User-Agent" },
             (d.headers ?: prefs.byokHeaders).size.takeIf { it > 0 }?.let { "$it 个请求头" },
             "未保存".takeIf { d.userAgent != null || d.headers != null }).joinToString("、")
-        TextBtn("高级设置" + if (extra.isEmpty()) "" else "（$extra）", enabled = !testing && byokAdvanced.value == null) { byokAdvanced.value = ByokAdvancedDraft(d) }
+        TextBtn("高级设置" + if (extra.isEmpty()) "" else "（$extra）", enabled = !busy && byokAdvanced.value == null) { byokAdvanced.value = ByokAdvancedDraft(d) }
         Grow()
         // running: "保存" switches the session from the next sentence (it tests a new model itself), so no test
         // (two probes would bill twice); clearing the key is a draft change like the rest, saved by 保存
-        TextBtn("清除 key", enabled = saved != null && !testing) { d.clearKey = true; d.key = "" }
-        Btn("保存", enabled = !testing) {
+        TextBtn("清除 key", enabled = saved != null && !busy) { d.clearKey = true; d.key = "" }
+        Btn("保存", enabled = !busy) {
             if (save() != null) msg = if (running) "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。" else null
         }
-        Btn(if (testing) "测试中…" else "测试连接", primary = true, enabled = !running && !testing) {
+        Btn(if (testing) "测试中…" else "测试连接", primary = true, enabled = !running && !busy) {
             val chatUrl = save() ?: return@Btn
             val m = prefs.byokModel; val service = prefs.byokService() ?: return@Btn
             val t = ByokTranslator(service, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,

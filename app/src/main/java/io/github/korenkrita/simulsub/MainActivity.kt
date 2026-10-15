@@ -237,6 +237,35 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun askProfileName(p: LlmProfile?, now: String, rename: Boolean) {
+        val input = android.widget.EditText(this).apply {
+            setText(now); setSelection(now.length); isSingleLine = true; hint = "例如 千问、DeepSeek"
+            filters = arrayOf(android.text.InputFilter.LengthFilter(LlmProfile.MAX_NAME))
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            setPadding((22 * dpx).toInt(), (8 * dpx).toInt(), (22 * dpx).toInt(), 0); addView(input)
+        }
+        val err = android.widget.TextView(this).apply {
+            textSize = 14f; setTextColor(getColor(R.color.err)); setPadding((22 * dpx).toInt(), (8 * dpx).toInt(), (22 * dpx).toInt(), 0)
+        }
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(box); addView(err) }
+        val d = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(if (rename) "重命名配置" else "新建配置")
+            .setView(outer)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定", null)
+            .create()
+        d.show()
+        d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val typed = input.text.toString()
+            val (ok, e) = LlmProfile.name(typed, prefs.byokProfiles, self = p?.id)
+            if (ok != null) {
+                if (rename) prefs.renameByokProfile(p!!, ok) else prefs.addByokProfile(ok).also { byokDraft = null; byokResult = null }
+                d.dismiss(); renderTranslate()
+            } else err.text = e
+        }
+    }
+
     /**
      * 编辑 a scene ([old]) or 新建 one (null): name, background, terms one per line. 生成术语 asks the LLM API for up to
      * the typed number of terms and only appends them (lines already there, saved or typed, stay as they are).
@@ -403,7 +432,10 @@ class MainActivity : Activity() {
     private fun renderService() {
         val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { android.net.Uri.parse(it).host }
         findViewById<TextView>(R.id.serviceText).text =
-            if (prefs.byokReady) "翻译：${prefs.byokModel} · $host" else "翻译：还没填 LLM API"
+            if (prefs.byokReady) {
+                val p = prefs.byokProfile.name.takeIf { prefs.byokProfiles.size > 1 }
+                "翻译：" + (if (p != null) "$p · " else "") + "${prefs.byokModel} · $host"
+            } else "翻译：还没填 LLM API"
         findViewById<View>(R.id.serviceRow).setOnClickListener { openTranslate() }
     }
 
@@ -723,7 +755,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         val running = CaptionService.running
         translateRunning = running
-        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
+        if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（切换配置或点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
         // -- the LLM API the captions are translated with
@@ -835,6 +867,35 @@ class MainActivity : Activity() {
 
     /** BYOK: the user's OpenAI-compatible service; URL, key, model id and a test that also finds the thinking switch. */
     private fun renderByok(box: LinearLayout, running: Boolean) {
+        val testing = byokTest != null
+        val profiles = prefs.byokProfiles
+        val active = prefs.byokProfile
+        box.addView(label("配置"))
+        box.addView(dropdown(profiles.map { it.name }, profiles.indexOfFirst { it.id == active.id }.coerceAtLeast(0), !testing) {
+            if (profiles[it].id != prefs.byokProfile.id) {
+                prefs.useByokProfile(profiles[it]); byokDraft = null
+                byokResult = "已切换到「${profiles[it].name}」，字幕从下一句开始用这个配置。".takeIf { running && prefs.byokReady }
+                main.post { renderTranslate() }
+            }
+        }.apply { contentDescription = "配置" })
+        box.addView(LinearLayout(this).apply {
+            gravity = Gravity.END
+            addView(pillButton("重命名") { askProfileName(active, active.name, rename = true) }.apply { isEnabled = !testing })
+            addView(pillButton("新建") { askProfileName(null, "", rename = false) }.apply {
+                isEnabled = !testing && profiles.size < LlmProfile.MAX_PROFILES
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
+            if (profiles.size > 1) addView(pillButton("删除") {
+                confirmDelete("删除「${active.name}」？", "这个配置里的服务地址、模型 ID、API Key 和高级设置都会删掉。") {
+                    prefs.deleteByokProfile(active); byokDraft = null
+                    byokResult = "已切换到「${prefs.byokProfile.name}」，字幕从下一句开始用这个配置。".takeIf { running && prefs.byokReady }
+                    renderTranslate()
+                }
+            }.apply {
+                isEnabled = !testing; setTextColor(getColor(R.color.err))
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dpx).toInt() })
         box.addView(hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"))
         fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
             box.addView(label(title))
@@ -878,7 +939,6 @@ class MainActivity : Activity() {
             byokDraft = null; key.setText("")
             return ByokTranslator.chatUrl(u).second
         }
-        val testing = byokTest != null
         // while a test runs the boxes are locked, so its result always belongs to what they show
         // Running: "保存" switches the session to what was saved from the next sentence (it tests a new model itself),
         // so the test button is off (two probes would bill twice) and so is clearing the key (the session needs one).

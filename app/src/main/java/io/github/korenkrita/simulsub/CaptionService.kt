@@ -465,7 +465,7 @@ class CaptionService : Service() {
             // with Jev the forced cut asks first and an "unfinished" head may grow to twice this (10 s); without Jev it
             // cuts at the default 7 s. The live log showed long waits were utterances that reached the forced cut.
             // An utterance that starts while Jev is paused (its key is missing) is cut as without Jev.
-            val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500,
+            val seg = Segmenter({ pl.submit(it) }, minFinalMs = MIN_FINAL_MS, maxHoldSilenceMs = 1_500,
                 maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
                 judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS)
@@ -803,6 +803,14 @@ class CaptionService : Service() {
         private const val JEV_WAIT_MS = 1_000
         private const val JEV_MAX_UTTERANCE_MS = 5_000
         private const val PLAIN_MAX_UTTERANCE_MS = 7_000
+        /**
+         * Below this many ms of speech a cut waits for [Segmenter.maxHoldSilenceMs] before it is sent (see
+         * Segmenter.holding), so short utterances ("はい", "えっ") used to sit ~1.1 s longer than everything else:
+         * a 15 min clip showed a median 1408 ms wait on those against 321 ms on the rest, and the same clip after
+         * this change 617 ms end to end (was 1686 ms), at the cost of ~1% of the recognized text differing.
+         * 600 has no effect: those utterances carry 400-600 ms of speech, so they still hit the hold.
+         */
+        private const val MIN_FINAL_MS = 400
         /** captions never take more than this part of the usable height, so the toolbar always fits */
         const val MAX_CAPTION_FRAC = 0.4f
 

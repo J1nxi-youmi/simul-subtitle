@@ -71,7 +71,7 @@ fun main() {
             if (job.isFinal) { check(ok) { "final ${job.segmentId} refused (overload/failure)" }; submittedFinals.add(job.segmentId) }
         }, endSilenceMs = (System.getProperty("endSilenceMs") ?: "400").toInt(),
            maxUtteranceMs = (System.getProperty("maxUtteranceMs") ?: if (judgeEnds) "5000" else "7000").toInt(), // as the app
-           minFinalMs = (System.getProperty("minFinalMs") ?: "1200").toInt(),
+           minFinalMs = (System.getProperty("minFinalMs") ?: "400").toInt(), // as the app
            maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
            hintWaitMs = if (judgeEnds) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
            holdHint = p::holdHint)

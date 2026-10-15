@@ -177,6 +177,10 @@ class Pipeline(
         segSetup.remove(seg)
         // a segment that ended without a final (empty, dropped by stop) would otherwise stay: keep the table bounded
         if (segSetup.size > 64) segSetup.keys.removeIf { it < seg - 32 }
+        // the draft sent for this segment is done with it (see worthSendingDraft); a segment that never got a final
+        // stays behind, so this table is bounded too
+        sentDraft.remove(seg)
+        if (sentDraft.size > 64) sentDraft.keys.removeIf { it < seg - 32 }
     }
 
     /**
@@ -314,6 +318,8 @@ class Pipeline(
 
     /** Raw recognitions of this segment's drafts (audio length, text), newest last; asr thread only. */
     private val segDrafts = HashMap<Long, MutableList<Pair<Int, String>>>()
+    /** The draft last sent to the translator per segment (see [worthSendingDraft]); asr thread only. */
+    private val sentDraft = HashMap<Long, String>()
 
     /**
      * ReazonSpeech sometimes drops everything before an internal pause when the same utterance is recognized again
@@ -373,15 +379,41 @@ class Pipeline(
                 // A draft that already ran is kept even if a newer draft is queued: on a slow phone every
                 // draft would otherwise be superseded before it reaches MT and nothing would be shown.
                 if (!q.job.isFinal && ja.isEmpty()) return@synchronized
-                mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 // a sentence-end candidate was recognized for Jev; it is only translated if drafts are wanted now
                 if (!q.job.isFinal && !drafts()) return@synchronized
+                // A draft that barely grew since the one already sent would translate to nearly the same line: skip it
+                // and let the newer text ride along with the next one (see DRAFT_MIN_NEW_CHARS). Only here, after the
+                // checks above and before the queue is touched: a skipped draft must not drop the one already queued,
+                // and a draft that was never translated must not become what the next one is measured against.
+                // A final always goes through.
+                if (!q.job.isFinal && !worthSendingDraft(q.job.segmentId, ja)) return@synchronized
+                mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 mtQueue.addLast(MtJob(q, ja, start, end, setup))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
             }
             // the final carries its setup on (MtJob): the segment needs no lookup any more
             if (q.job.isFinal) forget(q.job.segmentId)
         }
+    }
+
+    /**
+     * Whether this draft is worth a translation call (see [DRAFT_MIN_NEW_CHARS]). A draft the recognizer rewrote
+     * without growing it counts as new all the same: the translator would then have to work with different text.
+     * Called on the asr thread.
+     */
+    private fun worthSendingDraft(segmentId: Long, ja: String): Boolean {
+        val lastText = sentDraft.put(segmentId, ja)
+        return lastText == null || newChars(lastText, ja) >= DRAFT_MIN_NEW_CHARS
+    }
+
+    /**
+     * Characters of [b] that are not in [a]. A draft extends the one before it (measured prefix overlap 0.88), so this
+     * is what the translator would newly have to work with, not the length difference (a rewrite can shorten the text).
+     */
+    private fun newChars(a: String, b: String): Int {
+        val seen = HashSet<Char>(a.length * 2)
+        for (c in a) seen.add(c)
+        return b.count { it !in seen }
     }
 
     private fun judgeLoop() {
@@ -637,6 +669,16 @@ class Pipeline(
         /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
         const val LOST_MIN_SAMPLES = 24_000
         const val LOST_MIN_CHARS = 5
+        /**
+         * A draft is only translated when the recognition grew by this many characters. Measured on a 15 min VTuber
+         * clip: one sentence is recognized 4.5 times on average and its text is only ~2 characters longer than the one
+         * before (54% of drafts grew by <=2, 71% by <=5), so most calls repeat work that is already on screen. One call
+         * costs ~900 ms, more than the [Segmenter]'s 700 ms between drafts, so the translator ran at 76% occupancy and
+         * queued up. This threshold alone drops 29% of the calls; no time-based gate is added, because the single MT
+         * thread and its queue already drop superseded drafts when it is busy, while a time gate would only make an
+         * idle translator wait. Finals are never skipped.
+         */
+        const val DRAFT_MIN_NEW_CHARS = 5
         /**
          * A suspected loss is real when the whole result and the separately recognized new audio share at least this
          * much of each (by characters in order). From one Mac A/B of two VTuber clips, not tuned on a reference.

@@ -94,7 +94,19 @@ class PipelineTest {
         val out = Collections.synchronizedList(ArrayList<Caption>())
         val done = CountDownLatch(1)
         val mt = FakeMt(900)
-        val p = Pipeline(FakeAsr(), mt, { out.add(it); if (it.isFinal) done.countDown() })
+        // each draft is long enough to pass the growth gate (Pipeline.DRAFT_MIN_NEW_CHARS): a recognition that only
+        // grew by a couple of characters would rightly not be translated, and this test is about the queue
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                1 -> "今日はゲーム配信を始めます"
+                2 -> "よろしくお願いしますみなさんこんばんは"
+                3 -> "コメントありがとうございますうれしいです"
+                4 -> "スパチャありがとうございますだいすきです"
+                5 -> "また明日も配信するのでぜひ来てくださいね"
+                else -> "今日はゲーム配信を始めますよろしくお願いしますみなさんこんばんは"
+            }
+        }
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
         p.start()
         for (rev in 1..5) { p.submit(job(1, rev, false, rev)); Thread.sleep(700) }
         val draftsBeforeFinal = out.count { !it.isFinal }
@@ -104,7 +116,7 @@ class PipelineTest {
         assertTrue("drafts shown while talking: $draftsBeforeFinal", draftsBeforeFinal >= 2)
         // queued stale drafts were merged: fewer MT calls than submitted drafts
         assertTrue("MT calls ${mt.calls}", mt.calls.size < 6)
-        assertEquals("ja6", out.last().ja)
+        assertEquals("今日はゲーム配信を始めますよろしくお願いしますみなさんこんばんは", out.last().ja)
     }
 
     /** Reviewer repro: ASR slower than the draft interval, a newer draft is always queued when one finishes. */
@@ -113,8 +125,17 @@ class PipelineTest {
         val out = Collections.synchronizedList(ArrayList<Caption>())
         val done = CountDownLatch(1)
         val gate = java.util.concurrent.Semaphore(0)
+        // the drafts grow like real ones (see Pipeline.DRAFT_MIN_NEW_CHARS): a recognition a couple of characters
+        // longer than the last would rightly not be translated, and this test is about what the queue does
         val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String { gate.acquire(); return "ja${samples.size}" }
+            override fun recognize(samples: FloatArray): String { gate.acquire(); return when (samples.size) {
+                1 -> "あ"
+                2 -> "今日はゲーム配信"
+                3 -> "よろしくお願いします"
+                4 -> "コメントありがとう"
+                5 -> "スパチャもありがとうございます"
+                else -> "スパチャもありがとうございますみなさん"
+            } }
         }
         val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
         p.start()
@@ -130,6 +151,41 @@ class PipelineTest {
         assertTrue(done.await(3, TimeUnit.SECONDS))
         p.stop(); p.awaitStopped()
         assertTrue("drafts shown: ${out.filter { !it.isFinal }.map { it.revision }}", out.count { !it.isFinal } >= 3)
+    }
+
+    /**
+     * A draft the recognizer only grew by a character or two would translate to the line already on screen (measured:
+     * 54% of drafts grew by <=2 characters, 71% by <=5), so it is not translated at all (Pipeline.DRAFT_MIN_NEW_CHARS).
+     * The next draft that does grow is translated, and a final is never skipped.
+     */
+    @Test
+    fun aDraftThatBarelyGrewIsNotTranslated() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                1 -> "今日はゲーム配信を始めます"
+                2 -> "今日はゲーム配信を始めますよ" // +2: not worth a call
+                3 -> "今日はゲーム配信を始めますよろしくお願いします" // grows: translated
+                else -> "今日はゲーム配信を始めますよろしくお願いしますみなさん"
+            }
+        }
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, false, 1))
+        val deadline = monoMs() + 2_000
+        while (out.none { !it.isFinal } && monoMs() < deadline) Thread.sleep(5)
+        val afterFirst = mt.calls.size // the first draft of a segment is always translated
+        p.submit(job(1, 2, false, 2)); Thread.sleep(80)
+        assertEquals("a draft that grew by 2 characters was translated", afterFirst, mt.calls.size)
+        p.submit(job(1, 3, false, 3))
+        while (mt.calls.size <= afterFirst && monoMs() < deadline) Thread.sleep(5)
+        assertEquals("the draft that grew was translated", afterFirst + 1, mt.calls.size)
+        p.submit(job(1, 4, true, 4))
+        assertTrue(done.await(3, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertTrue("the final was translated", mt.calls.any { source(it).startsWith("今日はゲーム配信を始めますよろしくお願いしますみなさん") })
     }
 
     @Test

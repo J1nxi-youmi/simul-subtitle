@@ -663,15 +663,17 @@ class ByokTranslator(
         fun variant(name: String?) = THINKING_OFF.firstOrNull { it.name == name }
 
         /**
-         * The chat completions URL for what the user typed: https only (the key must not travel in clear text), no
-         * user info, query or fragment; a path ending in /v1 (or /v1/chat/completions) is used as is, otherwise /v1 is
-         * added. Returns (error text, null) or (null, url).
+         * The chat completions URL for what the user typed: http or https (any other scheme is refused), no user info,
+         * query or fragment; a path ending in /v1 (or /v1/chat/completions) is used as is, otherwise /v1 is added. The
+         * scheme the user typed is kept, so a local or LAN endpoint over plain http works, but a key sent over http
+         * travels in clear text. Returns (error text, null) or (null, url).
          */
         fun chatUrl(input: String): Pair<String?, String?> {
             val s = input.trim()
             if (s.isEmpty()) return "还没填地址" to null
             val u = runCatching { java.net.URI(s) }.getOrNull() ?: return "地址格式不对" to null
-            if (u.scheme?.lowercase() != "https") return "地址要以 https:// 开头" to null
+            val scheme = u.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return "地址要以 http:// 或 https:// 开头" to null
             if (u.host.isNullOrEmpty()) return "地址里没有域名" to null
             if (u.rawUserInfo != null || u.rawQuery != null || u.rawFragment != null) return "地址里不要带用户名、?参数 或 #" to null
             if (u.port == 0 || u.port > 65535) return "端口号不对" to null
@@ -679,7 +681,7 @@ class ByokTranslator(
             path = path.removeSuffix("/chat/completions")
             if (!path.endsWith("/v1")) path += "/v1"
             val port = if (u.port > 0) ":${u.port}" else ""
-            val out = "https://${u.host.lowercase()}$port$path/chat/completions"
+            val out = "$scheme://${u.host.lowercase()}$port$path/chat/completions"
             // what OkHttp will be given: it must accept it too (IPv6 brackets, odd characters, ...)
             if (okhttp3.HttpUrl.Companion.run { out.toHttpUrlOrNull() } == null) return "地址格式不对" to null
             return null to out

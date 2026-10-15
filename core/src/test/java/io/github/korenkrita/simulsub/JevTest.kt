@@ -620,14 +620,23 @@ class JevTest {
     }
 
     @Test
-    fun byokUrlsGetV1OnceAndOnlyHttps() {
+    fun byokUrlsGetV1OnceAndKeepTheScheme() {
         val ok = "https://api.example.com/v1/chat/completions"
         for (u in listOf("https://api.example.com", "https://api.example.com/", "https://api.example.com/v1", "https://API.example.com/v1/",
             "https://api.example.com/v1/chat/completions")) assertEquals(u, ok, ByokTranslator.chatUrl(u).second)
         assertEquals("https://h.io:8443/api/openai/v1/chat/completions", ByokTranslator.chatUrl("https://h.io:8443/api/openai").second)
-        for (u in listOf("", "http://api.example.com", "https://u:p@h.io", "https://h.io/v1?x=1", "https://h.io/#a", "api.example.com"))
+        // plain http is allowed too (a local or LAN endpoint), and the typed scheme comes back
+        val plain = "http://192.168.1.7:8000/v1/chat/completions"
+        for (u in listOf("http://192.168.1.7:8000", "http://192.168.1.7:8000/", "http://192.168.1.7:8000/v1", "HTTP://192.168.1.7:8000/v1/chat/completions"))
+            assertEquals(u, plain, ByokTranslator.chatUrl(u).second)
+        // an http address is not silently upgraded to https
+        assertEquals("http://api.example.com/v1/chat/completions", ByokTranslator.chatUrl("http://api.example.com").second)
+        for (u in listOf("", "https://u:p@h.io", "https://h.io/v1?x=1", "https://h.io/#a", "api.example.com"))
             assertNull(u, ByokTranslator.chatUrl(u).second)
         for (u in listOf("https://h.io:65536", "https://h.io:0")) assertNull(u, ByokTranslator.chatUrl(u).second)
+        // any other scheme is refused, and the message names both that are accepted
+        for (u in listOf("ftp://h.io", "file:///etc/hosts", "ws://h.io", "h.io"))
+            assertTrue(u, ByokTranslator.chatUrl(u).first!!.contains("http:// 或 https://"))
         assertEquals("https://[::1]:8443/v1/chat/completions", ByokTranslator.chatUrl("HTTPS://[::1]:8443/v1/").second)
     }
 

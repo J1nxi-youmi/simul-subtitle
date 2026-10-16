@@ -49,7 +49,62 @@ data class Timing(
     val checkMs: Long = 0,
 )
 
-interface Asr { fun recognize(samples: FloatArray): String }
+interface Asr {
+    fun recognize(samples: FloatArray): String
+    /** The text with when each piece of it was said; an engine that cannot tell gives no pieces. */
+    fun recognizeTimed(samples: FloatArray): Recognition = Recognition(recognize(samples), null)
+}
+
+/** A piece of recognized text and when it starts, in seconds from the start of the recognized audio. */
+class Piece(val text: String, val t: Float)
+
+/** [pieces] joined are [text]; null: no timings (the loss repair is then off for this recognition). */
+class Recognition(val text: String, val pieces: List<Piece>?) {
+    companion object {
+        /**
+         * sherpa-onnx's [tokens] and [times] mapped onto its [text]; [pad] seconds of silence were put before the
+         * audio. A Japanese token is byte-level BPE (one character per UTF-8 byte of the text, a character can be split
+         * over two tokens) and an English one is plain text; both start with "▁" where a space may be. A token that
+         * does not fit the text gives no pieces. The first token comes at frame 0 whatever its real time (it would put
+         * a pause after it that is not there), so it is given a time just before the second one.
+         */
+        fun of(text: String, tokens: Array<String>, times: FloatArray, pad: Float): Recognition {
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            // the character where each byte's code point starts: a byte offset inside a character rounds down to it,
+            // so a token with only the start of a character gets none of it
+            val charAt = IntArray(bytes.size + 1)
+            var b = 0
+            var ch = 0
+            while (ch < text.length) {
+                val cp = text.codePointAt(ch)
+                repeat(String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size) { charAt[b++] = ch }
+                ch += Character.charCount(cp)
+            }
+            charAt[bytes.size] = text.length
+            if (tokens.size != times.size) return Recognition(text, null)
+            val pieces = ArrayList<Piece>(tokens.size)
+            var pos = 0
+            var start = 0
+            // a piece per whole character run, at the time of the token its first byte came in
+            var startT = Float.NaN
+            for ((i, tok) in tokens.withIndex()) {
+                if (tok.startsWith("▁") && pos < bytes.size && bytes[pos] == ' '.code.toByte()) pos++
+                pos += tok.length - tok.count { it == '▁' }
+                if (pos > bytes.size) return Recognition(text, null)
+                if (startT.isNaN()) startT = times[i]
+                val end = charAt[pos]
+                if (end == start) continue
+                pieces += Piece(text.substring(start, end), startT - pad)
+                start = end
+                // the next character already began in this token (its first bytes are here)
+                startT = if (pos < bytes.size && (bytes[pos].toInt() and 0xC0) == 0x80) times[i] else Float.NaN
+            }
+            if (pos != bytes.size) return Recognition(text, null)
+            if (pieces.size > 1 && pieces[0].t <= -pad + 0.05f) pieces[0] = Piece(pieces[0].text, pieces[1].t - 0.1f)
+            return Recognition(text, pieces)
+        }
+    }
+}
 
 interface Mt {
     /** One generation for a complete prompt; null when cancelled (only used on stop) or when nothing ran. */
@@ -124,7 +179,7 @@ class Pipeline(
     private val judgeEnds: Boolean = true,
     /**
      * Where a kept draft and the recognition of the audio after it are joined, drop a repeat of the kept end at the
-     * start of the new part (see [joinWithoutRepeat]). Off by default: a repeat the speaker really said may be dropped.
+     * start of the new part (see [repairLoss]). Off by default: a repeat the speaker really said may be dropped.
      */
     dedupeJoin: Boolean = false,
     /** Finished sentences given to the translator as context (the prompt's 【前文】); 0 = none. */
@@ -316,42 +371,66 @@ class Pipeline(
         return null
     }
 
-    /** Raw recognitions of this segment's drafts (audio length, text), newest last; asr thread only. */
-    private val segDrafts = HashMap<Long, MutableList<Pair<Int, String>>>()
+    /** A draft as shown: its audio, its text and that text in timed pieces (after any repair; null: no timings). */
+    private class Shown(val samples: FloatArray, val text: String, val pieces: List<Piece>?)
+    /** Per segment, its drafts as shown, newest last (see [carried] for the first); asr thread only. */
+    private val segDrafts = HashMap<Long, MutableList<Shown>>()
+    /** Samples in each segment's final; asr thread only. */
+    private val finalSamples = HashMap<Long, Int>()
     /** The draft last sent to the translator per segment (see [worthSendingDraft]); asr thread only. */
     private val sentDraft = HashMap<Long, String>()
 
     /**
      * ReazonSpeech sometimes drops everything before an internal pause when the same utterance is recognized again
      * with more audio (measured: "スパチありがとうございま" at 1.6 s became "いや相当でかいと思うけど" at 4.8 s; the audio is
-     * an exact prefix, fp32 does the same). If the newest earlier draft that is long enough to be real content is
-     * mostly missing from the new result, the audio after it is recognized on its own. Only when the new result is
-     * then little more than that part (the start really is gone) is the draft's text kept and joined with it; a new
-     * result that holds much more is a correction of the draft, not a loss, and is used as it is.
+     * an exact prefix, fp32 does the same). The timings show it: the new result has no words where the newest draft
+     * had some, and [repairLoss] puts the draft's words back there. Replayed on a 15 min VTuber clip (every ASR job
+     * recognized again offline): drafts' words missing from every final went from 10 segments (124 characters) with
+     * the check this replaces (recognize the audio after the draft on its own, compare) to 4 (47), of which 3 only
+     * differ in spelling; 21 of 199 finals changed, about 17 of them by words brought back.
      */
     private fun recognizeKeepingLostDraft(job: AsrJob, setup: Setup): String {
-        val whole = asr.recognize(job.samples).trim()
-        val hist = segDrafts.getOrPut(job.segmentId) { ArrayList() }
+        val r = asr.recognizeTimed(job.samples)
+        val whole = r.text.trim()
+        val hist = segDrafts.getOrPut(job.segmentId) { carried(job) }
         segDrafts.keys.removeIf { it < job.segmentId - 4 }
-        // only the newest eligible draft counts: an older one it already replaced is not brought back
-        val last = hist.lastOrNull { (n, t) -> n < job.samples.size && n >= LOST_MIN_SAMPLES && t.length >= LOST_MIN_CHARS }
-        val lost = last?.takeIf { keptRatio(it.second, whole) < 0.5 }
-        // a stopped pipeline must not start another native decode (stop waits for it)
-        val text = if (lost == null || !running) whole else {
-            val rest = job.samples.copyOfRange(lost.first, job.samples.size)
-            val tail = if (rest.size >= sampleRate / 5) asr.recognize(rest).trim() else ""
-            // measured on two VTuber clips: a draft repaired once became the reference, and later whole results that
-            // corrected it ("そうそう" for its "祖父") were taken for losses too, so the old text reached the final
-            val common = lcsLength(whole, tail)
-            val real = tail.isNotEmpty() && common >= LOST_TAIL_SHARE * whole.length && common >= LOST_TAIL_SHARE * tail.length
-            log(mapOf("ev" to if (real) "asr_keep" else "asr_check", "seg" to job.segmentId, "rev" to job.revision,
-                "whole" to whole, "kept" to lost.second, "kept_samples" to lost.first, "tail" to tail))
-            if (!real) whole
-            else if (setup.dedupeJoin) joinWithoutRepeat(lost.second, tail, whole) else join(lost.second, tail)
-        }
-        // the history holds what was shown, so a second loss keeps the text an earlier repair saved
-        if (!job.isFinal) hist += job.samples.size to text
+        finalSamples.keys.removeIf { it < job.segmentId - 4 }
+        // only the newest draft counts, also one without timings (then nothing is repaired): an older one it already
+        // replaced is not brought back. Its words past the end of this audio are not (a final may end before a draft).
+        val audioSec = job.samples.size.toFloat() / sampleRate
+        val last = hist.lastOrNull { it.text.count { c -> !c.isWhitespace() } >= LOST_MIN_CHARS }
+        val kept = last?.pieces?.filter { it.t < audioSec }
+        val fixed = if (r.pieces == null || kept == null) null
+            else repairLoss(r.pieces, kept, audioSec, setup.dedupeJoin)
+        val text = fixed?.let { textOf(it) } ?: whole
+        if (fixed != null) log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
+            "kept" to textOf(kept!!), "carried" to last!!.samples.isEmpty(), "text" to text))
+        // the history holds what was shown, so a second loss keeps the words an earlier repair brought back
+        if (job.isFinal) finalSamples[job.segmentId] = job.samples.size
+        else hist += Shown(job.samples, text, fixed ?: r.pieces)
         return text
+    }
+
+    /**
+     * The [Segmenter] may end a segment at an earlier pause and start the next one with the rest of its audio. The
+     * first recognition of that audio can drop its start too, with no draft of the new segment to bring it back: the
+     * previous segment's last draft, from that pause on and shifted to the new start, is the new segment's first
+     * (only when the new audio really starts with the previous draft's rest). Replayed: brought back 2 sentences.
+     */
+    private fun carried(job: AsrJob): MutableList<Shown> {
+        val list = ArrayList<Shown>()
+        val cut = finalSamples[job.segmentId - 1] ?: return list
+        // the last draft with audio past the cut (a later, shorter one may follow a forced cut)
+        val prev = segDrafts[job.segmentId - 1]?.lastOrNull { it.samples.size >= cut + sampleRate / 10 } ?: return list
+        val pieces = prev.pieces ?: return list
+        val k = minOf(prev.samples.size - cut, job.samples.size)
+        if (cut <= 0 || k < sampleRate / 10) return list
+        for (i in 0 until k) if (prev.samples[cut + i] != job.samples[i]) return list
+        val off = cut.toFloat() / sampleRate
+        // an empty audio: never the previous draft of a following segment
+        val rest = pieces.filter { it.t >= off + 0.05f }.map { Piece(it.text, it.t - off) }
+        list += Shown(FloatArray(0), textOf(rest), rest)
+        return list
     }
 
     private fun asrLoop() {
@@ -666,8 +745,7 @@ class Pipeline(
         const val UNFINISHED_THRESHOLD = 0.65
         /** Below this Jev confidence an error class is not acted on (untested guess). */
         const val FIX_MIN_CONFIDENCE = 0.6
-        /** a draft that may be kept (see recognizeKeepingLostDraft): at least 1.5 s of audio and 5 characters */
-        const val LOST_MIN_SAMPLES = 24_000
+        /** a draft whose words may be brought back (see recognizeKeepingLostDraft): at least 5 characters */
         const val LOST_MIN_CHARS = 5
         /**
          * A draft is only translated when the recognition grew by this many characters. Measured on a 15 min VTuber
@@ -679,46 +757,103 @@ class Pipeline(
          * idle translator wait. Finals are never skipped.
          */
         const val DRAFT_MIN_NEW_CHARS = 5
-        /**
-         * A suspected loss is real when the whole result and the separately recognized new audio share at least this
-         * much of each (by characters in order). From one Mac A/B of two VTuber clips, not tuned on a reference.
-         */
-        const val LOST_TAIL_SHARE = 0.7
         /** finished sentences given to the translator as context (the prompt's 【前文】): default, and the most offered */
         const val PREVIOUS_SENTENCES = 2
         const val MAX_PREVIOUS_SENTENCES = 5
-        /**
-         * [kept] + [tail], without the start of [tail] when it repeats the end of [kept] (at least [MIN_REPEAT] chars)
-         * and the recognition of the whole audio ([whole]) has that piece at most once. A heuristic: [whole] may itself
-         * miss words, so a real repeat can be dropped; with the piece twice in [whole] both are kept.
-         * A piece with Latin letters (English) must be whole words, in [kept], [tail] and each counted occurrence in
-         * [whole] ("PLANET" + "NETWORK" shares "NET" but no word); Japanese pieces match as before.
-         */
-        fun joinWithoutRepeat(kept: String, tail: String, whole: String): String {
-            for (n in minOf(kept.length, tail.length) downTo MIN_REPEAT) {
-                val piece = tail.substring(0, n)
-                if (!kept.endsWith(piece)) continue
-                val words = latin(piece)
-                if (words && !(boundary(kept, kept.length - n) && boundary(tail, n))) continue
-                val inWhole = (0..whole.length - n).count { i -> whole.startsWith(piece, i) && (!words || boundary(whole, i) && boundary(whole, i + n)) }
-                // Latin: the separator after the dropped words is rebuilt by join(); Japanese keeps the rest exactly as before
-                val rest = tail.substring(n).let { if (words) it.trimStart() else it }
-                return if (inWhole >= 2) join(kept, tail) else join(kept, rest)
-            }
-            return join(kept, tail)
+        /** a stretch of the new result without words this long (s) where the draft had words is a loss */
+        private const val LOSS_GAP_S = 0.6f
+        /** fewer of the draft's characters in such a stretch are not brought back */
+        private const val LOSS_MIN_CHARS = 4
+        /** the draft's words this close (s) to the new result's words around the stretch belong to them */
+        private const val LOSS_EDGE_S = 0.1f
+        /** the leading stretch ends this far (s) before the new result's second piece (its first one's time is a guess) */
+        private const val LOSS_LEAD_EDGE_S = 0.25f
+
+        fun chars(ps: List<Piece>) = ps.sumOf { it.text.trim().length }
+        fun textOf(ps: List<Piece>) = ps.joinToString("") { it.text }.trim()
+        /** at least half of [words]' characters are in [text], in order (spaces aside) */
+        private fun covered(words: String, text: String): Boolean {
+            val w = words.filterNot { it.isWhitespace() }
+            return 2 * lcsLength(w, text.filterNot { it.isWhitespace() }) >= w.length
         }
-        const val MIN_REPEAT = 3
+
+        /**
+         * [whole] with the words of [draft] (the newest draft, times on the same audio) put back where [whole] has
+         * none for at least [LOSS_GAP_S], [draft] has at least [LOSS_MIN_CHARS] characters and less than half of them
+         * are in [whole] around there; null when nothing is missing. Before the second piece of [whole] (its first
+         * one's time is a guess) the draft's words go first as one block, and [whole]'s first piece is left out when it
+         * repeats the block's first or last characters (anywhere in it when it is the only piece); with [dedupe] (the
+         * user's "drop repeats at a join"), the block's end is left out when [whole] starts with the same Japanese
+         * words recognized again ("火の石って" before "火の意志って"). After the last piece nothing is added: the drop is of
+         * what came before a pause, and a draft's last words are often reworded. Japanese and English alike: a space is
+         * put where two runs of Latin words meet.
+         */
+        fun repairLoss(whole: List<Piece>, draft: List<Piece>, audioSec: Float, dedupe: Boolean): List<Piece>? {
+            if (whole.isEmpty()) return null
+            val out = ArrayList<Piece>()
+            var changed = false
+            // with one piece only, the whole audio (to the end of the padding) is the leading stretch
+            val t1 = if (whole.size >= 2) whole[1].t else audioSec + PAD_S
+            val lead = draft.filter { it.t < t1 - LOSS_LEAD_EDGE_S }.toMutableList()
+            var rest = whole
+            val head = textOf(lead)
+            // a stretch is only lost when its words are not in [whole] after all (the first piece's time is a guess,
+            // and an unchanged long first word spans the stretch): half of them in [whole]'s words up to the gap's
+            // length after the block's last one is no loss
+            if (chars(lead) >= LOSS_MIN_CHARS && t1 + PAD_S >= LOSS_GAP_S &&
+                !covered(head, textOf(whole.filter { it.t < lead.last().t + LOSS_GAP_S }))) {
+                val first = whole[0].text.trim()
+                val repeated = if (whole.size == 1) first in head else first in head.take(2) || first in head.takeLast(2)
+                if (first.isNotEmpty() && repeated) rest = whole.drop(1)
+                // Latin words are not matched letter by letter ("THERE" is no repeat of "HERE")
+                if (dedupe && !latin(head) && !latin(textOf(rest))) {
+                    val rt = textOf(rest)
+                    for (k in minOf(head.length, rt.length, 10) downTo 1) {
+                        val end = head.takeLast(k)
+                        if (end[0] != rt[0] || (k - 1..k + 1).none { j -> j in 1..rt.length &&
+                                lcsLength(end, rt.take(j)) >= maxOf(minOf(k, 2), Math.round(0.7 * maxOf(k, j)).toInt()) }) continue
+                        var dropped = 0
+                        while (lead.isNotEmpty() && dropped < k) dropped += lead.removeAt(lead.size - 1).text.trim().length
+                        break
+                    }
+                }
+                if (lead.isEmpty()) rest = whole
+                else { glue(out, lead); changed = true }
+            }
+            // only the pieces of [whole] after its first one have known times
+            val skipped = whole.size - rest.size
+            var meet = changed
+            for ((i, p) in rest.withIndex()) {
+                if (meet) glue(out, listOf(p)) else out += p
+                meet = false
+                val next = rest.getOrNull(i + 1) ?: break
+                if (i + skipped < 1 || next.t - p.t < LOSS_GAP_S) continue
+                val miss = draft.filter { it.t > p.t + LOSS_EDGE_S && it.t < next.t - LOSS_EDGE_S }
+                if (chars(miss) < LOSS_MIN_CHARS || covered(textOf(miss), p.text + next.text)) continue
+                glue(out, miss)
+                changed = true
+                meet = true
+            }
+            return if (changed) out else null
+        }
+
+        /** [add] after [to], with a space at the meeting point where two runs of Latin words meet */
+        private fun glue(to: MutableList<Piece>, add: List<Piece>) {
+            if (add.isEmpty()) return
+            val a = to.lastOrNull()?.text ?: ""
+            val b = add[0].text
+            val spaced = a.isNotEmpty() && join(a, b).length > a.length + b.length
+            to += if (spaced) Piece(" $b", add[0].t) else add[0]
+            to += add.drop(1)
+        }
+        /** the silence put before and after the audio for recognition (see the engines' recognize) */
+        private const val PAD_S = 0.3f
 
         /** a letter of the Latin (incl. full-width), Cyrillic or Greek script: text whose words are separated by spaces */
         private fun spacedLetter(c: Char) = c.isLetter() && Character.UnicodeScript.of(c.code).let {
             it == Character.UnicodeScript.LATIN || it == Character.UnicodeScript.CYRILLIC || it == Character.UnicodeScript.GREEK
         }
         private fun latin(s: String) = s.any(::spacedLetter)
-        /** no word character on both sides of position [i] */
-        private fun boundary(s: String, i: Int) = i <= 0 || i >= s.length || !word(s, i - 1) || !word(s, i)
-        /** a word character; an apostrophe inside a word (CAN'T, DON’T, MP3'S) is part of it */
-        private fun word(s: String, i: Int) = s[i].isLetterOrDigit() ||
-            (s[i] == '\'' || s[i] == '’') && i > 0 && i < s.length - 1 && s[i - 1].isLetterOrDigit() && s[i + 1].isLetterOrDigit()
         /**
          * Latin-script text is joined with a space when neither side of the join is CJK (or already whitespace), so
          * "THANK YOU." + "SO" gets one; Japanese, also with a Latin word in it ("SC" + "です"), is joined directly.
@@ -732,8 +867,6 @@ class Pipeline(
         /** a character of text written without spaces: anything at or above the CJK ranges except spaced letters (full-width Latin) */
         private fun cjk(c: Char) = c.code >= 0x2E80 && !spacedLetter(c)
 
-        /** share of [a]'s characters found, in order, in [b] */
-        fun keptRatio(a: String, b: String): Double = lcsLength(a, b).toDouble() / maxOf(a.length, 1)
         /** longest common subsequence of [a] and [b]; strings are a sentence long */
         fun lcsLength(a: String, b: String): Int {
             val dp = IntArray(b.length + 1)

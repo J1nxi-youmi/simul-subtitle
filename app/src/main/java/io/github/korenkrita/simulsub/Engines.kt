@@ -36,14 +36,17 @@ class SherpaAsr(assets: AssetManager, threads: Int) : Asr {
         ),
     )
 
-    override fun recognize(samples: FloatArray): String {
+    override fun recognize(samples: FloatArray): String = recognizeTimed(samples).text
+
+    override fun recognizeTimed(samples: FloatArray): Recognition {
         val s = rec.createStream()
         try {
             // ReazonSpeech drops the first word when speech starts right at sample 0
             // (measured: すみません/そんな/まっすぐ/おじいさん lost). 0.3 s of silence on both ends fixes it.
             s.acceptWaveform(padded(samples), 16_000)
             rec.decode(s)
-            return rec.getResult(s).text
+            val r = rec.getResult(s)
+            return Recognition.of(r.text, r.tokens, r.timestamps, PAD / 16_000f)
         } finally {
             s.release()
         }

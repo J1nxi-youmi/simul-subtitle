@@ -17,13 +17,16 @@ class SherpaAsr(root: File, threads: Int) : Asr {
         .setTokens(File(root, "asr/tokens.txt").path).setNumThreads(threads).setModelType("transducer").build())
         .setDecodingMethod("greedy_search").build())
 
-    override fun recognize(samples: FloatArray): String {
+    override fun recognize(samples: FloatArray): String = recognizeTimed(samples).text
+
+    override fun recognizeTimed(samples: FloatArray): Recognition {
         val s = rec.createStream()
         try {
             // 0.3 s of silence on both sides, as on the phone: ReazonSpeech drops a word at the very edge without it
             s.acceptWaveform(FloatArray(samples.size + 2 * PAD).also { System.arraycopy(samples, 0, it, PAD, samples.size) }, 16_000)
             rec.decode(s)
-            return rec.getResult(s).text
+            val r = rec.getResult(s)
+            return Recognition.of(r.text, r.tokens, r.timestamps, PAD / 16_000f)
         } finally { s.release() }
     }
 

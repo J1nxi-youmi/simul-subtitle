@@ -568,62 +568,92 @@ class PipelineTest {
     }
 
     @Test
-    fun joinWithoutRepeatDropsOnlyARepeatTheWholeRecognitionDoesNotHave() {
-        // from the live log: the join recognized the end of the kept draft again
-        assertEquals("今日も一日お疲れさまでしたいただきます",
-            Pipeline.joinWithoutRepeat("今日も一日お疲れさまでした", "お疲れさまでしたいただきます", "え皆さんもね一日お疲れさまでした"))
-        // the whole recognition also has it twice: keep both
-        assertEquals("ありがとうありがとう", Pipeline.joinWithoutRepeat("ありがとう", "ありがとう", "ありがとうありがとう"))
-        // shorter than MIN_REPEAT, or no overlap: plain join
-        assertEquals("えっえっ", Pipeline.joinWithoutRepeat("えっ", "えっ", "えっ"))
-        assertEquals("あいうえお", Pipeline.joinWithoutRepeat("あい", "うえお", "あいうえお"))
+    fun timedPiecesFollowTheTextInJapaneseAndEnglish() {
+        // Japanese tokens are byte-level BPE: one character per UTF-8 byte ("今" is 3 bytes), "▁" where no space is
+        val ja = Recognition.of("今日は", arrayOf("▁abc", "▁def", "ghi"), floatArrayOf(0f, 0.8f, 0.9f), 0.3f)
+        assertEquals(listOf("今", "日", "は"), ja.pieces!!.map { it.text })
+        // the first token comes at frame 0: it is put just before the second one
+        assertEquals(listOf(0.4f, 0.5f, 0.6f), ja.pieces!!.map { Math.round(it.t * 100) / 100f })
+        // a character split over two tokens is one piece, at the time of the token with its first byte
+        assertEquals(listOf("今", "日"), Recognition.of("今日", arrayOf("▁ab", "c", "▁def"), floatArrayOf(0.3f, 0.4f, 0.5f), 0.3f).pieces!!.map { it.text })
+        val split = Recognition.of("今日", arrayOf("▁abcd", "ef"), floatArrayOf(0.2f, 0.6f), 0f).pieces!!
+        assertEquals(listOf("今" to 0.2f, "日" to 0.2f), split.map { it.text to it.t })
+        // English: plain text, "▁" is the space before a word
+        val en = Recognition.of("THANK YOU", arrayOf("▁THAN", "K", "▁YOU"), floatArrayOf(0.3f, 0.5f, 0.7f), 0.3f)
+        assertEquals("THANK YOU", en.pieces!!.joinToString("") { it.text })
+        assertEquals(listOf("THAN", "K", " YOU"), en.pieces!!.map { it.text })
+        // tokens that do not fit the text: no timings
+        assertEquals(null, Recognition.of("今日", arrayOf("▁abc"), floatArrayOf(0.3f), 0.3f).pieces)
+        assertEquals(null, Recognition.of("今日", arrayOf("▁abc", "▁def"), floatArrayOf(0.3f), 0.3f).pieces)
+    }
+
+    /** one piece per character from [t0], [step] s apart (a Latin word is one piece, its space in front) */
+    private fun pieces(s: String, t0: Float, step: Float): List<Piece> =
+        (if (s.contains(' ')) s.split(' ').mapIndexed { i, w -> if (i == 0) w else " $w" } else s.map { it.toString() })
+            .mapIndexed { i, x -> Piece(x, t0 + i * step) }
+
+    @Test
+    fun aRepeatAtTheJoinIsDroppedOnlyWhenTheUserAskedForIt() {
+        // the draft's last words and the new result's first ones are the same words, recognized twice
+        val draft = pieces("おいしいってだれ火の石って", 0f, 0.15f)
+        val whole = pieces("火の意志ってどういうこと", 2.0f, 0.12f)
+        assertEquals("おいしいってだれ火の意志ってどういうこと", Pipeline.textOf(Pipeline.repairLoss(whole, draft, 3.5f, true)!!))
+        assertEquals("おいしいってだれ火の石って火の意志ってどういうこと", Pipeline.textOf(Pipeline.repairLoss(whole, draft, 3.5f, false)!!))
+        // a single shared character: "頑張" + "張ってください" (the whole's first piece "頑" repeats the block's end)
+        val d2 = pieces("かなえてください頑張", 0f, 0.15f)
+        val w2 = listOf(Piece("頑", 1.9f)) + pieces("張ってください", 2.0f, 0.12f)
+        assertEquals("かなえてください頑張ってください", Pipeline.textOf(Pipeline.repairLoss(w2, d2, 3.0f, true)!!))
+        // two end characters of which only the first matches are no repeat
+        val w3 = listOf(Piece("頑張", 1.9f)) + pieces("ってください", 2.0f, 0.12f)
+        assertEquals("ありがとうございます頑ば頑張ってください",
+            Pipeline.textOf(Pipeline.repairLoss(w3, pieces("ありがとうございます頑ば", 0f, 0.15f), 3.0f, true)!!))
     }
 
     @Test
-    fun englishIsJoinedWithASpaceAndOnlyWholeWordsAreARepeat() {
+    fun englishWordsBroughtBackAreJoinedWithASpace() {
+        val draft = pieces("THANK YOU FOR THE SUPER CHAT", 0f, 0.25f)
+        val whole = pieces("SEE YOU TOMORROW", 2.0f, 0.3f)
+        assertEquals("THANK YOU FOR THE SUPER CHAT SEE YOU TOMORROW", Pipeline.textOf(Pipeline.repairLoss(whole, draft, 3.0f, false)!!))
+        // join: a space between Latin words only; Japanese, also with a Latin word in it, stays unspaced
         assertEquals("THANK YOU SO MUCH", Pipeline.join("THANK YOU", "SO MUCH"))
-        assertEquals("ありがとうhello", Pipeline.join("ありがとう", "hello")) // a Japanese side: no space
-        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "SO MUCH", "SO MUCH"))
-        // a repeated word at the join is dropped once
-        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "SO MUCH"))
-        // "NET" ends PLANET and starts NETWORK but is not a word on either side: no repeat
-        assertEquals("THE PLANET NETWORK", Pipeline.joinWithoutRepeat("THE PLANET", "NETWORK", "THE NETWORK"))
-        // review round 4: punctuation at the join, occurrences inside other words in whole, separator kept
-        assertEquals("THE PLANET. NET. NEXT", Pipeline.joinWithoutRepeat("THE PLANET.", "NET. NEXT", "NEXT"))
-        assertEquals("THANK YOU SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU", "YOU SO MUCH", "YOUR YOUTH"))
-        assertEquals("THANK YOU. SO MUCH", Pipeline.joinWithoutRepeat("THANK YOU.", "YOU. SO MUCH", "SO MUCH"))
         assertEquals("THANK YOU. SO MUCH", Pipeline.join("THANK YOU.", "SO MUCH"))
-        // CAN is part of CAN'T: no repeat; a whole DON'T repeated is one
-        assertEquals("WE CAN CAN'T GO", Pipeline.joinWithoutRepeat("WE CAN", "CAN'T GO", "GO"))
-        assertEquals("I DON'T KNOW", Pipeline.joinWithoutRepeat("I DON'T", "DON'T KNOW", "KNOW"))
-        // review round 4 fix: an apostrophe after a digit, full-width Latin, Japanese keeps the space after a repeat
-        assertEquals("THE MP3 MP3'S GOOD", Pipeline.joinWithoutRepeat("THE MP3", "MP3'S GOOD", "GOOD"))
-        assertEquals("ＴＨＥ ＰＬＡＮＥＴ ＮＥＴＷＯＲＫ", Pipeline.joinWithoutRepeat("ＴＨＥ ＰＬＡＮＥＴ", "ＮＥＴＷＯＲＫ", "ＮＥＸＴ"))
-        assertEquals("ありがとう またね", Pipeline.joinWithoutRepeat("ありがとう", "ありがとう またね", "またね"))
-        // Japanese with a Latin word stays unspaced, as before
+        assertEquals("ありがとうhello", Pipeline.join("ありがとう", "hello"))
         assertEquals("SCありがとう", Pipeline.join("SC", "ありがとう"))
-        assertEquals("今日も一日お疲れさまでしたいただきます",
-            Pipeline.joinWithoutRepeat("今日も一日お疲れさまでした", "お疲れさまでしたいただきます", "え皆さんもね一日お疲れさまでした"))
     }
 
     @Test
-    fun anEnglishKeptDraftIsJoinedWithASpace() {
-        // the longer recognition lost the kept draft: the kept text and the rest are joined with a space
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray) = when (samples.size) {
-                30_000 -> "THANK YOU FOR THE SUPER CHAT"; else -> "SEE YOU TOMORROW" // whole 80_000 and tail 50_000
-            }
-        }
-        val out = Collections.synchronizedList(ArrayList<Caption>()); val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() }, source = Lang.EN, target = Target.ZH)
-        p.start()
-        try {
-            p.submit(AsrJob(1, 1, false, FloatArray(30_000), monoMs()))
-            val t0 = monoMs(); while (out.none { it.segmentId == 1L } && monoMs() - t0 < 2000) Thread.sleep(5)
-            p.submit(AsrJob(1, 2, true, FloatArray(80_000), monoMs()))
-            assertTrue(done.await(3, TimeUnit.SECONDS))
-        } finally { p.stop(); p.awaitStopped() }
-        assertEquals("THANK YOU FOR THE SUPER CHAT SEE YOU TOMORROW", out.last { it.isFinal }.ja)
+    fun wordsMissingInsideTheNewResultAreBroughtBackButNotAfterItsEnd() {
+        val draft = pieces("今日はゲーム配信をします", 0f, 0.15f)
+        // nothing between 0.3 s and 1.2 s, where the draft had "ゲーム配信" (0.45 .. 1.05): put back there
+        val whole = pieces("今日は", 0f, 0.15f) + pieces("をします", 1.2f, 0.15f)
+        assertEquals("今日はゲーム配信をします", Pipeline.textOf(Pipeline.repairLoss(whole, draft, 2.5f, false)!!))
+        // the new result ends before the draft did: a draft's last words are often reworded, nothing is added
+        assertEquals(null, Pipeline.repairLoss(pieces("今日はゲーム配信", 0f, 0.15f), draft, 2.5f, false))
+        // a correction of the draft at the same time ("祖父" -> "そうそう") is not a gap
+        assertEquals(null, Pipeline.repairLoss(pieces("そうそうだよね", 0f, 0.12f), pieces("祖父だよね", 0f, 0.15f), 1.0f, false))
+    }
+
+    @Test
+    fun wordsTheNewResultStillHasAreNotPutBack() {
+        // one long first piece (its time a guess, so the whole audio looks like a leading stretch): no loss
+        assertEquals(null, Pipeline.repairLoss(listOf(Piece("THERE", -0.3f)), listOf(Piece("THERE", -0.3f)), 2f, false))
+        assertEquals(null, Pipeline.repairLoss(listOf(Piece("THANK", 0f), Piece(" YOU", 0.5f), Piece(" FOR", 0.9f)),
+            listOf(Piece("THANK", 0f)), 1.5f, false))
+        assertEquals(null, Pipeline.repairLoss(listOf(Piece("今日はゲーム配信", 0f), Piece("をします", 1.2f)),
+            pieces("今日はゲーム配信", 0f, 0.1f), 2.5f, false))
+        // a correction ("祖父" -> "そうそう") whose second piece comes late
+        assertEquals(null, Pipeline.repairLoss(listOf(Piece("そうそう", 0f)) + pieces("家に行った", 0.9f, 0.1f),
+            pieces("祖父の家に行った", 0f, 0.12f), 1.5f, false))
+        // the same long word tokenized differently: the draft's second half is no gap of the new result
+        assertEquals(null, Pipeline.repairLoss(
+            listOf(Piece("A", 0f), Piece("B", 0.1f), Piece("EXTRAORDINARY", 1.0f), Piece(" NEXT", 1.8f)),
+            listOf(Piece("A", 0f), Piece("B", 0.1f), Piece("EX", 1.0f), Piece("TRAORDINARY", 1.2f), Piece(" NEXT", 1.8f)), 3f, false))
+        // a single piece that is in the lost block (replayed seg 122: "日"): the block only
+        assertEquals("矢見さんスバチありが日の目の部屋", Pipeline.textOf(Pipeline.repairLoss(listOf(Piece("日", -0.3f)),
+            pieces("矢見さんスバチありが日の目の部屋", 0f, 0.1f), 2.0f, false)!!))
+        // with dedupe, Latin words are not matched letter by letter: "HERE" is no repeat of "THERE"
+        assertEquals("WE WERE THERE HERE WE GO", Pipeline.textOf(Pipeline.repairLoss(
+            listOf(Piece("HERE", 2.2f), Piece(" WE", 2.5f), Piece(" GO", 2.6f)), pieces("WE WERE THERE", 0f, 0.5f), 4f, true)!!))
     }
 
     @Test
@@ -1299,157 +1329,132 @@ class PipelineTest {
         assertTrue(off.toString(), off.any { it.startsWith("m:ja10|") })
     }
 
-    /** Real-log repro (session-20261010-195346 seg 2): the longer recognition lost the thanks for a superchat. */
-    @Test
-    fun aDraftTheLongerRecognitionDroppedIsKeptAndOnlyTheNewAudioIsRecognized() {
-        val seen = Collections.synchronizedList(ArrayList<Int>())
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String { seen.add(samples.size); return when (samples.size) {
-                25_600 -> "スパチャありがとうございます" // 1.6 s
-                76_800 -> "いや相当でかいと思うけど" // whole 4.8 s: the start is gone
-                76_800 - 25_600 -> "いや相当でかいと思うけど"
-                else -> "x"
-            } }
+    /** Recognitions with timings, by audio length; counts the calls (sizes). */
+    private class TimedAsr(val by: Map<Int, List<Piece>>) : Asr {
+        val calls = Collections.synchronizedList(ArrayList<Int>())
+        override fun recognize(samples: FloatArray) = recognizeTimed(samples).text
+        override fun recognizeTimed(samples: FloatArray): Recognition {
+            calls += samples.size
+            val p = by[samples.size] ?: emptyList()
+            return Recognition(Pipeline.textOf(p), p)
         }
+    }
+
+    /** submits [jobs] one by one, each after the one before reached the screen; the finals' Japanese */
+    private fun finalsOf(asr: Asr, jobs: List<AsrJob>, dedupeJoin: Boolean = false): Map<Long, String> {
         val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
+        val p = Pipeline(asr, FakeMt(1), { out.add(it) }, dedupeJoin = dedupeJoin)
         p.start()
-        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(2, 2, true, 76_800))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        assertEquals("スパチャありがとうございますいや相当でかいと思うけど", out.last { it.isFinal }.ja)
-        assertEquals(listOf(25_600, 76_800, 51_200), seen.toList())
+        try {
+            for (j in jobs) {
+                val seen = out.size
+                p.submit(j)
+                val t0 = monoMs(); while (out.size == seen && monoMs() - t0 < 2000) Thread.sleep(5)
+            }
+        } finally { p.stop(); p.awaitStopped() }
+        return out.filter { it.isFinal }.associate { it.segmentId to it.ja }
     }
 
     /**
-     * Mac replay of a VTuber clip (seg 4): a repaired draft became the reference, so a later whole recognition that
-     * no longer matched it ("そうそう" where the draft had "祖父") was taken for a loss too and the old draft won.
-     * A real loss leaves little more than the new audio in the whole result; here it holds much more, so it is used.
+     * Real-log repro (session-20261016-074605 seg 4): the draft at 3.0 s had the request for cookies, the final at
+     * 3.7 s only the words after the pause ("それねいそがしい"), and the caption lost the cookies. The final's words
+     * start at 3.0 s: before them, the draft's words come back.
      */
     @Test
-    fun aWholeRecognitionWithMoreThanTheNewAudioIsNotTakenForALoss() {
+    fun wordsTheLongerRecognitionDroppedComeBackFromTheDraft() {
+        val asr = TimedAsr(mapOf(
+            48_128 to pieces("クッキーを何用意してくれていいですかって", 0f, 0.14f),
+            59_904 to listOf(Piece("そ", 2.9f)) + pieces("れねいそがしい", 3.0f, 0.08f)))
+        val f = finalsOf(asr, listOf(AsrJob(1, 1, false, FloatArray(48_128), monoMs()), AsrJob(1, 2, true, FloatArray(59_904), monoMs())))
+        assertEquals("クッキーを何用意してくれていいですかってそれねいそがしい", f[1])
+        // each audio recognized once: no second recognition to check a loss
+        assertEquals(listOf(48_128, 59_904), asr.calls.toList())
+    }
+
+    /**
+     * Replayed 15 min clip seg 41/42: the segmenter ended seg 41 at an earlier pause (2.53 s of its 4 s) and started
+     * seg 42 with the rest; seg 42's first recognition dropped "お弁当ありがとう", which only seg 41's draft had.
+     */
+    @Test
+    fun wordsDroppedFromAudioCarriedIntoTheNextSegmentComeBackFromThePreviousDraft() {
+        val draft = pieces("これって大丈夫", 0f, 0.12f) + pieces("お弁当ありがとう", 2.8f, 0.09f)
+        val asr = TimedAsr(mapOf(
+            64_000 to draft,
+            40_480 to pieces("これって大丈夫", 0f, 0.12f),
+            39_520 to listOf(Piece("こ", 1.8f)) + pieces("れってさひとつききたいんだけど", 1.9f, 0.1f)))
+        val audio = FloatArray(80_000) { it.toFloat() } // the segmenter's frames: seg 2 starts where seg 1's final ended
+        val f = finalsOf(asr, listOf(
+            AsrJob(1, 1, false, audio.copyOfRange(0, 64_000), monoMs()),
+            AsrJob(1, 2, true, audio.copyOfRange(0, 40_480), monoMs()),
+            AsrJob(2, 1, true, audio.copyOfRange(40_480, 80_000), monoMs())))
+        assertEquals("これって大丈夫", f[1])
+        assertEquals("お弁当ありがとうこれってさひとつききたいんだけど", f[2])
+        // other audio at the start of the next segment: nothing is carried
+        val other = finalsOf(asr, listOf(
+            AsrJob(1, 1, false, audio.copyOfRange(0, 64_000), monoMs()),
+            AsrJob(1, 2, true, audio.copyOfRange(0, 40_480), monoMs()),
+            AsrJob(2, 1, true, FloatArray(39_520), monoMs())))
+        assertEquals("これってさひとつききたいんだけど", other[2])
+    }
+
+    @Test
+    fun aShortDraftIsNotBroughtBack() {
+        // 4 characters: below LOST_MIN_CHARS
+        val asr = TimedAsr(mapOf(
+            16_000 to pieces("ありがと", 0f, 0.15f),
+            48_000 to listOf(Piece("そ", 1.9f)) + pieces("れでね", 2.0f, 0.1f)))
+        val f = finalsOf(asr, listOf(AsrJob(1, 1, false, FloatArray(16_000), monoMs()), AsrJob(1, 2, true, FloatArray(48_000), monoMs())))
+        assertEquals("それでね", f[1])
+    }
+
+    @Test
+    fun anOlderReplacedDraftIsNotBroughtBack() {
+        // rev 1 had "祖父の家に行った", rev 2 corrected it at the same times; the final drops the start: only rev 2 comes back
+        val asr = TimedAsr(mapOf(
+            16_000 to pieces("祖父の家に行った", 0f, 0.12f),
+            24_000 to pieces("そうそう家に行った", 0f, 0.1f),
+            48_000 to listOf(Piece("で", 1.9f)) + pieces("もね", 2.0f, 0.1f)))
+        val f = finalsOf(asr, listOf(AsrJob(1, 1, false, FloatArray(16_000), monoMs()),
+            AsrJob(1, 2, false, FloatArray(24_000), monoMs()), AsrJob(1, 3, true, FloatArray(48_000), monoMs())))
+        assertEquals("そうそう家に行ったでもね", f[1])
+    }
+
+    @Test
+    fun aNewerDraftWithoutTimingsStillReplacesAnOlderOne() {
         val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String = when (samples.size) {
-                25_600 -> "居酒屋で会ってる祖父居酒屋だよだから見て"
-                40_000 -> "みんな何かさ" // the start is gone
-                40_000 - 25_600 -> "みんななんかさ"
-                56_000 -> "居酒屋で会ってるそうそう居酒屋だよ"
-                else -> "ああ" // 56_000 - 40_000: the audio after the repaired draft
+            override fun recognize(samples: FloatArray) = recognizeTimed(samples).text
+            override fun recognizeTimed(samples: FloatArray) = when (samples.size) {
+                16_000 -> pieces("祖父の家に行った", 0f, 0.12f).let { Recognition(Pipeline.textOf(it), it) }
+                32_000 -> Recognition("そうそう友達の家に行った", null)
+                else -> (listOf(Piece("で", 1.9f)) + pieces("もね", 2.0f, 0.1f)).let { Recognition(Pipeline.textOf(it), it) }
             }
         }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
-        p.start()
-        p.submit(job(4, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(4, 2, false, 40_000)); Thread.sleep(100)
-        p.submit(job(4, 3, true, 56_000))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        // the real loss at 40_000 is still repaired; the final is the whole recognition
-        assertEquals("居酒屋で会ってる祖父居酒屋だよだから見てみんななんかさ", out.first { it.revision == 2 }.ja)
-        assertEquals("居酒屋で会ってるそうそう居酒屋だよ", out.last { it.isFinal }.ja)
+        val f = finalsOf(asr, listOf(AsrJob(1, 1, false, FloatArray(16_000), monoMs()),
+            AsrJob(1, 2, false, FloatArray(32_000), monoMs()), AsrJob(1, 3, true, FloatArray(48_000), monoMs())))
+        assertEquals("でもね", f[1])
     }
 
     @Test
-    fun aRecognitionThatOnlyRefinesTheDraftIsUsedAsIs() {
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String =
-                if (samples.size == 25_600) "このうさぎひっくりかえってる" else "このウサギなんかひっくり返ってるうさぎ"
-        }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
-        p.start()
-        p.submit(job(1, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(1, 2, true, 48_000))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        assertEquals("このウサギなんかひっくり返ってるうさぎ", out.last { it.isFinal }.ja)
+    fun aFinalShorterThanTheNewestDraftStillUsesThatDraft() {
+        val asr = TimedAsr(mapOf(
+            16_000 to pieces("祖父の家に行った", 0f, 0.1f),
+            48_000 to pieces("そうそう友達の家に行った", 0f, 0.1f),
+            40_000 to pieces("でもね", 2.0f, 0.1f)))
+        val f = finalsOf(asr, listOf(AsrJob(1, 1, false, FloatArray(16_000), monoMs()),
+            AsrJob(1, 2, false, FloatArray(48_000), monoMs()), AsrJob(1, 3, true, FloatArray(40_000), monoMs())))
+        assertEquals("そうそう友達の家に行ったでもね", f[1])
     }
 
-    @Test
-    fun shortOrBriefDraftsAreNotKept() {
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String = when (samples.size) { 14_000 -> "えっとですね"; 4_000 -> "えっ"; else -> "別の話です" }
-        }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
-        p.start()
-        p.submit(job(1, 1, false, 4_000)); Thread.sleep(50)
-        p.submit(job(1, 2, false, 14_000)); Thread.sleep(50) // under 1.5 s of audio
-        p.submit(job(1, 3, true, 40_000))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        assertEquals("別の話です", out.last { it.isFinal }.ja)
-    }
-
-    /** review 27a898c #1: a second loss must not drop the text the first repair kept */
+    /** a second loss keeps the words the first repair brought back: the history holds what was shown */
     @Test
     fun twoSuccessiveLossesKeepBothEarlierParts() {
-        val asr = object : Asr {
-            // drafts at 1.6 s and 4.0 s, final at 6.0 s; tails are [1.6, 4.0) = 38_400 and [4.0, 6.0) = 32_000
-            override fun recognize(samples: FloatArray): String = when (samples.size) {
-                25_600 -> "スパチャありがとうございます"
-                64_000, 38_400 -> "いや相当でかいと思うけど"
-                else -> "猫が窓から飛び出した" // 96_000 whole and 32_000 tail
-            }
-        }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
-        p.start()
-        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(2, 2, false, 64_000)); Thread.sleep(100)
-        p.submit(job(2, 3, true, 96_000))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        assertEquals("スパチャありがとうございますいや相当でかいと思うけど猫が窓から飛び出した", out.last { it.isFinal }.ja)
-    }
-
-    /** review 27a898c #2: an older draft that a newer, still-kept draft already corrected is not brought back */
-    @Test
-    fun anOlderCorrectedDraftIsNotResurrected() {
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String = when (samples.size) {
-                25_600 -> "あしたはあめがふります"; 51_200 -> "あしたは晴れます今日はゲーム配信を始めます"
-                else -> "明日は晴天。今日はゲーム配信を始めます"
-            }
-        }
-        val out = Collections.synchronizedList(ArrayList<Caption>())
-        val done = CountDownLatch(1)
-        val p = Pipeline(asr, FakeMt(1), { out.add(it); if (it.isFinal) done.countDown() })
-        p.start()
-        p.submit(job(1, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(1, 2, false, 51_200)); Thread.sleep(100)
-        p.submit(job(1, 3, true, 76_800))
-        assertTrue(done.await(3, TimeUnit.SECONDS))
-        p.stop(); p.awaitStopped()
-        assertEquals("明日は晴天。今日はゲーム配信を始めます", out.last { it.isFinal }.ja)
-    }
-
-    /** review 27a898c #3: stop during the whole recognition starts no second decode */
-    @Test
-    fun noTailDecodeStartsAfterStop() {
-        val inWhole = CountDownLatch(1); val release = CountDownLatch(1)
-        val calls = Collections.synchronizedList(ArrayList<Int>())
-        val asr = object : Asr {
-            override fun recognize(samples: FloatArray): String {
-                calls.add(samples.size)
-                if (samples.size == 76_800) { inWhole.countDown(); release.await() }
-                return if (samples.size == 25_600) "スパチャありがとうございます" else "いや相当でかいと思うけど"
-            }
-        }
-        val p = Pipeline(asr, FakeMt(1), { })
-        p.start()
-        p.submit(job(2, 1, false, 25_600)); Thread.sleep(100)
-        p.submit(job(2, 2, true, 76_800))
-        assertTrue(inWhole.await(3, TimeUnit.SECONDS))
-        p.stop(); release.countDown(); p.awaitStopped()
-        assertEquals(listOf(25_600, 76_800), calls.toList())
+        val asr = TimedAsr(mapOf(
+            25_600 to pieces("スパチャありがとうございます", 0f, 0.1f),
+            64_000 to listOf(Piece("い", 1.9f)) + pieces("や相当でかいと思うけど", 2.0f, 0.1f),
+            96_000 to listOf(Piece("猫", 3.9f)) + pieces("が窓から飛び出した", 4.0f, 0.1f)))
+        val f = finalsOf(asr, listOf(AsrJob(2, 1, false, FloatArray(25_600), monoMs()),
+            AsrJob(2, 2, false, FloatArray(64_000), monoMs()), AsrJob(2, 3, true, FloatArray(96_000), monoMs())))
+        assertEquals("スパチャありがとうございますいや相当でかいと思うけど猫が窓から飛び出した", f[2])
     }
 
     // --- settings changed while running (Setup) ---

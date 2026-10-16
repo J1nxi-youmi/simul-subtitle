@@ -445,7 +445,7 @@ class CaptionService private constructor(private val sysaudio: File) {
         try {
             // with Jev the forced cut asks first and an "unfinished" head may grow to twice this (10 s); without Jev it
             // cuts at the default 7 s. An utterance that starts while Jev is paused (its key is missing) is cut as without Jev.
-            val seg = Segmenter({ pl.submit(it) }, minFinalMs = 1_200, maxHoldSilenceMs = 1_500,
+            val seg = Segmenter({ pl.submit(it) }, minFinalMs = MIN_FINAL_MS, maxHoldSilenceMs = 1_500,
                 maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
                 judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS)
@@ -625,6 +625,8 @@ class CaptionService private constructor(private val sysaudio: File) {
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
+        /** as the app (CaptionService.MIN_FINAL_MS): a shorter utterance waits up to 1.5 s of silence to be joined */
+        private const val MIN_FINAL_MS = 400
         private const val JEV_MAX_UTTERANCE_MS = 5_000
         private const val PLAIN_MAX_UTTERANCE_MS = 7_000
 

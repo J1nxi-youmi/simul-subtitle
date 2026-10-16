@@ -1,6 +1,7 @@
 package io.github.korenkrita.simulsub
 
 import io.github.korenkrita.simulsub.ServiceStatus.Light
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -14,6 +15,8 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewTreeObserver
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -33,7 +36,17 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     private fun dp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
 
     private val card = FrameLayout(ctx)
-    private val text = TextView(ctx)
+    /**
+     * The caption text. Its scroll carries the smooth-scroll offset ([slidePx], px drawn lower) on top of the scroll
+     * the TextView keeps by itself (the newest lines in view): the TextView resets its scroll before a frame is drawn,
+     * and the offset must survive that.
+     */
+    private val text = object : TextView(ctx) {
+        var slidePx = 0
+        private var base = 0
+        override fun scrollTo(x: Int, y: Int) { base = y; super.scrollTo(x, y - slidePx) }
+        fun slide(px: Int) { slidePx = px; super.scrollTo(scrollX, base - px) }
+    }
     private val stats = TextView(ctx)
     /** resize marks, one per corner: top-left, top-right, bottom-right, bottom-left */
     private val corners = List(4) { android.widget.ImageView(ctx) }
@@ -122,7 +135,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     /** Caption card width in px (the window may be wider while the toolbar is open). */
     fun setCardWidth(px: Int) {
         val lp = card.layoutParams
-        if (lp.width != px) { lp.width = px; card.layoutParams = lp }
+        if (lp.width != px) { lp.width = px; card.layoutParams = lp; stopSlide() }
     }
     /**
      * Places card and toolbar inside a window that covers both (toolbar open): px from the window's left edge. The
@@ -249,6 +262,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     }
 
     fun applyStyle(sizeSp: Float, alpha: Float) {
+        if (sizeSp != textSp) stopSlide()
         textSp = sizeSp; bgAlpha = alpha
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
         applyCaptionHeight() // a fixed height is clamped to one line, which depends on the font size
@@ -274,13 +288,19 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
     }
 
     /** One entry per visible line: Chinese text, optional Japanese, draft flag. */
-    class Line(val zh: String, val ja: String?, val isFinal: Boolean)
+    class Line(val zh: String, val ja: String?, val isFinal: Boolean, /** the sentence (segment id); -1 = none */ val id: Long = -1)
 
     fun setLines(lines: List<Line>, statsLine: String?) {
+        // smooth scroll (the overlay only, not the settings preview): where the newest sentence that stays on screen
+        // is drawn now. Only once per frame: a second update before the next frame keeps the place it was drawn at.
+        val keep = if (!interactive || slideAnchor >= 0 || !text.isLaidOut || !text.viewTreeObserver.isAlive) null
+            else lastLines.lastOrNull { o -> o.isFinal && o.id >= 0 && lines.any { it.isFinal && it.id == o.id } }
+        val from = keep?.let { anchorY(it.id) }
         lastLines = lines; lastStats = statsLine
+        val starts = IntArray(lines.size)
         val sb = SpannableStringBuilder()
         val jaPx = (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, textSp * 0.62f, resources.displayMetrics)).toInt()
-        for (l in lines) {
+        for ((i, l) in lines.withIndex()) {
             if (sb.isNotEmpty()) sb.append('\n')
             if (!l.ja.isNullOrEmpty()) {
                 val s = sb.length
@@ -289,6 +309,7 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
                 sb.setSpan(ForegroundColorSpan(colors.ja), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             val s = sb.length
+            starts[i] = s
             // the draft line is visibly separate from the finished sentences above: dimmer, smaller, marked "…"
             if (!l.isFinal) sb.append("… ")
             sb.append(l.zh)
@@ -298,8 +319,70 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
             }
         }
         text.text = sb
+        lineStarts = starts
         stats.text = statsLine ?: ""
         stats.visibility = if (statsLine.isNullOrEmpty()) GONE else VISIBLE
+        if (keep != null && from != null) {
+            slideAnchor = keep.id; slideFrom = from + slideOffset; slideW = text.width; slideSize = text.textSize
+            text.viewTreeObserver.addOnPreDrawListener(slideStart) // after setText: runs after the TextView's own
+        }
+    }
+
+    private var lineStarts = IntArray(0)
+    private var slideAnchor = -1L
+    private var slideFrom = 0f
+    private var slideW = 0
+    private var slideSize = 0f
+    /** px the text is drawn lower than laid out */
+    private var slideOffset = 0f
+    private var slide: ValueAnimator? = null
+
+    /** Screen y of the top of final [id]'s Chinese line as laid out now, without the slide; null if not shown. */
+    private fun anchorY(id: Long): Float? {
+        val i = lastLines.indexOfFirst { it.isFinal && it.id == id }
+        val l = text.layout
+        if (i < 0 || i >= lineStarts.size || l == null) return null
+        val loc = IntArray(2); text.getLocationOnScreen(loc)
+        // the lines sit at the bottom of the text area (also when the oldest are cut off): measure from there
+        return loc[1] + text.height - text.extendedPaddingBottom + l.getLineTop(l.getLineForOffset(lineStarts[i])) - l.height.toFloat()
+    }
+
+    /**
+     * Right before the next frame (new text laid out, window moved): the text is drawn where it was and slides to its
+     * new place. Measured on screen, so a card that grows downward, where nothing above moves, does not slide.
+     */
+    private val slideStart = object : ViewTreeObserver.OnPreDrawListener {
+        override fun onPreDraw(): Boolean {
+            text.viewTreeObserver.removeOnPreDrawListener(this)
+            val id = slideAnchor
+            slideAnchor = -1
+            // a new width or font size rewraps everything: no slide
+            val to = anchorY(id)?.takeIf { text.width == slideW && text.textSize == slideSize }
+            if (to == null) { stopSlide(); return true }
+            val d = slideFrom - to
+            if (abs(d - slideOffset) < 1f) { setSlide(slideOffset); return true } // nothing moved: a slide runs on
+            slide?.cancel()
+            if (abs(d) < 1f) { setSlide(0f); return true }
+            setSlide(d)
+            slide = ValueAnimator.ofFloat(d, 0f).apply {
+                duration = SLIDE_MS; interpolator = DecelerateInterpolator()
+                addUpdateListener { setSlide(it.animatedValue as Float) }
+                start()
+            }
+            return true
+        }
+    }
+
+    /** Text drawn [off] px lower, still clipped to the text area; lines scrolled out of a full area slide out too. */
+    private fun setSlide(off: Float) {
+        slideOffset = off
+        text.slide(off.toInt())
+    }
+
+    /** Width or font size changed: the text rewraps, a running slide would be off; it ends where it is laid out. */
+    private fun stopSlide() {
+        slide?.cancel(); slide = null
+        if (slideOffset != 0f) { slideOffset = 0f; text.post { setSlide(0f) } }
     }
 
     /**
@@ -471,6 +554,8 @@ class CaptionOverlayView(ctx: Context, private val interactive: Boolean) : Linea
         const val DEFAULT_ALPHA = 0.78f
         /** Space between the caption card and the toolbar. */
         const val TOOLBAR_GAP_DP = 6f
+        /** how long new lines take to slide into place */
+        const val SLIDE_MS = 200L
 
         /** Caption colour schemes; the first is the default. ids are stored in prefs, keep them stable. */
         val PALETTES = listOf(

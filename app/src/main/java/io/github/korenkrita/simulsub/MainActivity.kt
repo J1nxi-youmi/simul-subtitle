@@ -1321,7 +1321,7 @@ class MainActivity : Activity() {
             prefs.setStyle(13f, CaptionOverlayView.DEFAULT_ALPHA); prefs.widthFrac = Prefs.DEFAULT_WIDTH; prefs.showJa = true; prefs.showStats = true
             prefs.keepSentences = CaptionBoard.DEFAULT_SENTENCES; prefs.keepChars = CaptionBoard.DEFAULT_CHARS; prefs.heightFrac = 0f
             prefs.palette = CaptionOverlayView.PALETTES[0].id; renderPalettes()
-            prefs.overlayX = -1; prefs.overlayY = -1
+            prefs.overlayX = -1; prefs.overlayY = -1; prefs.overlayBottom = -1
             load(); apply()
         }
     }

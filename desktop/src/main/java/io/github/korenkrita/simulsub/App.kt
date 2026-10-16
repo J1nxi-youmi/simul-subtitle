@@ -313,7 +313,7 @@ private fun CaptionTab() {
     }
     Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Grow()
-        TextBtn("恢复默认") { prefs.resetStyle(); prefs.setOverlay(null, null, Prefs.DEFAULT_WIDTH, 0f) }
+        TextBtn("恢复默认") { prefs.resetStyle(); prefs.setOverlay(null, null, null, Prefs.DEFAULT_WIDTH, 0f) }
     }
 }
 

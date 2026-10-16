@@ -65,6 +65,8 @@ Controls work the same way via touch on Android or mouse click on desktop:
 | **Drag corner arrows** | Resize the subtitle box width and height while the toolbar is visible |
 | **Lock** | Fix position and size to prevent accidental touches; tapping while locked only reveals an unlock button in the bottom-right corner |
 
+Until you set a height, the box fits its text: in the lower half of the screen its bottom edge stays put and it grows upward, so the last line you are reading is never pushed away; in the upper half its top edge stays put and it grows downward. Whenever the lines have to move up (a new line pushes them, or an old sentence leaves), they slide smoothly instead of jumping.
+
 ## Installation
 
 Download the latest package for your platform from the [Releases](../../releases) page.

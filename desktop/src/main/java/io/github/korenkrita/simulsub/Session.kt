@@ -9,7 +9,7 @@ import java.io.File
 
 /** What the caption window shows; written on the UI thread, read by Compose. */
 class OverlayState {
-    class Line(val zh: String, val ja: String?, val isFinal: Boolean)
+    class Line(val zh: String, val ja: String?, val isFinal: Boolean, /** the sentence (segment id); -1 = none */ val id: Long = -1)
     val lines = mutableStateOf<List<Line>>(emptyList())
     val diag = mutableStateOf<String?>(null)
     val mtLight = mutableStateOf(ServiceStatus.Light.GREY)
@@ -509,7 +509,7 @@ class CaptionService private constructor(private val sysaudio: File) {
         // "only finished sentences": drafts are hidden (and a draft already on screen disappears), read live from prefs
         val shown = board.snapshot().let { s -> if (prefs.finalOnly) s.filter { it.isFinal } else s }
         val showJa = prefs.showJa
-        val lines = shown.map { OverlayState.Line(it.zh, if (showJa) it.ja else null, it.isFinal) }
+        val lines = shown.map { OverlayState.Line(it.zh, if (showJa) it.ja else null, it.isFinal, it.segmentId) }
         // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)

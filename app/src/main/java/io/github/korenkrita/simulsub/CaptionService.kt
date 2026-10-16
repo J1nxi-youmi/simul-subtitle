@@ -533,7 +533,7 @@ class CaptionService : Service() {
         // "only finished sentences": drafts are hidden (and a draft already on screen disappears), read live from prefs
         val shown = board.snapshot().let { s -> if (prefs.finalOnly) s.filter { it.isFinal } else s }
         val showJa = prefs.showJa
-        val lines = shown.map { CaptionOverlayView.Line(it.zh, if (showJa) it.ja else null, it.isFinal) }
+        val lines = shown.map { CaptionOverlayView.Line(it.zh, if (showJa) it.ja else null, it.isFinal, it.segmentId) }
         // status messages (loading, errors, overload) always show; timings only when enabled in settings
         val diag = buildString {
             if (status.isNotEmpty()) append(status)
@@ -557,6 +557,7 @@ class CaptionService : Service() {
         }
         if (lines.isEmpty() && status.isEmpty()) v.setLines(listOf(CaptionOverlayView.Line("正在听…", null, false)), diag.ifEmpty { null })
         else v.setLines(lines, diag.ifEmpty { null })
+        relayoutCaptions()
         val jevNow = jevNow()
         v.setServices(light(mtState, true), light(jevNow, jevEndsOn || jevCheckOn),
             mtState?.let { reason(it, false, android.os.SystemClock.elapsedRealtime(), System.currentTimeMillis()) },
@@ -606,6 +607,10 @@ class CaptionService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = prefs.overlayX.takeIf { it >= 0 } ?: ((area().width() - cardW) / 2)
             y = prefs.overlayY.takeIf { it >= 0 } ?: (area().height() * 2 / 3)
+            // no system move animation: otherwise a card that grows upward first shows a frame grown downward and
+            // then glides back for ~200 ms, and a drag lags behind the finger. Hidden API (allowed as "unsupported",
+            // test-api); if a later Android refuses it, windows just animate their moves again.
+            runCatching { WindowManager.LayoutParams::class.java.getField("privateFlags").let { f -> f.setInt(this, f.getInt(this) or PRIVATE_FLAG_NO_MOVE_ANIMATION) } }
         }
         // Where the user put the card (its top-left in the usable area). The window is derived from it on every
         // layout: closed, the window is exactly the card, so no invisible area blocks touches to the app underneath;
@@ -613,6 +618,8 @@ class CaptionService : Service() {
         // above the card when there is no room below). The card itself never moves when the toolbar opens.
         var cardX = lp.x; var cardY = lp.y
         var shownX = cardX; var shownY = cardY // where layout() last put the card (cardX / cardY clamped to the screen)
+        // ≥ 0: the card keeps this bottom edge (px in the usable area) and grows upward; -1: it keeps its top edge
+        var bottomY = -1
         fun layout() {
             val a = area(); val sw = a.width(); val sh = a.height()
             cardW = cardW.coerceIn((sw * Prefs.MIN_WIDTH).toInt(), sw)
@@ -621,6 +628,7 @@ class CaptionService : Service() {
             v.setMaxContentHeight((a.height() * MAX_CAPTION_FRAC).toInt(), (a.height() * 0.2f).toInt())
             // measured now at this width (a resize just changed width or caption height; the last layout is stale)
             val cardH = v.measureCardHeight(cardW).coerceAtLeast(1)
+            if (bottomY >= 0) cardY = bottomY - cardH
             // cardX / cardY stay what the user chose; only the shown position is clamped (a rotation or a taller card
             // must not overwrite the placement, so rotating back puts the card where it was)
             shownX = cardX.coerceIn(0, sw - cardW)
@@ -643,14 +651,31 @@ class CaptionService : Service() {
         // rotation / resize: the caption height may not change, so re-fit explicitly from the saved width fraction
         // caption height from the saved fraction (0 = fit the text); kept within the 40 % cap by the view
         fun applyHeight() = v.setCaptionHeight((area().height() * prefs.heightFrac).toInt())
+        // Once placed, a card that fits its text and sits in the lower half keeps its bottom edge: new text pushes
+        // the lines above it up, and the line being read stays where it is. Higher up it keeps its top edge, so it
+        // does not grow off the top of the screen; a fixed height does not grow at all.
+        fun anchor() {
+            val h = v.measureCardHeight(cardW)
+            bottomY = if (prefs.heightFrac == 0f && shownY + h / 2 > area().height() / 2) shownY + h else -1
+            layout()
+        }
+        // where the card is now becomes the saved placement (its bottom edge too, for a card that keeps it)
+        fun savePlace() {
+            prefs.overlayX = shownX; prefs.overlayY = shownY; prefs.overlayBottom = shownY + v.measureCardHeight(cardW)
+        }
+        // New text: a card that keeps its bottom edge moves its window in the same layout pass as the text grows.
+        // (Placed from the top as always: a window placed from the bottom is measured against a parent frame that
+        // loses the navigation bar when a full-screen video hides it, and would then sit lower than chosen.)
+        relayoutCaptions = { if (bottomY >= 0) layout() }
         var captionH = 0 // px while a resize drag runs
         onDisplayChanged = { cardW = (area().width() * prefs.widthFrac).toInt(); applyHeight(); layout() }
         // gestures start from where the card is shown, and what they end on is the new placement
-        v.onMove = { dx, dy -> cardX = shownX + dx; cardY = shownY + dy; layout() }
+        v.onMove = { dx, dy -> bottomY = -1; cardX = shownX + dx; cardY = shownY + dy; layout() }
         // a corner drag moves that corner; the opposite edges stay where they are. The whole card rectangle is
         // derived from the fixed edges: the caption height is frozen at what is shown, and a width change that
         // rewraps the status line is measured at the new width, then the caption height absorbs the difference.
         v.onResize = { dx, dy, left, top ->
+            bottomY = -1
             val a = area(); val sh = a.height(); val oldW = cardW
             val minW = (a.width() * Prefs.MIN_WIDTH).toInt()
             val oldH = v.measureCardHeight(oldW)
@@ -672,8 +697,10 @@ class CaptionService : Service() {
         }
         v.onMoveEnd = {
             cardX = shownX; cardY = shownY
-            prefs.overlayX = cardX; prefs.overlayY = cardY; prefs.widthFrac = cardW.toFloat() / area().width()
+            prefs.widthFrac = cardW.toFloat() / area().width()
             if (captionH > 0) { prefs.heightFrac = captionH.toFloat() / area().height(); captionH = 0 }
+            anchor()
+            savePlace()
         }
         v.onStyleChanged = { prefs.setStyle(v.textSp, v.bgAlpha) }
         v.onToolbarShown = { toolbarShown = it; layout() }
@@ -698,7 +725,7 @@ class CaptionService : Service() {
                 "textSp", "bgAlpha" -> if (prefs.textSp != v.textSp || prefs.bgAlpha != v.bgAlpha)
                     v.applyStyle(prefs.textSp.coerceIn(CaptionOverlayView.MIN_SP, CaptionOverlayView.MAX_SP), prefs.bgAlpha)
                 "widthFrac" -> (area().width() * prefs.widthFrac).toInt().let { if (it != cardW) { cardW = it; layout() } }
-                "heightFrac" -> if (captionH == 0) { applyHeight(); layout() }
+                "heightFrac" -> if (captionH == 0) { applyHeight(); layout(); anchor(); savePlace() }
                 "showJa", "showStats" -> { v.setShown(prefs.showJa, prefs.showStats); refresh() }
                 "palette" -> v.setColors(CaptionOverlayView.palette(prefs.palette))
                 "keepSentences", "keepChars" -> if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh()
@@ -712,11 +739,18 @@ class CaptionService : Service() {
         applyHeight()
         wm.addView(v, lp)
         overlay = v
+        // a card saved in the lower half comes back with its bottom edge where it was, whatever its text is now
+        val savedTop = prefs.overlayY; val savedBottom = prefs.overlayBottom
+        val saved = savedTop >= 0 && savedBottom >= 0
+        if (saved && prefs.heightFrac == 0f && (savedTop + savedBottom) / 2 > area().height() / 2) bottomY = savedBottom
         layout()
+        if (!saved) anchor()
         refresh()
     }
 
     private var onDisplayChanged: (() -> Unit)? = null
+    /** After new captions are set: re-places a card that keeps its bottom edge (see showOverlay). */
+    private var relayoutCaptions: () -> Unit = {}
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -794,6 +828,8 @@ class CaptionService : Service() {
         private val setupKeys = setOf("scene", "scenes", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
             "sourceLang", "targetLang")
         const val EXTRA_CODE = "code"
+        /** WindowManager.LayoutParams.PRIVATE_FLAG_NO_MOVE_ANIMATION (hidden) */
+        private const val PRIVATE_FLAG_NO_MOVE_ANIMATION = 0x40
 
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"

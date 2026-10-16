@@ -63,8 +63,10 @@ class Prefs internal constructor(private val file: File) {
     /** the card's top-left in points, on any display (left of or above the main one is negative); null = not placed yet */
     val overlayX: Int? get() = get { if (has("overlayX")) optInt("overlayX") else null }
     val overlayY: Int? get() = get { if (has("overlayY")) optInt("overlayY") else null }
-    fun setOverlay(x: Int?, y: Int?, widthFrac: Float, heightFrac: Float) =
-        put("overlayX" to x, "overlayY" to y, "widthFrac" to widthFrac, "heightFrac" to heightFrac)
+    /** the card's bottom edge when it was placed, in the same points as [overlayY] */
+    val overlayBottom: Int? get() = get { if (has("overlayBottom")) optInt("overlayBottom") else null }
+    fun setOverlay(x: Int?, y: Int?, bottom: Int?, widthFrac: Float, heightFrac: Float) =
+        put("overlayX" to x, "overlayY" to y, "overlayBottom" to bottom, "widthFrac" to widthFrac, "heightFrac" to heightFrac)
     var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
     var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
     var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)

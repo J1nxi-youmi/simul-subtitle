@@ -50,8 +50,18 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.input.pointer.PointerInputScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.TextLayoutResult
 import java.awt.Cursor
 import java.awt.GraphicsEnvironment
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Text / background colours of the captions (ARGB); the background keeps the user's opacity. */
@@ -117,6 +127,7 @@ private suspend fun PointerInputScope.pressOrDrag(onClick: () -> Unit, onStart: 
 @Composable
 fun CaptionCard(
     o: OverlayState, prefs: Prefs, modifier: Modifier = Modifier, fixedHeight: Float = 0f, maxHeight: Float = Float.MAX_VALUE,
+    slides: Boolean = false, keepsBottom: Boolean = false,
     corners: (@Composable androidx.compose.foundation.layout.BoxScope.(Color) -> Unit)? = null,
 ) {
     val p = palette(prefs.palette)
@@ -127,15 +138,48 @@ fun CaptionCard(
     val shadow = if (p.shadow) Shadow(Color(0xEE000000), androidx.compose.ui.geometry.Offset(0f, 1.5f), if (alpha < 0.2f) 6f else 4.5f) else null
     val lines by o.lines
     val diag by o.diag
+    val starts = IntArray(lines.size)
     val text = buildAnnotatedString {
         lines.forEachIndexed { i, l ->
             if (i > 0) append('\n')
             if (!l.ja.isNullOrEmpty()) withStyle(SpanStyle(color = Color(p.ja), fontSize = (size * 0.62f).sp)) { append(l.ja); append('\n') }
+            starts[i] = length
             // the draft line is visibly separate from the finished sentences above: dimmer, smaller, marked "…"
             if (l.isFinal) append(l.zh)
             else withStyle(SpanStyle(color = Color(p.draft), fontSize = (size * 0.85f).sp)) { append("… "); append(l.zh) }
         }
     }
+    // Smooth scroll ([slides]): new text is drawn first where the newest sentence that stays on screen was, then
+    // slides to its new place. Measured from the card's edge that stays put ([keepsBottom]: the bottom, else the
+    // top), so a drag, which moves both, slides nothing, and where the card grows downward nothing above moves.
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val scope = rememberCoroutineScope()
+    var slide by remember { mutableFloatStateOf(0f) }
+    val last = remember { object { var shown: Shown? = null; var job: Job? = null; var onLayout: (TextLayoutResult) -> Unit = {} } }
+    var diagH by remember { mutableIntStateOf(0) }
+    val diagPx = if (diag == null) 0 else diagH
+    last.onLayout = onLayout@{ r ->
+        val boxPx = if (fixedHeight > 0f) fixedHeight * density else minOf(r.size.height.toFloat(), maxHeight * density)
+        // from that edge to the bottom of the text area, where the lines sit (also when the oldest are cut off);
+        // 10 = the card's padding
+        val edgePx = if (keepsBottom) -10f * density - diagPx else 10f * density + boxPx
+        val p = last.shown
+        val now = Shown(lines, starts, r, keepsBottom, edgePx, size).also { last.shown = it }
+        if (!slides) return@onLayout
+        // a new width or font size rewraps everything, a new edge measures from elsewhere: no slide
+        if (p == null || p.layout.size.width != r.size.width || p.size != size || p.keepsBottom != keepsBottom) {
+            last.job?.cancel(); slide = 0f; return@onLayout
+        }
+        val keep = p.lines.lastOrNull { o -> o.isFinal && o.id >= 0 && lines.any { it.isFinal && it.id == o.id } } ?: return@onLayout
+        val d = p.y(keep.id) + slide - now.y(keep.id)
+        if (abs(d - slide) < 1f) return@onLayout // nothing moved: a running slide goes on
+        last.job?.cancel()
+        if (abs(d) < 1f) { slide = 0f; return@onLayout }
+        slide = d
+        last.job = scope.launch { animate(d, 0f, animationSpec = tween(SLIDE_MS)) { v, _ -> slide = v } }
+    }
+    // one callback for good: a new one on every recomposition (a drag recomposes) would lay the text out again
+    val onTextLayout = remember { { r: TextLayoutResult -> last.onLayout(r) } }
     // magpie's hairline edge on a dark card, so it stands off a dark video; none once the card is nearly clear
     val edge = if (p.shadow && alpha >= 0.2f) Color(0x1AFFFFFF) else Color.Transparent
     Box(modifier.background(bg, RoundedCornerShape(12.dp)).border(0.5.dp, edge, RoundedCornerShape(12.dp))) {
@@ -145,15 +189,25 @@ fun CaptionCard(
             val area = if (fixedHeight > 0f) Modifier.height(fixedHeight.dp) else Modifier.heightIn(max = maxHeight.dp)
             if (lines.isNotEmpty() || fixedHeight > 0f) Box(Modifier.fillMaxWidth().then(area).clipToBounds().wrapContentHeight(Alignment.Bottom, unbounded = true)) {
                 Text(text, color = Color(p.zh), fontSize = size.sp, lineHeight = (size * 1.3f).sp, fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
-                    style = androidx.compose.ui.text.TextStyle(shadow = shadow))
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().graphicsLayer { translationY = slide },
+                    style = androidx.compose.ui.text.TextStyle(shadow = shadow), onTextLayout = onTextLayout)
             }
             diag?.let { Text(it, color = Color(p.stats), fontSize = 15.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(), maxLines = 3) }
+                modifier = Modifier.fillMaxWidth().onSizeChanged { s -> diagH = s.height }, maxLines = 3) }
         }
         corners?.invoke(this, Color(p.zh))
     }
 }
+
+/** Caption text as laid out: what it shows, and from which card edge, how far, the bottom of its area was (px). */
+private class Shown(val lines: List<OverlayState.Line>, val starts: IntArray, val layout: TextLayoutResult,
+                    val keepsBottom: Boolean, val edgePx: Float, val size: Float) {
+    /** y (px) of the top of final [id]'s Chinese line, from that edge */
+    fun y(id: Long) = edgePx + layout.getLineTop(layout.getLineForOffset(starts[lines.indexOfFirst { it.isFinal && it.id == id }])) - layout.size.height
+}
+
+/** how long new lines take to slide into place */
+private const val SLIDE_MS = 200
 
 /** The toolbar under (or over) the card: 字号 / 背景, 边听边出 · 原文 · 用时 · 🔒 · ✕, and the two service lights. */
 @Composable
@@ -235,15 +289,39 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
     // (that display is gone) opens at the default place
     var x by remember { mutableStateOf(screen.x + (screen.width - cardW) / 2) }
     var y by remember { mutableStateOf(screen.y + screen.height * 2f / 3) }
+    // Once placed, a card that fits its text and sits in the lower half of its display keeps this bottom edge: new
+    // text pushes the lines above it up and the line being read stays put. Higher up (null) it keeps its top edge.
+    var bottomEdge by remember { mutableStateOf<Float?>(null) }
+    var anchored by remember { mutableStateOf(false) } // the edge to keep was chosen for this placement
     remember {
         val sx = prefs.overlayX; val sy = prefs.overlayY
-        if (sx != null && sy != null && onSome(sx.toFloat(), sy.toFloat(), cardW, 40f)) { x = sx.toFloat(); y = sy.toFloat() }
+        if (sx != null && sy != null && onSome(sx.toFloat(), sy.toFloat(), cardW, 40f)) {
+            x = sx.toFloat(); y = sy.toFloat()
+            // saved in the lower half: back with its bottom edge where it was, whatever its text is now
+            prefs.overlayBottom?.let { sb ->
+                val s = screenAt(x + cardW / 2, y); anchored = true
+                if (prefs.heightFrac <= 0f && (sy + sb) / 2f > s.y + s.height / 2f) bottomEdge = sb.toFloat()
+            }
+        }
     }
     var toolbar by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
     var unlock by remember { mutableStateOf(false) }
     var poke by remember { mutableIntStateOf(0) } // restarts the toolbar's hide timer
     var cardH by remember { mutableIntStateOf(0) }
+    /** a placement ended: choose the edge the card keeps from where it is now */
+    fun anchor() {
+        if (cardH <= 0) return
+        val s = screenAt(x + cardW / 2, y); anchored = true
+        bottomEdge = if (fixedH <= 0f && y + cardH / 2f > s.y + s.height / 2f) y + cardH else null
+    }
+    // the card's top: from its bottom edge as soon as its new height is known, so the window moves with the text
+    // (a function: gesture callbacks outlive this composition and must read the state as it is then)
+    // (kept on the display of that edge: a saved or old edge may lie below it now)
+    fun cardTop() = bottomEdge?.let { b ->
+        if (cardH <= 0) null else screenAt(x + cardW / 2, b - 1).let { s -> (minOf(b, (s.y + s.height).toFloat()) - cardH).coerceAtLeast(s.y.toFloat()) }
+    } ?: y
+    val top = cardTop()
     /**
      * A card with no display under it never gets another frame: its redrawer then waits for a vsync that never comes
      * and the whole app freezes. Moving between displays is free; only a spot on no screen at all snaps back.
@@ -264,7 +342,6 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
     LaunchedEffect(unlock) { if (unlock) { delay(3_000); unlock = false } }
     // the settings screen moves the sliders: follow them (a drag here writes the same values back)
     LaunchedEffect(prefs.widthFrac) { cardW = widthOf(prefs.widthFrac) }
-    LaunchedEffect(prefs.heightFrac) { fixedH = screen.height * prefs.heightFrac }
     // displays come and go (plugged in, rearranged, resolution changed): follow them, and a card left on a display
     // that is gone moves back onto one before its window is moved or resized again
     LaunchedEffect(Unit) {
@@ -276,14 +353,17 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
                 if (!onSome(x, y, cardW, maxOf(cardH, 40).toFloat())) {
                     val s = screens.first()
                     x = s.x + (s.width - cardW).coerceAtLeast(0f) / 2; y = s.y + s.height * 2f / 3
+                    bottomEdge = null; anchored = false
                 }
             }
         }
     }
     // a card that grows (longer text, one more sentence, the original shown) keeps its newest line on its display:
     // it moves up, never below the bottom edge. A drag places it itself.
-    LaunchedEffect(cardH, fixedH, screens) {
+    LaunchedEffect(cardH, fixedH, screens, bottomEdge) {
         if (dragging || cardH <= 0) return@LaunchedEffect
+        if (!anchored) anchor()
+        if (bottomEdge != null) { y = top; return@LaunchedEffect }
         val s = screenAt(x + cardW / 2, y)
         val h = if (fixedH > 0f) fixedH else cardH.toFloat()
         if (y + h > s.y + s.height) y = maxOf(s.y.toFloat(), s.y + s.height - h)
@@ -292,16 +372,23 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
     val bar = toolbar && barH > 0
     val winW = maxOf(cardW, if (toolbar) barW.toFloat() else 0f)
     // the toolbar is centred on the card, below it, or above it when there is no room below
-    val here = screenAt(x, y)
-    val above = bar && y + cardH + gap + barH > here.y + here.height
+    val here = screenAt(x, top)
+    val above = bar && top + cardH + gap + barH > here.y + here.height
     val state = rememberWindowState(position = WindowPosition(x.dp, y.dp), size = DpSize(cardW.dp, 200.dp))
-    LaunchedEffect(x, y, winW, cardW, bar, above, cardH, barH) {
-        state.position = WindowPosition((x - (winW - cardW) / 2).dp, (if (above) y - gap - barH else y).dp)
+    LaunchedEffect(x, top, winW, cardW, bar, above, cardH, barH) {
+        state.position = WindowPosition((x - (winW - cardW) / 2).dp, (if (above) top - gap - barH else top).dp)
         // room for the toolbar to be measured once before it is placed
         state.size = DpSize(winW.dp, (maxOf(cardH, 40) + if (toolbar) gap + maxOf(barH, 140) else 0).dp)
     }
-    fun save() = prefs.setOverlay(x.roundToInt(), y.roundToInt(), (cardW / screen.width).coerceIn(Prefs.MIN_WIDTH, 1f),
-        if (fixedH > 0) (fixedH / screen.height).coerceIn(0.05f, 0.4f) else 0f)
+    fun save() = prefs.setOverlay(x.roundToInt(), y.roundToInt(), if (cardH > 0) (y + cardH).roundToInt() else null,
+        (cardW / screen.width).coerceIn(Prefs.MIN_WIDTH, 1f), if (fixedH > 0) (fixedH / screen.height).coerceIn(0.05f, 0.4f) else 0f)
+    LaunchedEffect(prefs.heightFrac) {
+        if (fixedH == screen.height * prefs.heightFrac) return@LaunchedEffect
+        fixedH = screen.height * prefs.heightFrac
+        // the edge to keep is chosen from the card at its new height: measured a frame later
+        withFrameNanos {}; withFrameNanos {}
+        anchor(); save()
+    }
     Window(onCloseRequest = onStop, state = state, title = "同传字幕 · 字幕", undecorated = true, transparent = true,
         alwaysOnTop = true, resizable = false, focusable = false) {
         // this window's own display scale: sizes are measured in its pixels (another display may scale differently)
@@ -313,16 +400,19 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
                     .pointerInput(Unit) { awaitPointerEventScope { while (true) { awaitPointerEvent(); poke++ } } })
         }
         // measured at its natural height, not the window's: the window then follows what was measured
-        Column(Modifier.wrapContentSize(Alignment.TopCenter, unbounded = true), horizontalAlignment = Alignment.CenterHorizontally) {
+        // (a card that keeps its bottom edge sits on the window's bottom: when it grows before the window has moved and
+        // resized, it is still drawn where it belongs, cut at the top, not a line too low)
+        Column(Modifier.wrapContentSize(if (bottomEdge != null && !toolbar) Alignment.BottomCenter else Alignment.TopCenter, unbounded = true),
+            horizontalAlignment = Alignment.CenterHorizontally) {
             if (toolbar && above) { toolbarView(); Spacer(Modifier.height(gap.dp)) }
             Box {
-                CaptionCard(o, prefs, fixedHeight = fixedH, maxHeight = screenAt(x + cardW / 2, y).height * 0.4f,
+                CaptionCard(o, prefs, fixedHeight = fixedH, maxHeight = screenAt(x + cardW / 2, y).height * 0.4f, slides = true, keepsBottom = bottomEdge != null,
                     modifier = Modifier.width(cardW.dp).onSizeChanged { cardH = (it.height / density).roundToInt() }
                         .pointerInput(locked) {
                             pressOrDrag(onClick = { if (locked) unlock = !unlock else toolbar = !toolbar },
-                                onStart = { dragging = true },
+                                onStart = { dragging = true; if (!locked) { y = cardTop(); bottomEdge = null } },
                                 onDrag = { dx, dy -> if (!locked) { val (nx, ny) = place(x + dx, y + dy); x = nx; y = ny } },
-                                onEnd = { dragging = false; if (!locked) save() })
+                                onEnd = { dragging = false; if (!locked) { anchor(); save() } })
                         },
                     corners = if (!toolbar || locked) null else { color ->
                         // resize marks: a faint "›" in each corner, pointing out of the card; drag one to resize from there
@@ -335,7 +425,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
                                     pressOrDrag(onClick = {}, onStart = {
                                         // the height the pointer drags: the fixed one, or the text area measured now
                                         if (fixedH <= 0f) fixedH = (cardH - 20).toFloat().coerceAtLeast(30f)
-                                        dragging = true
+                                        dragging = true; y = cardTop(); bottomEdge = null
                                     }, onDrag = { dx, dy ->
                                         // the opposite corner stays put; the card never grows past the edge of its screen
                                         val right = x + cardW; val bottom = y + fixedH
@@ -345,7 +435,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
                                         if (top) y = (bottom - h).coerceAtLeast(here.y.toFloat())
                                         cardW = w; fixedH = if (top) bottom - y else h
                                         val (nx, ny) = place(x, y); x = nx; y = ny
-                                    }, onEnd = { dragging = false; save() })
+                                    }, onEnd = { dragging = false; anchor(); save() })
                                 }, contentAlignment = Alignment.Center) {
                                 Text("›", color = color.copy(alpha = 0.5f), fontSize = 16.sp, modifier = Modifier.rotate(rot))
                             }

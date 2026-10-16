@@ -58,6 +58,10 @@ class Prefs(ctx: Context) {
     var overlayY: Int
         get() = sp.getInt("overlayY", -1)
         set(v) = sp.edit().putInt("overlayY", v).apply()
+    /** The card's bottom edge when it was placed (px, same space as [overlayY]); -1 = not saved */
+    var overlayBottom: Int
+        get() = sp.getInt("overlayBottom", -1)
+        set(v) = sp.edit().putInt("overlayBottom", v).apply()
 
     /** Overlay keeps old sentences until there are more than [keepSentences] AND more than [keepChars] characters. */
     var keepSentences: Int

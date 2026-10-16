@@ -82,6 +82,9 @@ fun main() {
            maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
            hintWaitMs = if (judgeEnds) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
            askSilenceMs = (System.getProperty("askSilenceMs") ?: System.getProperty("endSilenceMs") ?: "400").toInt(),
+           // as the app; -DearlyCutAfterMs=0: the cut before 1.0.7 (only at 400 ms pauses or the length limit)
+           earlyCutAfterMs = (System.getProperty("earlyCutAfterMs") ?: "3000").toInt(),
+           earlyCutSilenceMs = (System.getProperty("earlyCutSilenceMs") ?: "192").toInt(),
            holdHint = p::holdHint)
         if (System.getProperty("wav") == "-") {
             // live: 16 kHz mono float32 LE on stdin (tools/mac-capture/build/sysaudio), until it ends

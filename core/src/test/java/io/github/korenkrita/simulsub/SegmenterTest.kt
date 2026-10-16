@@ -579,4 +579,42 @@ class SegmenterTest {
         assertEquals(1, jobs.count { it.isFinal })
         assertTrue(jobs.none { it.endOfSpeech })
     }
+
+    // --- a long utterance ends at a short pause, without waiting for the length limit ---
+
+    @Test
+    fun aLongUtteranceEndsAtAShortPauseThere() {
+        val jobs = ArrayList<AsrJob>()
+        var fed = 0
+        val finalAtFrame = ArrayList<Int>()
+        val s = Segmenter({ jobs.add(it); if (it.isFinal) finalAtFrame += fed }, maxUtteranceMs = 7_000, earlyCutAfterMs = 3_000, earlyCutSilenceMs = 256)
+        // 3.52 s speech (110 frames), a 288 ms pause (short of the 400 ms end silence), then 3 s more
+        for ((speech, ms) in listOf(true to 3520, false to 288, true to 3008, false to 608)) repeat(ms / 32) {
+            fed++; s.accept(FloatArray(frame) { fed.toFloat() }, if (speech) 0.9f else 0.1f, fed * 32L)
+        }
+        val finals = jobs.filter { it.isFinal }
+        assertEquals(listOf(1L, 2L), finals.map { it.segmentId })
+        // the first final comes when the pause reaches 256 ms (frame 118), not 7 s in when a forced cut would go back to it
+        assertEquals(110 + 256 / 32, finalAtFrame[0])
+        // it keeps the speech and ~100 ms of the pause, as a final at the normal end silence does
+        assertEquals((1..113).toList(), frameIds(finals[0]))
+    }
+
+    @Test
+    fun aShortPauseEarlyInTheUtteranceDoesNotEndIt() {
+        val jobs = ArrayList<AsrJob>()
+        val s = Segmenter(jobs::add, maxUtteranceMs = 7_000, earlyCutAfterMs = 3_000, earlyCutSilenceMs = 256)
+        // the same short pause 2 s in: the sentence is likely still going, it stays one utterance
+        run(listOf(true to 2016, false to 288, true to 1504, false to 608), s)
+        assertEquals(1, jobs.count { it.isFinal })
+    }
+
+    @Test
+    fun withAJudgeTheShortPauseIsLeftToIt() {
+        val jobs = ArrayList<AsrJob>()
+        // Jev asks about pauses itself (askSilenceMs); no answer here, so the utterance just goes on
+        val s = Segmenter(jobs::add, minFinalMs = 400, hintWaitMs = 1_000, earlyCutAfterMs = 3_000, earlyCutSilenceMs = 256)
+        run(listOf(true to 3520, false to 288, true to 1504), s)
+        assertTrue(jobs.none { it.isFinal })
+    }
 }

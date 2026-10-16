@@ -53,6 +53,15 @@ class Segmenter(
      * it as no pause. Default [endSilenceMs]: asked at the pause.
      */
     private val askSilenceMs: Int = endSilenceMs,
+    /**
+     * Without a judged hold: an utterance with this much audio before its pause ends at a pause of [earlyCutSilenceMs]
+     * already, shorter than [endSilenceMs]. A speaker who reads comments and chats on often pauses less than
+     * [endSilenceMs] for many seconds; otherwise only [maxUtteranceMs] cuts them, and the forced cut goes back to the
+     * pause it finds, so that sentence's final comes seconds after it was spoken. 0 = off. (A judge asks at its own
+     * [askSilenceMs] instead.)
+     */
+    private val earlyCutAfterMs: Int = 0,
+    private val earlyCutSilenceMs: Int = endSilenceMs,
 ) {
     private val frameMs = frameSize * 1000 / sampleRate
     private val preRollFrames = preRollMs / frameMs
@@ -187,6 +196,9 @@ class Segmenter(
                 tailEarly = true
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
+            // a long utterance at a short pause: end it there, as at the end silence (see earlyCutAfterMs)
+            waitMs <= 0 && earlyCutAfterMs > 0 && silMs >= earlyCutSilenceMs && durMs - silMs >= earlyCutAfterMs ->
+                finalize(speechEnd, continueSpeech = false)
             durMs >= maxMs && forcedCutStep(durMs) -> Unit
             framesSinceDraft * frameMs >= draftEveryMs && durMs >= minDraftMs && f.speech -> {
                 framesSinceDraft = 0

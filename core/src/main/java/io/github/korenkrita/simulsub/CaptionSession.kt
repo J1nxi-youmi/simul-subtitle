@@ -508,7 +508,8 @@ class CaptionSession(private val host: SessionHost) {
                 maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
                 judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS,
-                askSilenceMs = JEV_ASK_SILENCE_MS)
+                askSilenceMs = JEV_ASK_SILENCE_MS,
+                earlyCutAfterMs = EARLY_CUT_AFTER_MS, earlyCutSilenceMs = EARLY_CUT_SILENCE_MS)
             val frame = FloatArray(seg.frameSize)
             var framesRead = 0L
             var statSq = 0.0; var statN = 0; var statMaxP = 0f
@@ -688,6 +689,15 @@ class CaptionSession(private val host: SessionHost) {
         private const val JEV_ASK_SILENCE_MS = 224
         private const val JEV_MAX_UTTERANCE_MS = 5_000
         private const val PLAIN_MAX_UTTERANCE_MS = 7_000
+        /**
+         * Jev off: an utterance with 3 s of audio ends at a 192 ms pause (see Segmenter.earlyCutAfterMs). On a 15 min
+         * clip a quarter of the finals came from the 7 s forced cut, which goes back to a pause seconds after it was
+         * spoken (one final 4.6 s late): final p90 2610 -> 681 ms, first translation seen p90 1638 -> 644 ms, finals
+         * 199 -> 210, the share ending on a particle such as て/けど/から unchanged (25%). A cut at 3.5 s instead got
+         * p90 1657 ms with 298 finals; 256 ms pauses p90 1588 ms.
+         */
+        private const val EARLY_CUT_AFTER_MS = 3_000
+        private const val EARLY_CUT_SILENCE_MS = 192
         /**
          * Below this many ms of speech a cut waits for [Segmenter.maxHoldSilenceMs] before it is sent (see
          * Segmenter.holding), so short utterances ("はい", "えっ") used to sit ~1.1 s longer than everything else:

@@ -200,7 +200,7 @@ fun CaptionCard(
 }
 
 /** Caption text as laid out: what it shows, and from which card edge, how far, the bottom of its area was (px). */
-private class Shown(val lines: List<OverlayState.Line>, val starts: IntArray, val layout: TextLayoutResult,
+private class Shown(val lines: List<CaptionLine>, val starts: IntArray, val layout: TextLayoutResult,
                     val keepsBottom: Boolean, val edgePx: Float, val size: Float) {
     /** y (px) of the top of final [id]'s Chinese line, from that edge */
     fun y(id: Long) = edgePx + layout.getLineTop(layout.getLineForOffset(starts[lines.indexOfFirst { it.isFinal && it.id == id }])) - layout.size.height

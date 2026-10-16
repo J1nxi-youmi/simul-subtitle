@@ -3,7 +3,7 @@ package io.github.korenkrita.simulsub
 import android.content.Context
 
 /** Subtitle look, shared by the settings screen (live preview) and the overlay. */
-class Prefs(ctx: Context) {
+class Prefs(ctx: Context) : SessionPrefs {
     private val sp = ctx.getSharedPreferences("jpsub", Context.MODE_PRIVATE)
     // every LLM API request (the session, 测试连接, 生成术语) is made after some Prefs exists
     init { ByokTranslator.defaultUserAgent = "SimulSub/${BuildConfig.VERSION_NAME}" }
@@ -42,12 +42,12 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putFloat("heightFrac", v).apply()
 
     /** Show the recognised Japanese above the Chinese line */
-    var showJa: Boolean
+    override var showJa: Boolean
         get() = sp.getBoolean("showJa", true)
         set(v) = sp.edit().putBoolean("showJa", v).apply()
 
     /** Show the small timing line under the captions */
-    var showStats: Boolean
+    override var showStats: Boolean
         get() = sp.getBoolean("showStats", true)
         set(v) = sp.edit().putBoolean("showStats", v).apply()
 
@@ -64,24 +64,24 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putInt("overlayBottom", v).apply()
 
     /** Overlay keeps old sentences until there are more than [keepSentences] AND more than [keepChars] characters. */
-    var keepSentences: Int
+    override var keepSentences: Int
         get() = sp.getInt("keepSentences", CaptionBoard.DEFAULT_SENTENCES)
         set(v) = sp.edit().putInt("keepSentences", v).apply()
-    var keepChars: Int
+    override var keepChars: Int
         get() = sp.getInt("keepChars", CaptionBoard.DEFAULT_CHARS)
         set(v) = sp.edit().putInt("keepChars", v).apply()
 
     /** true = only show finished sentences; false = live drafts that are corrected in place. Overlay and home share it. */
-    var finalOnly: Boolean
+    override var finalOnly: Boolean
         get() = sp.getBoolean("finalOnly", false)
         set(v) = sp.edit().putBoolean("finalOnly", v).apply()
 
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
-    var sourceLang: Lang?
+    override var sourceLang: Lang?
         get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
         set(v) = sp.edit().putString("sourceLang", v?.code ?: "auto").apply()
     /** a preset language, or one the user typed ("custom:<name>") */
-    var targetLang: Target
+    override var targetLang: Target
         get() = Target.parse(sp.getString("targetLang", null)) ?: Target.ZH
         set(v) = sp.edit().putString("targetLang", v.stored).apply()
 
@@ -90,40 +90,40 @@ class Prefs(ctx: Context) {
         get() = Scene.all(sp.getString("scenes", null))
         set(v) = sp.edit().putString("scenes", Scene.store(v)).apply()
     /** What the subtitles are about (translator background + term list), one of [scenes]; read when a session starts. */
-    var scene: Scene
+    override var scene: Scene
         get() = sp.getString("scene", null).let { id -> scenes.let { all -> all.firstOrNull { it.id == id } ?: all.first() } }
         set(v) = sp.edit().putString("scene", v.id).apply()
 
     /** Use Jev (cloud) for sentence ends; needs the key of [jevProvider]. */
-    var jevOn: Boolean
+    override var jevOn: Boolean
         get() = sp.getBoolean("jevOn", false)
         set(v) = sp.edit().putBoolean("jevOn", v).apply()
     /** Check every final translation with Jev; independent of [jevOn]. Off by default. */
-    var jevCheck: Boolean
+    override var jevCheck: Boolean
         get() = sp.getBoolean("jevCheck", false)
         set(v) = sp.edit().putBoolean("jevCheck", v).apply()
     /** Drop a repeat at the join of a kept draft and the rest (Pipeline.dedupeJoin). Off by default. */
-    var dedupeJoin: Boolean
+    override var dedupeJoin: Boolean
         get() = sp.getBoolean("dedupeJoin", false)
         set(v) = sp.edit().putBoolean("dedupeJoin", v).apply()
     /** Write a session log (Settings → 使用记录). Off by default: nothing is recorded until the user turns it on. */
-    var keepLogs: Boolean
+    override var keepLogs: Boolean
         get() = sp.getBoolean("keepLogs", false)
         set(v) = sp.edit().putBoolean("keepLogs", v).apply()
     /** Give the translator the last finished sentences as context (on by default). */
-    var contextOn: Boolean
+    override var contextOn: Boolean
         get() = sp.getBoolean("contextOn", true)
         set(v) = sp.edit().putBoolean("contextOn", v).apply()
-    var contextSentences: Int
+    override var contextSentences: Int
         get() = sp.getInt("contextSentences", Pipeline.PREVIOUS_SENTENCES).coerceIn(1, Pipeline.MAX_PREVIOUS_SENTENCES)
         set(v) = sp.edit().putInt("contextSentences", v).apply()
-    var jevProvider: JevProvider
+    override var jevProvider: JevProvider
         // with no choice yet, the free Zen endpoint
         get() = runCatching { JevProvider.valueOf(sp.getString("jevProvider", null) ?: "") }.getOrDefault(JevProvider.ZEN)
         set(v) = sp.edit().putString("jevProvider", v.name).apply()
 
     /** API key per provider, encrypted with an Android Keystore key (the stored value is useless off this device). */
-    fun jevKey(p: JevProvider): String? = sp.getString("jevKey:${p.name}", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+    override fun jevKey(p: JevProvider): String? = sp.getString("jevKey:${p.name}", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
     fun setJevKey(p: JevProvider, key: String?) =
         sp.edit().apply { if (key.isNullOrBlank()) remove("jevKey:${p.name}") else putString("jevKey:${p.name}", KeyBox.seal(key.trim())) }.apply()
 
@@ -187,7 +187,7 @@ class Prefs(ctx: Context) {
      * The saved service read together (one copy of the preferences), for a session building its translator; null when
      * the address is not valid. The key may be "" (a service without one).
      */
-    fun byokService(): ByokService? {
+    override fun byokService(): ByokService? {
         val all = sp.all
         val s = LlmProfile.all(all["byokProfiles"] as? String).let { l -> l.firstOrNull { it.id == all["byokActive"] } ?: l.first() }.suffix
         val url = ByokTranslator.chatUrl((all["byokUrl$s"] as? String).orEmpty()).second ?: return null
@@ -199,8 +199,8 @@ class Prefs(ctx: Context) {
      * The [ByokTranslator.THINKING_OFF] variant (by name) that answered without reasoning for this exact service URL and
      * model; null = not found yet. Kept per URL + model, so switching back and forth does not probe again.
      */
-    fun byokVariant(url: String, model: String): String? = sp.getString("byokVariant:$url|$model", null)
-    fun setByokVariant(url: String, model: String, name: String?) =
+    override fun byokVariant(url: String, model: String): String? = sp.getString("byokVariant:$url|$model", null)
+    override fun setByokVariant(url: String, model: String, name: String?) =
         sp.edit().apply { if (name == null) remove("byokVariant:$url|$model") else putString("byokVariant:$url|$model", name) }.apply()
     /** URL and model are there and valid: BYOK can start (the key may be left empty, for a free service). */
     val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()

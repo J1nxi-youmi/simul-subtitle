@@ -266,8 +266,8 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
 @Composable
 private fun CaptionTab() {
     val sample = remember { OverlayState() }
-    sample.lines.value = listOf(OverlayState.Line("这一句已经说完，是正式字幕", if (prefs.showJa) "（这里显示原文）" else null, true),
-        OverlayState.Line("正在说的这一句…", if (prefs.showJa) "（原文）" else null, false))
+    sample.lines.value = listOf(CaptionLine("这一句已经说完，是正式字幕", if (prefs.showJa) "（这里显示原文）" else null, true),
+        CaptionLine("正在说的这一句…", if (prefs.showJa) "（原文）" else null, false))
     sample.diag.value = if (prefs.showStats) "这里显示识别和翻译用了多久" else null
     Group("外观") {
         Box(Modifier.fillMaxWidth().background(Color(0xFF3A3A40), RoundedCornerShape(10.dp)).padding(vertical = 16.dp, horizontal = 12.dp),

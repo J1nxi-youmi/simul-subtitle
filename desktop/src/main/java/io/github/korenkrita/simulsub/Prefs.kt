@@ -22,7 +22,7 @@ val dataDir: File = File(System.getProperty("simulsub.data")
  * Keychain (on Windows: keys.json, encrypted for this Windows user) instead. Every read also reads [rev], so a composable that shows a setting follows its changes.
  * Listeners get the changed key on the thread that changed it, like SharedPreferences.
  */
-class Prefs internal constructor(private val file: File) {
+class Prefs internal constructor(private val file: File) : SessionPrefs {
     private val lock = Any()
     private val json: JSONObject = runCatching { JSONObject(file.readText()) }.getOrDefault(JSONObject())
     private val rev = mutableIntStateOf(0)
@@ -58,8 +58,8 @@ class Prefs internal constructor(private val file: File) {
     var widthFrac: Float get() = float("widthFrac", DEFAULT_WIDTH); set(v) = put("widthFrac" to v)
     /** caption area height as a part of the screen height; 0 = follows the content */
     var heightFrac: Float get() = float("heightFrac", 0f); set(v) = put("heightFrac" to v)
-    var showJa: Boolean get() = bool("showJa", true); set(v) = put("showJa" to v)
-    var showStats: Boolean get() = bool("showStats", true); set(v) = put("showStats" to v)
+    override var showJa: Boolean get() = bool("showJa", true); set(v) = put("showJa" to v)
+    override var showStats: Boolean get() = bool("showStats", true); set(v) = put("showStats" to v)
     /** the card's top-left in points, on any display (left of or above the main one is negative); null = not placed yet */
     val overlayX: Int? get() = get { if (has("overlayX")) optInt("overlayX") else null }
     val overlayY: Int? get() = get { if (has("overlayY")) optInt("overlayY") else null }
@@ -67,30 +67,30 @@ class Prefs internal constructor(private val file: File) {
     val overlayBottom: Int? get() = get { if (has("overlayBottom")) optInt("overlayBottom") else null }
     fun setOverlay(x: Int?, y: Int?, bottom: Int?, widthFrac: Float, heightFrac: Float) =
         put("overlayX" to x, "overlayY" to y, "overlayBottom" to bottom, "widthFrac" to widthFrac, "heightFrac" to heightFrac)
-    var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
-    var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
-    var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
+    override var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
+    override var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
+    override var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
     /** null: not sure (the recognizer decides) */
-    var sourceLang: Lang?
+    override var sourceLang: Lang?
         get() = (str("sourceLang") ?: "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }
         set(v) = put("sourceLang" to (v?.code ?: "auto"))
     /** a preset language, or one the user typed ("custom:<name>") */
-    var targetLang: Target get() = Target.parse(str("targetLang")) ?: Target.ZH; set(v) = put("targetLang" to v.stored)
+    override var targetLang: Target get() = Target.parse(str("targetLang")) ?: Target.ZH; set(v) = put("targetLang" to v.stored)
     /** The built-in scenes (as edited) and the user's own, see [Scene.all]. */
     var scenes: List<Scene> get() = Scene.all(str("scenes")); set(v) = put("scenes" to Scene.store(v))
     /** one of [scenes] */
-    var scene: Scene
+    override var scene: Scene
         get() = str("scene").let { id -> scenes.let { all -> all.firstOrNull { it.id == id } ?: all.first() } }
         set(v) = put("scene" to v.id)
-    var jevOn: Boolean get() = bool("jevOn", false); set(v) = put("jevOn" to v)
-    var jevCheck: Boolean get() = bool("jevCheck", false); set(v) = put("jevCheck" to v)
-    var dedupeJoin: Boolean get() = bool("dedupeJoin", false); set(v) = put("dedupeJoin" to v)
-    var keepLogs: Boolean get() = bool("keepLogs", false); set(v) = put("keepLogs" to v)
-    var contextOn: Boolean get() = bool("contextOn", true); set(v) = put("contextOn" to v)
-    var contextSentences: Int
+    override var jevOn: Boolean get() = bool("jevOn", false); set(v) = put("jevOn" to v)
+    override var jevCheck: Boolean get() = bool("jevCheck", false); set(v) = put("jevCheck" to v)
+    override var dedupeJoin: Boolean get() = bool("dedupeJoin", false); set(v) = put("dedupeJoin" to v)
+    override var keepLogs: Boolean get() = bool("keepLogs", false); set(v) = put("keepLogs" to v)
+    override var contextOn: Boolean get() = bool("contextOn", true); set(v) = put("contextOn" to v)
+    override var contextSentences: Int
         get() = int("contextSentences", Pipeline.PREVIOUS_SENTENCES).coerceIn(1, Pipeline.MAX_PREVIOUS_SENTENCES)
         set(v) = put("contextSentences" to v)
-    var jevProvider: JevProvider
+    override var jevProvider: JevProvider
         get() = runCatching { JevProvider.valueOf(str("jevProvider") ?: "") }.getOrDefault(JevProvider.ZEN)
         set(v) = put("jevProvider" to v.name)
     var autoUpdate: Boolean get() = bool("autoUpdate", true); set(v) = put("autoUpdate" to v)
@@ -98,7 +98,7 @@ class Prefs internal constructor(private val file: File) {
     var skippedUpdate: Int get() = int("skippedUpdate", 0); set(v) = put("skippedUpdate" to v)
 
 
-    fun jevKey(p: JevProvider): String? { rev.intValue; return Keychain.get("jevKey:${p.name}") }
+    override fun jevKey(p: JevProvider): String? { rev.intValue; return Keychain.get("jevKey:${p.name}") }
     /** false when the keychain refused it */
     fun setJevKey(p: JevProvider, key: String?): Boolean =
         Keychain.set("jevKey:${p.name}", key?.trim()).also { if (it) put("jevKey:${p.name}" to null) }
@@ -164,14 +164,14 @@ class Prefs internal constructor(private val file: File) {
     val byokUserAgent: String get() = str("byokUserAgent$sfx").orEmpty()
     val byokHeaders: List<Pair<String, String>> get() { rev.intValue; return ByokService.parseHeaders(Keychain.get("byokHeaders$sfx")) }
     /** The saved service read as one (null: the address is not valid); the key may be "" (a service without one). */
-    fun byokService(): ByokService? = synchronized(byokLock) {
+    override fun byokService(): ByokService? = synchronized(byokLock) {
         val a = str("byokActive"); val s = LlmProfile.all(str("byokProfiles")).let { l -> l.firstOrNull { it.id == a } ?: l.first() }.suffix
         val url = ByokTranslator.chatUrl(str("byokUrl$s") ?: "").second ?: return null
         ByokService(url, str("byokModel$s") ?: "", Keychain.get("byokKey$s").orEmpty(), str("byokUserAgent$s") ?: "",
             ByokService.parseHeaders(Keychain.get("byokHeaders$s")))
     }
-    fun byokVariant(url: String, model: String): String? = str("byokVariant:$url|$model")
-    fun setByokVariant(url: String, model: String, name: String?) = put("byokVariant:$url|$model" to name)
+    override fun byokVariant(url: String, model: String): String? = str("byokVariant:$url|$model")
+    override fun setByokVariant(url: String, model: String, name: String?) = put("byokVariant:$url|$model" to name)
     /** address and model are there (the key may be left empty, for a free service) */
     val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()
 

@@ -46,7 +46,10 @@ interface AudioSource {
     fun read(frame: FloatArray): Long
     /** the last [read] gave the read time, not the capture time */
     val estimated: Boolean
-    /** after the audio ended by itself: why, for the user; null when it ended without a reason to show */
+    /**
+     * After the audio ended by itself, or was ended because a worker failed: why, for the user (shown in the first
+     * case only), and its end in the log; null when it ended without a reason to show
+     */
     fun endReason(): String?
     /** Session thread, after the last read. */
     fun close()
@@ -529,7 +532,9 @@ class CaptionSession(private val host: SessionHost) {
                     statSq = 0.0; statN = 0; statMaxP = 0f
                 }
             }
-            if (stopping || overloaded || failed) return null
+            if (stopping || overloaded) return null
+            // a worker failed: the audio was ended for it; its end goes to the log (the message is the worker's)
+            if (failed) { src.endReason(); return null }
             seg.flush()
             return src.endReason()
         } finally {
@@ -601,7 +606,7 @@ class CaptionSession(private val host: SessionHost) {
             val key = c.segmentId to c.revision
             if (key !in lastUpdateMs && c.audioEndAt > 0) {
                 lastUpdateMs[key] = now - c.audioEndAt
-                host.logInfo("shown seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} update=${now - c.audioEndAt}ms")
+                host.logInfo("shown seg=${c.segmentId}.${c.revision}${if (c.isFinal) "F" else "d"} update=${now - c.audioEndAt}ms hal=${!c.timeEstimated}")
             }
         }
         if (lastUpdateMs.size > 64) lastUpdateMs.keys.removeAll { k -> shown.none { it.segmentId to it.revision == k } }

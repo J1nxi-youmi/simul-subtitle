@@ -104,7 +104,8 @@ class CaptionSessionTest {
             System.arraycopy(samples, pos, frame, 0, frame.size); pos += frame.size
             return t0 + pos * 1000L / 16_000
         }
-        override fun endReason() = end
+        @Volatile var endAsked = false
+        override fun endReason(): String? { endAsked = true; return end }
         override fun close() { closed = true }
         override fun cancel() = cancelled.countDown()
     }
@@ -210,6 +211,7 @@ class CaptionSessionTest {
         host.settle()
         assertTrue(host.diag!!, host.diag!!.startsWith("出错：识别坏了。点 ✕ 结束后可以重新开始。"))
         assertTrue(host.audio.closed)
+        assertTrue(host.audio.endAsked) // the desktop logs how sysaudio ended
         assertEquals(1L, host.finished.count)
         assertEquals(0, mtCalls.get())
     }

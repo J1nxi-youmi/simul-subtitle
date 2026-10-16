@@ -47,6 +47,20 @@
 
 ---
 
-## 后续可探索方向
+## 与纯日语模型的实测对比
 
-- 针对纯日语观看场景，评估是否可切换或可选加载纯日语模型 [reazonspeech-k2-v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)，验证能否消除日语被误识为英语单词的情况（待实测）。
+纯日语模型 [reazonspeech-k2-v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)（sherpa-onnx 导出版 `sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01`）曾被列为「消除日语被误识为英语」的候选，2026-10 实测后**不切换**：
+
+| 指标 | ReazonSpeech k2 v2 ja-en（现用） | reazonspeech-k2-v2 纯日语 |
+|---|---|---|
+| **FLEURS 日语 CER**（口径同上，650 句） | 8.57% | 8.56% |
+| **实时率（RTF，Mac M4 Pro，2 线程）** | **0.0080** | 0.0107（慢约 34%） |
+| **模型文件体积**（int8 encoder + decoder + int8 joiner） | **77 MB** | 169 MB |
+| **15 分钟真实直播：含英文字母的识别结果**（VAD 切出 141 段） | 1 段 | 0 段 |
+
+- 现用模型在 FLEURS 上复测为 8.57%，与上文 8.48% 接近（相差 0.09 个百分点，可能来自 `sherpa-onnx` 版本或归一化细节），两次测量口径可以对比。
+- 真实直播中「日语被识别成英语」只有 1 段（「スパチャすら」→「スーパーJUST」），问题本身很少出现；纯日语模型在朗读集上同样会输出英文字母（原文里的缩写）。
+- 两个模型在直播片段上的 141 段里有 92 段输出不同，抽查 25 段互有优劣：纯日语模型有段落更准，也有整段只剩一个字、把「弾幕」识别成「段膜」的情况。
+- `sherpa-onnx` 发布的 `sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17` 与现用模型的文件逐字节相同，并非新版本。
+
+结论：准确率相同，体积翻倍、速度更慢，而要解决的问题在直播中极少出现，继续使用现用模型。

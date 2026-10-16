@@ -81,6 +81,7 @@ fun main() {
            minFinalMs = (System.getProperty("minFinalMs") ?: "400").toInt(), // as the app
            maxHoldSilenceMs = (System.getProperty("maxHoldSilenceMs") ?: "1500").toInt(),
            hintWaitMs = if (judgeEnds) (System.getProperty("hintWaitMs") ?: "1000").toInt() else 0,
+           askSilenceMs = (System.getProperty("askSilenceMs") ?: System.getProperty("endSilenceMs") ?: "400").toInt(),
            holdHint = p::holdHint)
         if (System.getProperty("wav") == "-") {
             // live: 16 kHz mono float32 LE on stdin (tools/mac-capture/build/sysaudio), until it ends

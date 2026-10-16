@@ -225,12 +225,14 @@ class SegmenterTest {
 
     /** A judge that answers [latencyMs] after the end-of-speech draft was emitted (ASR + network), in audio time. */
     private fun timedJudge(answer: Boolean, latencyMs: Int, pattern: List<Pair<Boolean, Int>>, hintWaitMs: Int = 1000,
-                           maxHoldSilenceMs: Int = 2500, maxUtteranceMs: Int = 7000): List<AsrJob> {
+                           maxHoldSilenceMs: Int = 2500, maxUtteranceMs: Int = 7000, askSilenceMs: Int = 400,
+                           times: MutableList<Long>? = null): List<AsrJob> {
         val jobs = ArrayList<AsrJob>()
         var now = 0L
         val sentAt = HashMap<Pair<Long, Int>, Long>()
-        val s = Segmenter({ jobs.add(it); if (it.endOfSpeech) sentAt[it.segmentId to it.revision] = now },
+        val s = Segmenter({ jobs.add(it); times?.add(now); if (it.endOfSpeech) sentAt[it.segmentId to it.revision] = now },
             minFinalMs = 1200, maxHoldSilenceMs = maxHoldSilenceMs, hintWaitMs = hintWaitMs, maxUtteranceMs = maxUtteranceMs,
+            askSilenceMs = askSilenceMs,
             holdHint = { seg, rev -> sentAt[seg to rev]?.let { if (now - it >= latencyMs) answer else null } })
         var idx = 0
         for ((speech, ms) in pattern) repeat(ms / 32) {
@@ -256,6 +258,37 @@ class SegmenterTest {
         val tail = jobs.single { it.endOfSpeech }
         assertEquals(frameIds(tail), frameIds(f))
         assertTrue(jobs.indexOf(f) > jobs.indexOf(tail))
+    }
+
+    @Test
+    fun askedEarlyAFinishedAnswerFinalizesAtThePauseWithTheSameAudio() {
+        val pattern = listOf(true to 1504, false to 3000)
+        val atPause = ArrayList<Long>(); val early = ArrayList<Long>()
+        val a = timedJudge(answer = false, latencyMs = 200, pattern = pattern, times = atPause)
+        val b = timedJudge(answer = false, latencyMs = 200, pattern = pattern, askSilenceMs = 224, times = early)
+        val fa = a.indexOfFirst { it.isFinal }; val fb = b.indexOfFirst { it.isFinal }
+        assertEquals(frameIds(a[fa]), frameIds(b[fb]))
+        // asked at the pause: final ~200 ms after it; asked at 224 ms: the answer is there when the pause (416 ms) is
+        assertTrue("${atPause[fa]}", atPause[fa] >= 1504 + 416 + 200)
+        assertTrue("${early[fb]}", early[fb] <= 1504 + 448)
+    }
+
+    @Test
+    fun askedEarlyWithoutAnAnswerTheFinalComesWhenItWouldHave() {
+        val pattern = listOf(true to 1504, false to 3000)
+        val atPause = ArrayList<Long>(); val early = ArrayList<Long>()
+        val a = timedJudge(answer = false, latencyMs = 60_000, pattern = pattern, times = atPause)
+        val b = timedJudge(answer = false, latencyMs = 60_000, pattern = pattern, askSilenceMs = 224, times = early)
+        assertEquals(atPause[a.indexOfFirst { it.isFinal }], early[b.indexOfFirst { it.isFinal }])
+    }
+
+    @Test
+    fun askedEarlyASilenceShorterThanThePauseIsNoCut() {
+        // 320 ms of silence: asked about at 224 ms and answered "finished", but the speaker went on before 400 ms
+        val jobs = timedJudge(answer = false, latencyMs = 64, askSilenceMs = 224,
+            pattern = listOf(true to 1504, false to 320, true to 1504, false to 3000))
+        assertEquals(listOf(1L), jobs.filter { it.isFinal }.map { it.segmentId })
+        assertTrue(jobs.count { it.endOfSpeech } >= 2)
     }
 
     // A pause candidate whose "finished" answer arrives after the speaker went on: the sentence before the pause is

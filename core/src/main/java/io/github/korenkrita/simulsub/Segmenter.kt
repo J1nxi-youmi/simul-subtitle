@@ -47,6 +47,12 @@ class Segmenter(
     private val judged: ((segmentId: Long) -> Boolean)? = null,
     /** [maxUtteranceMs] for an utterance [judged] said no to */
     private val plainMaxUtteranceMs: Int = maxUtteranceMs,
+    /**
+     * With [hintWaitMs]: the pause candidate is emitted (recognized and asked about) after this much silence, still
+     * cut only at [endSilenceMs]; the answer then often is there when the pause is. Speech before [endSilenceMs] drops
+     * it as no pause. Default [endSilenceMs]: asked at the pause.
+     */
+    private val askSilenceMs: Int = endSilenceMs,
 ) {
     private val frameMs = frameSize * 1000 / sampleRate
     private val preRollFrames = preRollMs / frameMs
@@ -64,6 +70,8 @@ class Segmenter(
     private var tailRevision = -1
     private var tailCut = 0
     private var tailAtFrames = 0
+    /** the candidate was emitted at [askSilenceMs], before the pause reached [endSilenceMs] */
+    private var tailEarly = false
     /**
      * A pause candidate the speaker talked past before its answer came: its answer is still waited for, within
      * 2 x [hintWaitMs] of the candidate. "Finished" = the sentence before the pause is done, cut there and carry the
@@ -124,7 +132,9 @@ class Segmenter(
         framesSinceDraft++
         silentFrames = if (f.speech) 0 else silentFrames + 1
         if (f.speech && tailRevision >= 0) {
-            resumedRevision = tailRevision; resumedCut = tailCut; resumedAtFrames = tailAtFrames
+            // a candidate asked about before the pause was long enough is just dropped: there was no pause
+            if (tailEarly) tailEarly = false
+            else { resumedRevision = tailRevision; resumedCut = tailCut; resumedAtFrames = tailAtFrames }
             tailRevision = -1
         }
         if (resumedRevision >= 0) {
@@ -149,7 +159,14 @@ class Segmenter(
         when {
             // a held pause is bounded by maxHoldSilenceMs; no forced cut inside it (the final drops the silence)
             inPause && (durMs >= hardMaxMs || !holding(silMs)) -> finalize(speechEnd, continueSpeech = false)
-            inPause -> if (waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
+            inPause -> if (tailEarly) {
+                // the candidate asked early is now a real pause: from here on it is one as if emitted now
+                tailEarly = false
+                if (cutRevision >= 0) { cutRevision = -1; cutClosed = true }
+                heldRevision = -1
+                resumedRevision = -1
+                tailAtFrames = frames.size
+            } else if (waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs) {
                 // a newer candidate end replaces an open forced-cut question, and closes it for this utterance
                 if (cutRevision >= 0) { cutRevision = -1; cutClosed = true }
                 heldRevision = -1 // and a hold taken before: this newer candidate decides now
@@ -157,6 +174,14 @@ class Segmenter(
                 tailRevision = ++revision
                 tailCut = speechEnd
                 tailAtFrames = frames.size
+                emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
+            }
+            // ask early (see askSilenceMs): the same audio as at the pause, so its answer is there sooner
+            silMs >= askSilenceMs && waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs -> {
+                tailRevision = ++revision
+                tailCut = speechEnd
+                tailAtFrames = frames.size
+                tailEarly = true
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
             durMs >= maxMs && forcedCutStep(durMs) -> Unit
@@ -231,6 +256,7 @@ class Segmenter(
     private fun finalize(count: Int, continueSpeech: Boolean) {
         emit(AsrJob(segmentId, ++revision, true, concat(count), frames[count - 1].endAt, frames[count - 1].estimated))
         tailRevision = -1
+        tailEarly = false
         resumedRevision = -1
         cutRevision = -1
         cutClosed = false

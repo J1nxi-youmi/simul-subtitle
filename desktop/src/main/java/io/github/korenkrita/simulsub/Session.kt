@@ -448,7 +448,8 @@ class CaptionService private constructor(private val sysaudio: File) {
             val seg = Segmenter({ pl.submit(it) }, minFinalMs = MIN_FINAL_MS, maxHoldSilenceMs = 1_500,
                 maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
-                judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS)
+                judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS,
+                askSilenceMs = JEV_ASK_SILENCE_MS)
             val input = java.io.DataInputStream(java.io.BufferedInputStream(p.inputStream))
             val bytes = ByteArray(seg.frameSize * 4)
             val bb = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -625,6 +626,9 @@ class CaptionService private constructor(private val sysaudio: File) {
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000
+        /** Jev on: a pause is recognized and asked about after this much silence, cut at 400 ms as before. Replayed
+         *  15 min clip: final wait p50 673 -> 544 ms, Jev calls 240 -> 307 (pauses the speaker talked through). */
+        private const val JEV_ASK_SILENCE_MS = 224
         /** as the app (CaptionService.MIN_FINAL_MS): a shorter utterance waits up to 1.5 s of silence to be joined */
         private const val MIN_FINAL_MS = 400
         private const val JEV_MAX_UTTERANCE_MS = 5_000

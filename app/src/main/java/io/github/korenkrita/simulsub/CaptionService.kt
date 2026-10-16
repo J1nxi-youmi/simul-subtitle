@@ -797,8 +797,9 @@ class CaptionService : Service() {
 
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"
-        // 8 Gen 3: 1×X4 + 5×A720 + 2×A520: ASR stays on two of the big cores.
-        private const val ASR_THREADS = 2
+        // 8 Gen 3: 1×X4 + 5×A720 + 2×A520: four threads fit on the big cores. On an M4 Pro, 4 threads instead of 2 cut a
+        // 7 s recognition from 53 to 44 ms (2 s: 21 -> 19 ms); not measured on a phone.
+        private const val ASR_THREADS = 4
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000

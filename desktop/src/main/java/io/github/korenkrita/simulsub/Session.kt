@@ -621,8 +621,9 @@ class CaptionService private constructor(private val sysaudio: File) {
          */
         private val setupKeys = setOf("scene", "scenes", "contextOn", "contextSentences", "dedupeJoin", "jevProvider",
             "sourceLang", "targetLang")
-        // Apple silicon: ASR stays on two of the performance cores (and two threads on a Windows PC too)
-        private const val ASR_THREADS = 2
+        // Apple silicon: four of the performance cores (M4 Pro: a 7 s recognition 53 -> 44 ms against 2 threads; 6 gave
+        // 41 ms), and four threads on a Windows PC too
+        private const val ASR_THREADS = 4
         private const val DRAIN_TIMEOUT_MS = 60_000L
         /** How long after a sentence-end candidate to wait for Jev before finalizing (ASR ~0.1 s + Jev p90 ~0.7 s). */
         private const val JEV_WAIT_MS = 1_000

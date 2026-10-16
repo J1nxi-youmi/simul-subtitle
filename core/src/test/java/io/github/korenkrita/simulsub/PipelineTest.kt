@@ -1379,13 +1379,16 @@ class PipelineTest {
     fun wordsDroppedFromAudioCarriedIntoTheNextSegmentComeBackFromThePreviousDraft() {
         val draft = pieces("これって大丈夫", 0f, 0.12f) + pieces("お弁当ありがとう", 2.8f, 0.09f)
         val asr = TimedAsr(mapOf(
+            16_000 to pieces("これって", 0f, 0.12f),
             64_000 to draft,
             40_480 to pieces("これって大丈夫", 0f, 0.12f),
             39_520 to listOf(Piece("こ", 1.8f)) + pieces("れってさひとつききたいんだけど", 1.9f, 0.1f)))
         val audio = FloatArray(80_000) { it.toFloat() } // the segmenter's frames: seg 2 starts where seg 1's final ended
+        // an earlier, shorter draft first: the audio compared is the longest draft's
         val f = finalsOf(asr, listOf(
-            AsrJob(1, 1, false, audio.copyOfRange(0, 64_000), monoMs()),
-            AsrJob(1, 2, true, audio.copyOfRange(0, 40_480), monoMs()),
+            AsrJob(1, 1, false, audio.copyOfRange(0, 16_000), monoMs()),
+            AsrJob(1, 2, false, audio.copyOfRange(0, 64_000), monoMs()),
+            AsrJob(1, 3, true, audio.copyOfRange(0, 40_480), monoMs()),
             AsrJob(2, 1, true, audio.copyOfRange(40_480, 80_000), monoMs())))
         assertEquals("これって大丈夫", f[1])
         assertEquals("お弁当ありがとうこれってさひとつききたいんだけど", f[2])

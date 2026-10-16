@@ -371,10 +371,12 @@ class Pipeline(
         return null
     }
 
-    /** A draft as shown: its audio, its text and that text in timed pieces (after any repair; null: no timings). */
-    private class Shown(val samples: FloatArray, val text: String, val pieces: List<Piece>?)
+    /** A draft as shown: its audio's samples (see [segAudio]), its text and that text in timed pieces (after any repair; null: no timings). */
+    private class Shown(val size: Int, val text: String, val pieces: List<Piece>?)
     /** Per segment, its drafts as shown, newest last (see [carried] for the first); asr thread only. */
     private val segDrafts = HashMap<Long, MutableList<Shown>>()
+    /** Per segment, its longest draft's audio: every draft starts at the segment start, so each is a prefix of it; asr thread only. */
+    private val segAudio = HashMap<Long, FloatArray>()
     /** Samples in each segment's final; asr thread only. */
     private val finalSamples = HashMap<Long, Int>()
     /** The draft last sent to the translator per segment (see [worthSendingDraft]); asr thread only. */
@@ -394,6 +396,7 @@ class Pipeline(
         val whole = r.text.trim()
         val hist = segDrafts.getOrPut(job.segmentId) { carried(job) }
         segDrafts.keys.removeIf { it < job.segmentId - 4 }
+        segAudio.keys.removeIf { it < job.segmentId - 4 }
         finalSamples.keys.removeIf { it < job.segmentId - 4 }
         // only the newest draft counts, also one without timings (then nothing is repaired): an older one it already
         // replaced is not brought back. Its words past the end of this audio are not (a final may end before a draft).
@@ -404,10 +407,13 @@ class Pipeline(
             else repairLoss(r.pieces, kept, audioSec, setup.dedupeJoin)
         val text = fixed?.let { textOf(it) } ?: whole
         if (fixed != null) log(mapOf("ev" to "asr_keep", "seg" to job.segmentId, "rev" to job.revision, "whole" to whole,
-            "kept" to textOf(kept!!), "carried" to last!!.samples.isEmpty(), "text" to text))
+            "kept" to textOf(kept!!), "carried" to (last!!.size == 0), "text" to text))
         // the history holds what was shown, so a second loss keeps the words an earlier repair brought back
         if (job.isFinal) finalSamples[job.segmentId] = job.samples.size
-        else hist += Shown(job.samples, text, fixed ?: r.pieces)
+        else {
+            hist += Shown(job.samples.size, text, fixed ?: r.pieces)
+            if (job.samples.size > (segAudio[job.segmentId]?.size ?: 0)) segAudio[job.segmentId] = job.samples
+        }
         return text
     }
 
@@ -421,15 +427,16 @@ class Pipeline(
         val list = ArrayList<Shown>()
         val cut = finalSamples[job.segmentId - 1] ?: return list
         // the last draft with audio past the cut (a later, shorter one may follow a forced cut)
-        val prev = segDrafts[job.segmentId - 1]?.lastOrNull { it.samples.size >= cut + sampleRate / 10 } ?: return list
+        val prev = segDrafts[job.segmentId - 1]?.lastOrNull { it.size >= cut + sampleRate / 10 } ?: return list
         val pieces = prev.pieces ?: return list
-        val k = minOf(prev.samples.size - cut, job.samples.size)
+        val audio = segAudio[job.segmentId - 1] ?: return list
+        val k = minOf(prev.size - cut, job.samples.size)
         if (cut <= 0 || k < sampleRate / 10) return list
-        for (i in 0 until k) if (prev.samples[cut + i] != job.samples[i]) return list
+        for (i in 0 until k) if (audio[cut + i] != job.samples[i]) return list
         val off = cut.toFloat() / sampleRate
-        // an empty audio: never the previous draft of a following segment
+        // size 0: never the previous draft of a following segment
         val rest = pieces.filter { it.t >= off + 0.05f }.map { Piece(it.text, it.t - off) }
-        list += Shown(FloatArray(0), textOf(rest), rest)
+        list += Shown(0, textOf(rest), rest)
         return list
     }
 

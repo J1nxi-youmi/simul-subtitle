@@ -132,7 +132,7 @@ class Prefs(ctx: Context) : SessionPrefs {
      * fields are the storage names plus its suffix (the first one: the names from before). Keys are sealed like Jev's.
      */
     val byokProfiles: List<LlmProfile> get() = LlmProfile.all(sp.getString("byokProfiles", null))
-    val byokProfile: LlmProfile get() = byokProfiles.let { l -> l.firstOrNull { it.id == sp.getString("byokActive", "") } ?: l.first() }
+    val byokProfile: LlmProfile get() = LlmProfile.active(byokProfiles, sp.getString("byokActive", null))
     private val sfx: String get() = byokProfile.suffix
     val byokUrl: String get() = sp.getString("byokUrl$sfx", "") ?: ""
     val byokModel: String get() = sp.getString("byokModel$sfx", "") ?: ""
@@ -189,7 +189,7 @@ class Prefs(ctx: Context) : SessionPrefs {
      */
     override fun byokService(): ByokService? {
         val all = sp.all
-        val s = LlmProfile.all(all["byokProfiles"] as? String).let { l -> l.firstOrNull { it.id == all["byokActive"] } ?: l.first() }.suffix
+        val s = LlmProfile.active(LlmProfile.all(all["byokProfiles"] as? String), all["byokActive"] as? String).suffix
         val url = ByokTranslator.chatUrl((all["byokUrl$s"] as? String).orEmpty()).second ?: return null
         fun open(k: String) = (all[k] as? String)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
         return ByokService(url, (all["byokModel$s"] as? String).orEmpty(), open("byokKey$s").orEmpty(),

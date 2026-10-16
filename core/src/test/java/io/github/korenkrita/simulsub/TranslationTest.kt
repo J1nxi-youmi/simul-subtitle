@@ -185,6 +185,16 @@ class TranslationTest {
     }
 
     @Test
+    fun theProfileInUseIsTheSavedOneElseTheFirst() {
+        val list = listOf(LlmProfile.FIRST, LlmProfile("p1", "备用"))
+        assertEquals("p1", LlmProfile.active(list, "p1").id)
+        // nothing saved yet, or the saved one was deleted since
+        assertEquals(LlmProfile.FIRST, LlmProfile.active(list, null))
+        assertEquals(LlmProfile.FIRST, LlmProfile.active(list, "gone"))
+        assertEquals("p1", LlmProfile.active(listOf(LlmProfile("p1", "备用")), "").id)
+    }
+
+    @Test
     fun llmProfileNamesAreTrimmedAndUnique() {
         val list = listOf(LlmProfile.FIRST, LlmProfile("p1", "DeepSeek"))
         assertEquals("千问" to null, LlmProfile.name("  千问 ", list))

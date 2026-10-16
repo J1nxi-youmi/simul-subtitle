@@ -433,6 +433,9 @@ data class LlmProfile(val id: String, val name: String) {
             }.distinctBy { it.id }.ifEmpty { listOf(FIRST) }
         }
 
+        /** the profile in use: the one saved as active ([id]), else the first */
+        fun active(list: List<LlmProfile>, id: String?): LlmProfile = list.firstOrNull { it.id == id } ?: list.first()
+
         fun store(list: List<LlmProfile>): String = org.json.JSONArray().apply {
             for (p in list) put(org.json.JSONObject().put("id", p.id).put("name", p.name))
         }.toString()

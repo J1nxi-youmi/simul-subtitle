@@ -108,7 +108,7 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
      * fields are the storage names plus its suffix (the first one: the names from before). Keys in the keychain.
      */
     val byokProfiles: List<LlmProfile> get() = LlmProfile.all(str("byokProfiles"))
-    val byokProfile: LlmProfile get() = byokProfiles.let { l -> l.firstOrNull { it.id == str("byokActive") } ?: l.first() }
+    val byokProfile: LlmProfile get() = LlmProfile.active(byokProfiles, str("byokActive"))
     private val sfx: String get() = byokProfile.suffix
     val byokUrl: String get() = str("byokUrl$sfx").orEmpty()
     val byokModel: String get() = str("byokModel$sfx").orEmpty()
@@ -165,7 +165,7 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     val byokHeaders: List<Pair<String, String>> get() { rev.intValue; return ByokService.parseHeaders(Keychain.get("byokHeaders$sfx")) }
     /** The saved service read as one (null: the address is not valid); the key may be "" (a service without one). */
     override fun byokService(): ByokService? = synchronized(byokLock) {
-        val a = str("byokActive"); val s = LlmProfile.all(str("byokProfiles")).let { l -> l.firstOrNull { it.id == a } ?: l.first() }.suffix
+        val s = LlmProfile.active(LlmProfile.all(str("byokProfiles")), str("byokActive")).suffix
         val url = ByokTranslator.chatUrl(str("byokUrl$s") ?: "").second ?: return null
         ByokService(url, str("byokModel$s") ?: "", Keychain.get("byokKey$s").orEmpty(), str("byokUserAgent$s") ?: "",
             ByokService.parseHeaders(Keychain.get("byokHeaders$s")))

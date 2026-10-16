@@ -62,6 +62,16 @@ class Piece(val text: String, val t: Float)
 class Recognition(val text: String, val pieces: List<Piece>?) {
     companion object {
         /**
+         * ReazonSpeech drops the first word when speech starts right at sample 0 (measured: すみません/そんな/まっすぐ/
+         * おじいさん lost): the engines recognize audio with this much silence on both ends ([padded]), and the loss
+         * repair reads its timings knowing it.
+         */
+        const val PAD_S = 0.3f
+        private const val PAD = (PAD_S * 16_000).toInt()
+        /** 16 kHz [samples] with [PAD_S] of silence on both ends */
+        fun padded(samples: FloatArray) = FloatArray(samples.size + 2 * PAD).also { System.arraycopy(samples, 0, it, PAD, samples.size) }
+
+        /**
          * sherpa-onnx's [tokens] and [times] mapped onto its [text]; [pad] seconds of silence were put before the
          * audio. A Japanese token is byte-level BPE (one character per UTF-8 byte of the text, a character can be split
          * over two tokens) and an English one is plain text; both start with "▁" where a space may be. A token that
@@ -872,8 +882,7 @@ class Pipeline(
             to += if (spaced) Piece(" $b", add[0].t) else add[0]
             to += add.drop(1)
         }
-        /** the silence put before and after the audio for recognition (see the engines' recognize) */
-        private const val PAD_S = 0.3f
+        private const val PAD_S = Recognition.PAD_S
 
         /** a letter of the Latin (incl. full-width), Cyrillic or Greek script: text whose words are separated by spaces */
         private fun spacedLetter(c: Char) = c.isLetter() && Character.UnicodeScript.of(c.code).let {

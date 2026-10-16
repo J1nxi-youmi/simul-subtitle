@@ -41,23 +41,16 @@ class SherpaAsr(assets: AssetManager, threads: Int) : Asr {
     override fun recognizeTimed(samples: FloatArray): Recognition {
         val s = rec.createStream()
         try {
-            // ReazonSpeech drops the first word when speech starts right at sample 0
-            // (measured: すみません/そんな/まっすぐ/おじいさん lost). 0.3 s of silence on both ends fixes it.
-            s.acceptWaveform(padded(samples), 16_000)
+            s.acceptWaveform(Recognition.padded(samples), 16_000)
             rec.decode(s)
             val r = rec.getResult(s)
-            return Recognition.of(r.text, r.tokens, r.timestamps, PAD / 16_000f)
+            return Recognition.of(r.text, r.tokens, r.timestamps, Recognition.PAD_S)
         } finally {
             s.release()
         }
     }
 
     fun release() = rec.release()
-
-    companion object {
-        private const val PAD = 4_800 // 0.3 s @16k
-        fun padded(x: FloatArray): FloatArray = FloatArray(x.size + 2 * PAD).also { System.arraycopy(x, 0, it, PAD, x.size) }
-    }
 }
 
 /** Silero VAD used only for per-frame speech probability; segmentation is done by [Segmenter]. */

@@ -22,17 +22,14 @@ class SherpaAsr(root: File, threads: Int) : Asr {
     override fun recognizeTimed(samples: FloatArray): Recognition {
         val s = rec.createStream()
         try {
-            // 0.3 s of silence on both sides, as on the phone: ReazonSpeech drops a word at the very edge without it
-            s.acceptWaveform(FloatArray(samples.size + 2 * PAD).also { System.arraycopy(samples, 0, it, PAD, samples.size) }, 16_000)
+            s.acceptWaveform(Recognition.padded(samples), 16_000)
             rec.decode(s)
             val r = rec.getResult(s)
-            return Recognition.of(r.text, r.tokens, r.timestamps, PAD / 16_000f)
+            return Recognition.of(r.text, r.tokens, r.timestamps, Recognition.PAD_S)
         } finally { s.release() }
     }
 
     fun release() = rec.release()
-
-    private companion object { const val PAD = 4_800 }
 }
 
 /** Silero VAD for per-frame speech probability only; [Segmenter] cuts. */

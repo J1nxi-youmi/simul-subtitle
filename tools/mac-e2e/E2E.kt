@@ -17,9 +17,9 @@ fun main() {
     val asr = object : Asr {
         override fun recognize(samples: FloatArray) = recognizeTimed(samples).text
         override fun recognizeTimed(samples: FloatArray): Recognition {
-            val s = rec.createStream(); val pd = FloatArray(samples.size + 9600); System.arraycopy(samples, 0, pd, 4800, samples.size)
-            s.acceptWaveform(pd, 16000); rec.decode(s); val r = rec.getResult(s); s.release()
-            return Recognition.of(r.text, r.tokens, r.timestamps, 0.3f)
+            val s = rec.createStream()
+            s.acceptWaveform(Recognition.padded(samples), 16000); rec.decode(s); val r = rec.getResult(s); s.release()
+            return Recognition.of(r.text, r.tokens, r.timestamps, Recognition.PAD_S)
         }
     }
     val scene = Scene.DEFAULTS.first { it.id == (System.getProperty("scene") ?: "VTUBER") }

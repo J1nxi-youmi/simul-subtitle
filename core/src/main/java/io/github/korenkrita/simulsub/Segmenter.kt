@@ -176,8 +176,11 @@ class Segmenter(
                 tailAtFrames = frames.size
                 emit(AsrJob(segmentId, tailRevision, false, concat(speechEnd), frames[speechEnd - 1].endAt, frames[speechEnd - 1].estimated, endOfSpeech = true))
             }
-            // ask early (see askSilenceMs): the same audio as at the pause, so its answer is there sooner
-            silMs >= askSilenceMs && waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs -> {
+            // ask early (see askSilenceMs): the same audio as at the pause, so its answer is there sooner. Only at a
+            // plain pause: no other question open (the pipeline asks one at a time, a newer one replaces it), no hold
+            // to recheck, and no forced cut due before the pause can count (durMs grows by at most the ask window)
+            silMs >= askSilenceMs && waitMs > 0 && tailRevision < 0 && speechMs() >= minFinalMs && cutRevision < 0 &&
+                resumedRevision < 0 && heldRevision < 0 && durMs + endSilenceMs - askSilenceMs < maxMs -> {
                 tailRevision = ++revision
                 tailCut = speechEnd
                 tailAtFrames = frames.size
@@ -200,7 +203,8 @@ class Segmenter(
         if (speechMs() < minFinalMs) return true
         if (waitMs <= 0) return false
         if (tailRevision < 0) return true // the candidate is emitted on this frame
-        return holdHint(segmentId, tailRevision) ?: ((frames.size - tailAtFrames) * frameMs < waitMs)
+        // asked early: the wait for its answer starts when the pause counts (see accept), as if asked then
+        return holdHint(segmentId, tailRevision) ?: (tailEarly || (frames.size - tailAtFrames) * frameMs < waitMs)
     }
 
     /**

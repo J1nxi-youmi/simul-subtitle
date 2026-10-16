@@ -282,6 +282,31 @@ class SegmenterTest {
         assertEquals(atPause[a.indexOfFirst { it.isFinal }], early[b.indexOfFirst { it.isFinal }])
     }
 
+    private fun sig(jobs: List<AsrJob>) = jobs.map { "${it.segmentId}/${it.revision}/${it.isFinal}/${it.endOfSpeech}/${it.samples.size}" }
+
+    @Test
+    fun askingEarlyChangesNothingNearAForcedCutOrWithAQuestionOpen() {
+        // a pause just before the forced cut: the cut question and then the pause, as when asked at the pause
+        for (answer in listOf(true, false)) {
+            val near = listOf(true to 4768, false to 512, true to 1504, false to 3000)
+            assertEquals(sig(timedJudge(answer, 64, near, maxUtteranceMs = 5000)),
+                sig(timedJudge(answer, 64, near, maxUtteranceMs = 5000, askSilenceMs = 224)))
+            // a forced-cut question still open at a short silence: it is not replaced by an early question
+            val open = listOf(true to 5408, false to 320, true to 1504, false to 3000)
+            assertEquals(sig(timedJudge(answer, 640, open, maxUtteranceMs = 5000)),
+                sig(timedJudge(answer, 640, open, maxUtteranceMs = 5000, askSilenceMs = 224)))
+        }
+    }
+
+    @Test
+    fun askedEarlyWithAShortWaitTheFinalStillComesWhenItWouldHave() {
+        val pattern = listOf(true to 1504, false to 3000)
+        val atPause = ArrayList<Long>(); val early = ArrayList<Long>()
+        val a = timedJudge(answer = false, latencyMs = 60_000, pattern = pattern, hintWaitMs = 96, times = atPause)
+        val b = timedJudge(answer = false, latencyMs = 60_000, pattern = pattern, hintWaitMs = 96, askSilenceMs = 224, times = early)
+        assertEquals(atPause[a.indexOfFirst { it.isFinal }], early[b.indexOfFirst { it.isFinal }])
+    }
+
     @Test
     fun askedEarlyASilenceShorterThanThePauseIsNoCut() {
         // 320 ms of silence: asked about at 224 ms and answered "finished", but the speaker went on before 400 ms

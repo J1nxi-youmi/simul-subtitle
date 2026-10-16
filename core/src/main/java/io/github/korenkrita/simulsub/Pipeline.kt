@@ -488,8 +488,11 @@ class Pipeline(
      * Called on the asr thread.
      */
     private fun worthSendingDraft(segmentId: Long, ja: String): Boolean {
-        val lastText = sentDraft.put(segmentId, ja)
-        return lastText == null || newChars(lastText, ja) >= DRAFT_MIN_NEW_CHARS
+        // measured from the draft last translated: a skipped one would let slow growth never add up
+        val lastText = sentDraft[segmentId]
+        val worth = lastText == null || newChars(lastText, ja) >= DRAFT_MIN_NEW_CHARS
+        if (worth) sentDraft[segmentId] = ja
+        return worth
     }
 
     /**

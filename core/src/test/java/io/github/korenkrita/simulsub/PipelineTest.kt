@@ -188,6 +188,32 @@ class PipelineTest {
         assertTrue("the final was translated", mt.calls.any { source(it).startsWith("今日はゲーム配信を始めますよろしくお願いしますみなさん") })
     }
 
+    /** growth is measured from the draft last translated, not from one skipped: slow speech still gets drafts */
+    @Test
+    fun aSlowlyGrowingDraftIsTranslatedOnceItGrewEnoughSinceTheLastTranslation() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                1 -> "今日はゲーム"
+                2 -> "今日はゲーム配信を" // +3: not worth a call
+                else -> "今日はゲーム配信を始めま" // +3 on that one, +6 on the translated one
+            }
+        }
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(asr, mt, { out.add(it) })
+        p.start()
+        try {
+            p.submit(job(1, 1, false, 1))
+            val deadline = monoMs() + 2_000
+            while (out.none { !it.isFinal } && monoMs() < deadline) Thread.sleep(5)
+            p.submit(job(1, 2, false, 2)); Thread.sleep(80)
+            assertEquals(1, mt.calls.size)
+            p.submit(job(1, 3, false, 3))
+            while (mt.calls.size < 2 && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(2, mt.calls.size)
+        } finally { p.stop(); p.awaitStopped() }
+    }
+
     @Test
     fun workerExceptionIsReportedAndPipelineRefusesNewJobs() {
         val failures = Collections.synchronizedList(ArrayList<Throwable>())

@@ -249,6 +249,52 @@ class PipelineTest {
         } finally { p.stop(); p.awaitStopped() }
     }
 
+    /** a queued draft a newer one may still replace is not the reference: the translator never saw it */
+    @Test
+    fun aQueuedDraftThatWasReplacedIsNotWhatTheNextIsMeasuredAgainst() {
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String = when (samples.size) {
+                1 -> "あいうえお"
+                2 -> "かきくけこ"
+                else -> "あいうえおか" // +1 on the translated draft, +6 on the queued one
+            }
+        }
+        val mt = GateMt()
+        val p = Pipeline(asr, mt, {})
+        p.start()
+        try {
+            p.submit(job(1, 1, false, 1))
+            assertTrue(mt.entered.await(2, TimeUnit.SECONDS))
+            p.submit(job(1, 2, false, 2)); Thread.sleep(80)
+            p.submit(job(1, 3, false, 3)); Thread.sleep(80)
+            mt.gate.countDown()
+            val deadline = monoMs() + 2_000
+            while (mt.order.size < 2 && monoMs() < deadline) Thread.sleep(5)
+            Thread.sleep(50)
+            assertEquals(listOf("あいうえお", "かきくけこ"), mt.order.toList())
+        } finally { p.stop(); p.awaitStopped() }
+    }
+
+    /** a sentence-end candidate not worth translating does not make the next plain draft skipped */
+    @Test
+    fun aSentenceEndCandidateNotTranslatedDoesNotSkipTheNextDraft() {
+        val calls = Collections.synchronizedList(ArrayList<Int>())
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String { calls += samples.size; return if (samples.size < 3) "今日はゲーム" else "今日はゲーム配信を始めます" }
+        }
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(asr, mt, { out.add(it) })
+        p.start()
+        try {
+            val deadline = monoMs() + 2_000
+            p.submit(job(1, 1, false, 1)); while (out.isEmpty() && monoMs() < deadline) Thread.sleep(5)
+            p.submit(AsrJob(1, 2, false, FloatArray(2), monoMs(), endOfSpeech = true)); while (calls.size < 2 && monoMs() < deadline) Thread.sleep(5)
+            p.submit(job(1, 3, false, 3)); while (calls.size < 3 && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(listOf(1, 2, 3), calls.toList())
+        } finally { p.stop(); p.awaitStopped() }
+    }
+
     @Test
     fun workerExceptionIsReportedAndPipelineRefusesNewJobs() {
         val failures = Collections.synchronizedList(ArrayList<Throwable>())

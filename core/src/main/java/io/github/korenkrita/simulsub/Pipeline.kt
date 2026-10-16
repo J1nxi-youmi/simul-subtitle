@@ -234,8 +234,10 @@ class Pipeline(
         if (segSetup.size > 64) segSetup.keys.removeIf { it < seg - 32 }
         // the draft sent for this segment is done with it (see worthSendingDraft); a segment that never got a final
         // stays behind, so this table is bounded too
-        sentDraft.remove(seg)
-        if (sentDraft.size > 64) sentDraft.keys.removeIf { it < seg - 32 }
+        synchronized(lock) {
+            sentDraft.remove(seg)
+            if (sentDraft.size > 64) sentDraft.keys.removeIf { it < seg - 32 }
+        }
         skipNextDraft.removeIf { it <= seg }
     }
 
@@ -380,7 +382,7 @@ class Pipeline(
     private val segAudio = HashMap<Long, FloatArray>()
     /** Samples in each segment's final; asr thread only. */
     private val finalSamples = HashMap<Long, Int>()
-    /** The draft last sent to the translator per segment (see [worthSendingDraft]); asr thread only. */
+    /** The draft the translator last took per segment (see [worthSendingDraft]); guarded by [lock]. */
     private val sentDraft = HashMap<Long, String>()
     /**
      * Segments whose last draft was not worth translating: their next draft is not recognized at all (a final or a
@@ -481,7 +483,12 @@ class Pipeline(
                 // checks above and before the queue is touched: a skipped draft must not drop the one already queued,
                 // and a draft that was never translated must not become what the next one is measured against.
                 // A final always goes through.
-                if (!q.job.isFinal && !worthSendingDraft(q.job.segmentId, ja)) { skipNextDraft += q.job.segmentId; return@synchronized }
+                // the next plain draft is skipped only after a plain one (a sentence-end candidate is recognized anyway)
+                if (!q.job.isFinal && !worthSendingDraft(q.job.segmentId, ja)) {
+                    if (!q.job.endOfSpeech) skipNextDraft += q.job.segmentId
+                    return@synchronized
+                }
+                skipNextDraft.remove(q.job.segmentId)
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 mtQueue.addLast(MtJob(q, ja, start, end, setup))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue
@@ -497,11 +504,10 @@ class Pipeline(
      * Called on the asr thread.
      */
     private fun worthSendingDraft(segmentId: Long, ja: String): Boolean {
-        // measured from the draft last translated: a skipped one would let slow growth never add up
+        // measured from the draft the translator last took (see mtLoop): neither a skipped one nor a queued one a
+        // newer draft may still replace
         val lastText = sentDraft[segmentId]
-        val worth = lastText == null || newChars(lastText, ja) >= DRAFT_MIN_NEW_CHARS
-        if (worth) sentDraft[segmentId] = ja
-        return worth
+        return lastText == null || newChars(lastText, ja) >= DRAFT_MIN_NEW_CHARS
     }
 
     /**
@@ -701,6 +707,7 @@ class Pipeline(
             }
             val j = take(mtQueue) { it.q.job.isFinal } ?: continue
             if (!j.q.job.isFinal && skipDisplayDraft()) continue
+            if (!j.q.job.isFinal) synchronized(lock) { sentDraft[j.q.job.segmentId] = j.ja }
             val job = j.q.job
             val start = clock()
             val ctx = previousFor(job.segmentId, j.setup.previousSentences)

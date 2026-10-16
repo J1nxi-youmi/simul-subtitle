@@ -179,10 +179,12 @@ class PipelineTest {
         val afterFirst = mt.calls.size // the first draft of a segment is always translated
         p.submit(job(1, 2, false, 2)); Thread.sleep(80)
         assertEquals("a draft that grew by 2 characters was translated", afterFirst, mt.calls.size)
-        p.submit(job(1, 3, false, 3))
+        // the draft right after a skipped one is not recognized (Pipeline.skipNextDraft); the next one is
+        p.submit(job(1, 3, false, 3)); Thread.sleep(80)
+        p.submit(job(1, 4, false, 3))
         while (mt.calls.size <= afterFirst && monoMs() < deadline) Thread.sleep(5)
         assertEquals("the draft that grew was translated", afterFirst + 1, mt.calls.size)
-        p.submit(job(1, 4, true, 4))
+        p.submit(job(1, 5, true, 4))
         assertTrue(done.await(3, TimeUnit.SECONDS))
         p.stop(); p.awaitStopped()
         assertTrue("the final was translated", mt.calls.any { source(it).startsWith("今日はゲーム配信を始めますよろしくお願いしますみなさん") })
@@ -208,9 +210,42 @@ class PipelineTest {
             while (out.none { !it.isFinal } && monoMs() < deadline) Thread.sleep(5)
             p.submit(job(1, 2, false, 2)); Thread.sleep(80)
             assertEquals(1, mt.calls.size)
-            p.submit(job(1, 3, false, 3))
+            p.submit(job(1, 3, false, 3)); Thread.sleep(80) // not recognized: the draft before was skipped
+            p.submit(job(1, 4, false, 3))
             while (mt.calls.size < 2 && monoMs() < deadline) Thread.sleep(5)
             assertEquals(2, mt.calls.size)
+        } finally { p.stop(); p.awaitStopped() }
+    }
+
+    /** after a draft not worth translating, the segment's next draft is not even recognized; the one after is */
+    @Test
+    fun theDraftAfterOneNotWorthTranslatingIsNotRecognized() {
+        val calls = Collections.synchronizedList(ArrayList<Int>())
+        val asr = object : Asr {
+            override fun recognize(samples: FloatArray): String { calls += samples.size; return when (samples.size) {
+                1 -> "今日はゲーム"
+                2 -> "今日はゲーム配信を" // +3: not worth a call
+                4 -> "今日はゲーム配信を始めますよろしく"
+                else -> "今日はゲーム配信を始めますよろしくお願いします"
+            } }
+        }
+        val mt = FakeMt(1)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val p = Pipeline(asr, mt, { out.add(it) })
+        p.start()
+        try {
+            val deadline = monoMs() + 2_000
+            p.submit(job(1, 1, false, 1))
+            while (out.none { !it.isFinal } && monoMs() < deadline) Thread.sleep(5)
+            p.submit(job(1, 2, false, 2)); while (calls.size < 2 && monoMs() < deadline) Thread.sleep(5)
+            p.submit(job(1, 3, false, 3)); Thread.sleep(80)
+            p.submit(job(1, 4, false, 4)); while (mt.calls.size < 2 && monoMs() < deadline) Thread.sleep(5)
+            // a final and a sentence-end candidate are always recognized
+            p.submit(job(1, 5, false, 4)); while (calls.size < 4 && monoMs() < deadline) Thread.sleep(5) // +0: skipped
+            p.submit(AsrJob(1, 6, false, FloatArray(5), monoMs(), endOfSpeech = true))
+            while (calls.size < 5 && monoMs() < deadline) Thread.sleep(5)
+            p.submit(job(1, 7, true, 5)); while (out.none { it.isFinal } && monoMs() < deadline) Thread.sleep(5)
+            assertEquals(listOf(1, 2, 4, 4, 5, 5), calls.toList())
         } finally { p.stop(); p.awaitStopped() }
     }
 

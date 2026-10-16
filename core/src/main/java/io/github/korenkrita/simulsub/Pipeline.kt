@@ -236,6 +236,7 @@ class Pipeline(
         // stays behind, so this table is bounded too
         sentDraft.remove(seg)
         if (sentDraft.size > 64) sentDraft.keys.removeIf { it < seg - 32 }
+        skipNextDraft.removeIf { it <= seg }
     }
 
     /**
@@ -381,6 +382,13 @@ class Pipeline(
     private val finalSamples = HashMap<Long, Int>()
     /** The draft last sent to the translator per segment (see [worthSendingDraft]); asr thread only. */
     private val sentDraft = HashMap<Long, String>()
+    /**
+     * Segments whose last draft was not worth translating: their next draft is not recognized at all (a final or a
+     * sentence-end candidate always is). Speech that barely grew in one draft interval rarely grows enough in the
+     * next, and every draft recognizes the whole segment again. Replayed on the 15 min clip: 21% fewer draft
+     * recognitions (25% of their time), draft translations 495 -> 445. Asr thread only.
+     */
+    private val skipNextDraft = HashSet<Long>()
 
     /**
      * ReazonSpeech sometimes drops everything before an internal pause when the same utterance is recognized again
@@ -444,6 +452,7 @@ class Pipeline(
         while (running && !failed) {
             val q = take(asrQueue) { it.job.isFinal } ?: continue
             if (!q.job.isFinal && !q.job.endOfSpeech && skipDisplayDraft()) continue
+            if (!q.job.isFinal && !q.job.endOfSpeech && skipNextDraft.remove(q.job.segmentId)) continue
             // the segment's settings are fixed before its first recognition, so a change during it applies to the next one
             val setup = setupOf(q.job.segmentId)
             val start = clock()
@@ -472,7 +481,7 @@ class Pipeline(
                 // checks above and before the queue is touched: a skipped draft must not drop the one already queued,
                 // and a draft that was never translated must not become what the next one is measured against.
                 // A final always goes through.
-                if (!q.job.isFinal && !worthSendingDraft(q.job.segmentId, ja)) return@synchronized
+                if (!q.job.isFinal && !worthSendingDraft(q.job.segmentId, ja)) { skipNextDraft += q.job.segmentId; return@synchronized }
                 mtQueue.removeIf { it.q.job.segmentId == q.job.segmentId && !it.q.job.isFinal }
                 mtQueue.addLast(MtJob(q, ja, start, end, setup))
                 if (q.job.isFinal) inFlightFinals-- // now counted by mtQueue

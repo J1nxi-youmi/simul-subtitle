@@ -244,6 +244,23 @@ object SseStream {
      * be missing. Role-only and usage-only chunks are fine.
      */
     fun parseStream(body: String): Streamed? {
+        // DIY: 百炼在部分「模型 + 参数」组合下不返回 SSE，而是一整段 JSON。先按整体 JSON 解一次，
+        // 解析不出来再走下面的 SSE 逐行逻辑。
+        if (!body.contains("data:")) {
+            val whole = runCatching { Json.parse(body) as? Map<*, *> }.getOrNull()
+            val out = whole?.get("output") as? Map<*, *>
+            val list = (whole?.get("choices") as? List<*>) ?: (out?.get("choices") as? List<*>)
+            val pick = list?.firstOrNull() as? Map<*, *>
+            val msg = (pick?.get("message") as? Map<*, *>) ?: (pick?.get("delta") as? Map<*, *>)
+            val content = (msg?.get("content") as? String) ?: (out?.get("text") as? String).orEmpty()
+            if (content.isEmpty()) return null
+            val raw = (pick?.get("finish_reason") as? String) ?: (out?.get("finish_reason") as? String)
+            val fin = if (raw == null || raw == "null" || raw == "stop") "stop" else raw
+            val u = whole?.get("usage") as? Map<*, *>
+            val pin = (u?.get("input_tokens") as? Number) ?: (u?.get("prompt_tokens") as? Number)
+            val pout = (u?.get("output_tokens") as? Number) ?: (u?.get("completion_tokens") as? Number)
+            return Streamed(content, fin, pin?.toInt(), pout?.toInt(), false, null)
+        }
         val text = StringBuilder(); var finish: String? = null; var done = false; var thinking = false
         var promptTokens: Int? = null; var outputTokens: Int? = null; var cached: Int? = null
         for (line in body.lineSequence()) {
@@ -599,10 +616,15 @@ class ByokTranslator(
             if (next == clean) break
             clean = next
         }
+        // DIY 诊断：qwen-mt 失败时把状态码和原始报文头部（已抹掉 key）塞进 error，界面会直接显示出来
+        val diag = if (service.qwenMt && !res.usable && res.error != null) {
+            val head = secrets.fold((r.body ?: "").take(200)) { t, k -> t.replace(k, "***") }.replace("\n", " ")
+            "diag: HTTP ${r.status} · ${if (head.isEmpty()) "(空响应)" else head}"
+        } else null
         // an answer cut at the token cap inside reasoning is a conclusive "it thinks" for the probe, but no caption
         return MtResult(clean, if (open) 'f' else res.stop, res.promptTokens,
             res.outputTokens, firstContentMs = res.firstContentMs, request = res.request, response = null, http = res.http,
-            error = if (open) (if (res.stop == 'l' || res.stop == 'e') "unfinished thinking" else res.error ?: "unfinished thinking") else res.error,
+            error = if (open) (if (res.stop == 'l' || res.stop == 'e') "unfinished thinking" else res.error ?: "unfinished thinking") else (diag ?: res.error),
             thinking = res.thinking || open || res.raw.contains("<think>"), cachedTokens = res.cachedTokens)
     }
 
@@ -724,6 +746,7 @@ class ByokTranslator(
             r.error?.startsWith("deadline") == true -> "8 秒内没有翻完"
             r.error?.startsWith("no content") == true -> "${FIRST_CONTENT_MS / 1000} 秒内没有收到译文"
             r.error == "bad response" || r.error == "finish_reason" -> "回复的格式不对，可能不是 OpenAI 兼容的流式接口"
+            r.error?.startsWith("diag:") == true -> r.error!!.removePrefix("diag: ")
             r.error == null -> "没有收到译文"
             r.error!!.contains("UnknownHost") -> "找不到这个域名"
             r.error!!.contains("SSL") || r.error!!.contains("Certificate") -> "安全连接失败（证书问题）"

@@ -668,8 +668,15 @@ class ByokTranslator(
      * changes (wrong key, unknown model, rate limit, not reachable).
      */
     fun probe(steps: MutableList<Step>): ThinkingOff? {
-        // DIY: Qwen-MT 没有思考模式，跳过最多 6 轮参数探测
-        if (service.qwenMt) return ThinkingOff("qwen-mt", "Qwen-MT", emptyMap())
+        // DIY: Qwen-MT 没有思考模式，不做 6 轮参数探测。但必须真的发一次请求并留下一条 step：
+        // 设置页用 steps 判断结果，留空会显示「没有回应」。
+        if (service.qwenMt) {
+            val only = THINKING_OFF.first { it.name == "none" }
+            // MT 是单句翻译模型，直接送原文最干净，不带 byokUser 那套提示词
+            val r = call(PROBE_TEXT, only, deadlineMs)
+            steps += Step(only, r)
+            return if (r.stop == 'e' && r.text.isNotEmpty() && !r.thinking) only else null
+        }
         for (v in THINKING_OFF) {
             val r = call(byokUser(PROBE_TEXT), v, deadlineMs)
             steps += Step(v, r)

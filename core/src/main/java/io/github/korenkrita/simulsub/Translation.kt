@@ -198,6 +198,12 @@ object SseStream {
     fun isDone(line: String) = line.startsWith("data:") && line.removePrefix("data:").trim() == "[DONE]"
 
     /**
+     * DIY: 百炼原生流的结束标记不是 [DONE]，而是最后一帧的 finish_reason 变成 "stop"
+     * （中间帧该字段是字符串 "null"）。
+     */
+    fun isQwenEnd(line: String) = line.startsWith("data:") && line.contains("\"finish_reason\":\"stop\"")
+
+    /**
      * A streamed call as an [MtResult]: [request] is what was sent, [response] the body for the log (BYOK: with the
      * key removed). A stopped call keeps what was sent; the pipeline checks running before showing anything.
      */
@@ -224,8 +230,11 @@ object SseStream {
     fun hasText(line: String): Boolean {
         val data = line.takeIf { it.startsWith("data:") }?.removePrefix("data:")?.trim() ?: return false
         val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return false
-        val choice = (j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>
-        return ((choice?.get("delta") as? Map<*, *>)?.get("content") as? String).orEmpty().isNotEmpty()
+        // DIY: 百炼把 choices 放在 output 下，增量文本在 message 而不是 delta
+        val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>)
+        val choice = choices?.firstOrNull() as? Map<*, *>
+        val part = (choice?.get("delta") as? Map<*, *>) ?: (choice?.get("message") as? Map<*, *>)
+        return (part?.get("content") as? String).orEmpty().isNotEmpty()
     }
 
     /**
@@ -244,18 +253,29 @@ object SseStream {
             if (data == "[DONE]") { done = true; break }
             val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return null
             if (j["error"] != null) return null
-            val choices = j["choices"] as? List<*> ?: return null
+            // DIY: 百炼的 choices 在 output 下
+            val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>) ?: return null
             if (choices.isNotEmpty()) {
                 val choice = choices[0] as? Map<*, *> ?: return null
-                val delta = choice["delta"]
+                // DIY: 百炼的增量文本在 message.content 上
+                val delta = choice["delta"] ?: choice["message"]
                 if (delta != null && delta !is Map<*, *>) return null
                 when (val c = (delta as? Map<*, *>)?.get("content")) { null -> {}; is String -> text.append(c); else -> return null }
-                when (val f = choice["finish_reason"]) { null -> {}; is String -> finish = f; else -> return null }
+                // DIY: 百炼中间帧的 finish_reason 是字符串 "null"，结束帧是 "stop"（不发 [DONE]）
+                when (val f = choice["finish_reason"]) {
+                    null, "null" -> {}
+                    is String -> { finish = f; if (f == "stop" || f == "length") done = true }
+                    else -> return null
+                }
                 // DeepSeek / vLLM / SGLang: reasoning_content; OpenRouter and others: reasoning
                 if (REASONING_FIELDS.any { ((delta as? Map<*, *>)?.get(it) as? String).orEmpty().isNotEmpty() }) thinking = true
             }
             (j["usage"] as? Map<*, *>)?.let { u ->
-                promptTokens = (u["prompt_tokens"] as? Number)?.toInt(); outputTokens = (u["completion_tokens"] as? Number)?.toInt()
+                // DIY: 百炼用 input_tokens / output_tokens
+                val pin = (u["prompt_tokens"] as? Number) ?: (u["input_tokens"] as? Number)
+                val pout = (u["completion_tokens"] as? Number) ?: (u["output_tokens"] as? Number)
+                if (pin != null) promptTokens = pin.toInt()
+                if (pout != null) outputTokens = pout.toInt()
                 // OpenAI-style prompt_tokens_details.cached_tokens, DeepSeek prompt_cache_hit_tokens
                 cached = ((u["prompt_tokens_details"] as? Map<*, *>)?.get("cached_tokens") as? Number)?.toInt()
                     ?: (u["prompt_cache_hit_tokens"] as? Number)?.toInt() ?: cached
@@ -467,11 +487,19 @@ data class LlmProfile(val id: String, val name: String) {
  */
 data class ByokService(val url: String, val model: String, val key: String, val userAgent: String = "",
                        val headers: List<Pair<String, String>> = emptyList()) {
+    /**
+     * DIY: Qwen-MT（百炼的翻译专用模型）不是 OpenAI 兼容协议：请求体与 SSE 结构都不同。
+     * 靠模型 ID 前缀识别，不改构造参数，因此不影响任何现有调用点和已保存的配置。
+     */
+    val qwenMt: Boolean get() = model.startsWith("qwen-mt", ignoreCase = true)
+
     /** What goes out with each request besides the body. */
     fun requestHeaders(): Map<String, String> = buildMap {
         put("User-Agent", userAgent.ifEmpty { ByokTranslator.defaultUserAgent })
         for ((k, v) in headers) put(k, v)
         if (key.isNotEmpty()) put("Authorization", "Bearer $key")
+        // DIY: 百炼原生接口必须显式开启 SSE，否则返回一整段 JSON，解析必然失败
+        if (qwenMt) put("X-DashScope-SSE", "enable")
     }
     /** for the session log: the User-Agent and the names of the extra headers, never their values (they may be keys) */
     /** never the key or the header values */
@@ -525,9 +553,16 @@ class ByokTranslator(
     private val deadlineMs: Long = 8_000,
     private val maxTokens: Int = mtMaxTokens(Target.ZH),
     private val firstContentMs: Long = FIRST_CONTENT_MS,
+    /** DIY: Qwen-MT 的 translation_options 语言；默认 auto（源）→ 中文（目标），正是字幕场景 */
+    private val qwenSource: Lang? = null,
+    private val qwenTarget: Target = Target.ZH,
 ) : Mt {
     private val calls = Calls(deadlineMs)
-    private val url = service.url
+    /**
+     * DIY: Qwen-MT 用百炼原生端点，路径固定。chatUrl() 那套「补 /v1、补 /chat/completions」的规范化对它无效，
+     * 所以这里直接覆盖——界面里「服务地址」对 qwen-mt 不生效，照旧填 compatible-mode 的地址即可。
+     */
+    private val url = if (service.qwenMt) QWEN_MT_URL else service.url
     private val model = service.model
     /** masked out of every reply: the key and the extra header values (a header may carry a key too) */
     private val secrets = (listOf(service.key) + service.headers.map { it.second }).filter { it.isNotEmpty() }.distinct()
@@ -535,7 +570,7 @@ class ByokTranslator(
     override fun translate(prompt: String): MtResult? = call(prompt, variant, firstContentMs)
 
     private fun call(user: String, v: ThinkingOff?, firstMs: Long): MtResult {
-        val body = Json.encode(mapOf(
+        val body = if (service.qwenMt) qwenMtBody(user) else Json.encode(mapOf(
             "model" to model,
             "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
             "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
@@ -546,7 +581,8 @@ class ByokTranslator(
         // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
         val r = try {
             calls.post(url, body, service.requestHeaders(),
-                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) }, isEnd = SseStream::isDone)
+                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) },
+                isEnd = if (service.qwenMt) SseStream::isQwenEnd else SseStream::isDone)
         } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
         // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
         // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
@@ -571,6 +607,31 @@ class ByokTranslator(
     }
 
     /**
+     * DIY: Qwen-MT 走百炼原生接口。翻译专用模型不吃长 system prompt，
+     * 语言走 translation_options 结构化参数（比塞进 prompt 可靠）。
+     * 术语表目前仍走 system prompt；若要结构化传给 MT，在 options 里加 "terms" 即可（见方案 v2 的 P2）。
+     */
+    private fun qwenMtBody(user: String): String {
+        val opts = buildMap<String, Any> {
+            put("source_lang", qwenSource?.en ?: "auto")
+            put("target_lang", qwenTarget.en)
+        }
+        return Json.encode(mapOf(
+            "model" to model,
+            "input" to mapOf("messages" to listOf(
+                mapOf("role" to "system", "content" to system),
+                mapOf("role" to "user", "content" to user),
+            )),
+            "parameters" to mapOf(
+                "translation_options" to opts,
+                "result_format" to "message",
+                "stream" to true,
+                "incremental_output" to true,
+            ),
+        ))
+    }
+
+    /**
      * Translated text has started (for the 1 s cutoff): [seen] collects this request's content; outside complete
      * <think>…</think> blocks, an unclosed <think> and a trailing part of a tag (a tag split over chunks) there is
      * something besides whitespace.
@@ -578,7 +639,11 @@ class ByokTranslator(
     private fun hasAnswer(line: String, seen: StringBuilder): Boolean {
         if (!SseStream.hasText(line)) return false
         val j = runCatching { Json.parse(line.removePrefix("data:").trim()) as? Map<*, *> }.getOrNull() ?: return false
-        seen.append((((j["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>)?.get("delta") as? Map<*, *>)?.get("content") as? String ?: return false)
+        // DIY: 百炼的 choices 在 output 下、增量在 message.content
+        val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>)
+        val choice = (choices?.firstOrNull() as? Map<*, *>) ?: return false
+        val part = (choice["delta"] as? Map<*, *>) ?: (choice["message"] as? Map<*, *>)
+        seen.append(part?.get("content") as? String ?: return false)
         var s = seen.toString().replace(Regex("(?s)<think>.*?</think>"), "").replace(Regex("(?s)<think>.*"), "")
         // "<", "<thi", "</thin" … at the end may be the start of a tag still arriving
         val lt = s.lastIndexOf('<')
@@ -603,6 +668,8 @@ class ByokTranslator(
      * changes (wrong key, unknown model, rate limit, not reachable).
      */
     fun probe(steps: MutableList<Step>): ThinkingOff? {
+        // DIY: Qwen-MT 没有思考模式，跳过最多 6 轮参数探测
+        if (service.qwenMt) return ThinkingOff("qwen-mt", "Qwen-MT", emptyMap())
         for (v in THINKING_OFF) {
             val r = call(byokUser(PROBE_TEXT), v, deadlineMs)
             steps += Step(v, r)
@@ -636,6 +703,9 @@ class ByokTranslator(
         const val NONE_WORKED = "-"
         /** Sent when the user set none: "SimulSub/<version>", set by each app at start. */
         @Volatile var defaultUserAgent = "SimulSub"
+
+        /** DIY: 百炼原生文本生成接口，翻译专用模型（qwen-mt-*）的固定端点 */
+        const val QWEN_MT_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 
         /** A failed call in words for the user (no response text: it may hold anything). */
         fun why(r: MtResult): String = when {

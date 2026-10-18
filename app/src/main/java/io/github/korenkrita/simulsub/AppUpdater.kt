@@ -62,6 +62,8 @@ internal data class UpdateRelease(
         const val LATEST = "$REPO/releases/latest/download/update.json"
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024
+        /** DIY: 下载包的体积上限。语音模型打进 APK 后有 325 MB，留一倍余量。 */
+        const val MAX_APK_BYTES = 1_000_000_000L
         const val MAX_NOTES = 8_000 // characters shown in the dialog
         // github.com first, then third-party download proxies. Never send api.github.com through these proxies.
         // DIY: github 直连在国内经常不通，gh.llkk.cc 已失效——镜像多留几个，前一个失败自动换下一个。
@@ -98,10 +100,13 @@ internal data class UpdateRelease(
             val size = j.get("size").toString().toLong()
             val hash = j.getString("sha256").lowercase()
             val url = j.getString("apkUrl")
-            require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}")))
-            require(size in 1..200_000_000 && hash.matches(Regex("[0-9a-f]{64}")))
-            // A proxy-supplied manifest cannot point the downloader at an arbitrary site or file.
-            require(url == "$REPO/releases/download/v$name/simul-subtitle-v$name.apk")
+            // DIY: 上游要求版本名是纯 1.2.3；我们的是 1.0.7-diy.1028，允许一个后缀
+            require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}(?:-[A-Za-z0-9._-]{1,24})?")))
+            // DIY: 语音模型打进包后 APK 有 325 MB，上游的 200 MB 上限不够
+            require(size in 1..MAX_APK_BYTES && hash.matches(Regex("[0-9a-f]{64}")))
+            // DIY: 只认本仓库自己的 release 资产（任意站点一律拒绝，防止被镜像投毒）。
+            // 上游那种 /releases/download/v<版本>/simul-subtitle-v<版本>.apk 也仍然接受。
+            require(url.startsWith("$REPO/releases/") && url.endsWith(".apk"))
             return UpdateRelease(code, name, j.getString("notes"), url, size, hash)
         }
 
@@ -464,7 +469,8 @@ internal class AppUpdater(private val activity: Activity) {
         private val CHECK_CLIENT = OkHttpClient.Builder().connectTimeout(6, TimeUnit.SECONDS)
             .readTimeout(8, TimeUnit.SECONDS).callTimeout(15, TimeUnit.SECONDS)
             .followSslRedirects(false).retryOnConnectionFailure(false).build()
-        private val DOWNLOAD_CLIENT = CHECK_CLIENT.newBuilder().readTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(3, TimeUnit.MINUTES).build()
+        private val DOWNLOAD_CLIENT = CHECK_CLIENT.newBuilder().readTimeout(60, TimeUnit.SECONDS)
+            // DIY: 325 MB 的包，3 分钟根本下不完，放宽到 30 分钟
+            .callTimeout(30, TimeUnit.MINUTES).build()
     }
 }

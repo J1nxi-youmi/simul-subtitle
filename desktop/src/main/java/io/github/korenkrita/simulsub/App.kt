@@ -895,7 +895,7 @@ private fun UpdateBox(r: Release) {
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("打开下载页", primary = true) { open("$REPO/releases/tag/diy-latest") }
         }
-        Hint("下载页里 \`Windows-SimulSub-x64.zip\` 是 Windows 版。先退出本程序，解压后用新的文件夹替换旧的，设置会保留（设置存在 %APPDATA%\\SimulSub，不随程序目录走）。")
+        Hint("下载页里「Windows-SimulSub-x64.zip」是 Windows 版。先退出本程序，解压后用新的文件夹替换旧的，设置会保留（设置存在 %APPDATA%\\SimulSub，不随程序目录走）。")
     }
 }
 

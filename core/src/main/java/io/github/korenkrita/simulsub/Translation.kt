@@ -280,10 +280,24 @@ object SseStream {
             val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>) ?: return null
             if (choices.isNotEmpty()) {
                 val choice = choices[0] as? Map<*, *> ?: return null
-                // DIY: 百炼的增量文本在 message.content 上
+                // DIY: 百炼的文本在 message.content 上（不是 delta）
                 val delta = choice["delta"] ?: choice["message"]
                 if (delta != null && delta !is Map<*, *>) return null
-                when (val c = (delta as? Map<*, *>)?.get("content")) { null -> {}; is String -> text.append(c); else -> return null }
+                val dash = j["output"] != null
+                when (val c = (delta as? Map<*, *>)?.get("content")) {
+                    null -> {}
+                    !is String -> return null
+                    else -> if (dash) {
+                        // DIY: 百炼不遵守 incremental_output，每帧给的是「累积全文」。
+                        // 直接 append 会得到「超越超越一切超越一切」这种重复；这里按累积语义取最后一份。
+                        val cur = text.toString()
+                        when {
+                            c == cur -> {}
+                            c.startsWith(cur) -> { text.setLength(0); text.append(c) }
+                            else -> text.append(c)
+                        }
+                    } else text.append(c)
+                }
                 // DIY: 百炼中间帧的 finish_reason 是字符串 "null"，结束帧是 "stop"（不发 [DONE]）
                 when (val f = choice["finish_reason"]) {
                     null, "null" -> {}

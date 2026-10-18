@@ -43,13 +43,24 @@ jobs:
       - name: Fetch models and native libs
         run: ./setup.sh
 
-      # 固定 debug 签名。不缓存的话每次构建都生成新 keystore，签名不同，
-      # 覆盖安装会失败（INSTALL_FAILED_UPDATE_INCOMPATIBLE），配置和 key 也会丢。
-      - name: Pin debug keystore
+      # 固定 debug 签名：CI 每次跑在新 runner 上，不固定则每次构建签名都不同，
+      # 覆盖安装会失败（INSTALL_FAILED_UPDATE_INCOMPATIBLE），App 里的配置和 key 也会丢。
+      # 缓存放在工作区：构建前装回 ~/.android，构建后再存回去，由 post-job 保存。
+      - name: Restore debug keystore
         uses: actions/cache@v6
         with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
+          path: ${{ github.workspace }}/.ci/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Install debug keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ -f "$GITHUB_WORKSPACE/.ci/debug.keystore" ]; then
+            cp "$GITHUB_WORKSPACE/.ci/debug.keystore" "$HOME/.android/debug.keystore"
+            echo "keystore: 已从缓存恢复"
+          else
+            echo "keystore: 缓存里还没有，本次生成的会在构建后保存"
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -65,6 +76,18 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # 构建后用过的 keystore 存回工作区，交给 post-job 缓存；下次构建就能恢复同一把
+      - name: Stash debug keystore
+        if: always()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci"
+          if [ ! -f "$GITHUB_WORKSPACE/.ci/debug.keystore" ]; then
+            found=$(find "$HOME/.android" "${ANDROID_SDK_ROOT:-/nonexistent}" -maxdepth 3 -name debug.keystore 2>/dev/null | head -1)
+            echo "keystore 实际位置: ${found:-未找到}"
+            if [ -n "$found" ]; then cp "$found" "$GITHUB_WORKSPACE/.ci/debug.keystore"; fi
+          fi
+          ls -l "$GITHUB_WORKSPACE/.ci" || true
 
       # ── 可选：要出签名 release 包时，在仓库 Secrets 配好下面四个再看这段 ──
       # - name: Sign release

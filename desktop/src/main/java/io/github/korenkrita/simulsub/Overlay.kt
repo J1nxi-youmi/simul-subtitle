@@ -389,7 +389,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
         withFrameNanos {}; withFrameNanos {}
         anchor(); save()
     }
-    Window(onCloseRequest = onStop, state = state, title = "同传字幕 · 字幕", undecorated = true, transparent = true,
+    Window(onCloseRequest = onStop, state = state, title = "同声传译（diy版）· 字幕", undecorated = true, transparent = true,
         alwaysOnTop = true, resizable = false, focusable = false) {
         // this window's own display scale: sizes are measured in its pixels (another display may scale differently)
         val density = androidx.compose.ui.platform.LocalDensity.current.density

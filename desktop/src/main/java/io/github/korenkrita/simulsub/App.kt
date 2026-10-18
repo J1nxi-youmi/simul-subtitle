@@ -56,7 +56,7 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 private val prefs get() = Prefs.prefs
-private const val REPO = "https://github.com/KorenKrita/simul-subtitle"
+private const val REPO = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
 
 private fun open(url: String) = runCatching { Desktop.getDesktop().browse(URI(url)) }
 private fun reveal(f: File) = runCatching {
@@ -100,7 +100,7 @@ fun app() = application {
     if (mainOpen) {
         val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
         // closing the window keeps the app (and its captions) in the menu bar
-        Window(onCloseRequest = { mainOpen = false }, state = state, title = "同传字幕", icon = painterResource("icon.png")) {
+        Window(onCloseRequest = { mainOpen = false }, state = state, title = "同声传译（diy版）", icon = painterResource("icon.png")) {
             // the title bar is the system's: follow the page colour, not just macOS's own setting
             if (!isWindows) LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
             Themed(dark) {
@@ -163,10 +163,10 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
                 Text("设置", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
             }
             Box(Modifier.padding(horizontal = 18.dp)) {
-                Seg(listOf(0 to "字幕", 1 to "翻译", 2 to "页面", 3 to "记录", 4 to "关于"), tab) { tab = it }
+                Seg(listOf(0 to "字幕", 1 to "翻译", 2 to "页面", 3 to "记录"), tab) { tab = it }
             }
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 24.dp)) {
-                when (tab) { 0 -> CaptionTab(); 1 -> TranslateTab(); 2 -> PageTab(); 3 -> LogsTab(); else -> AboutTab() }
+                when (tab) { 0 -> CaptionTab(); 1 -> TranslateTab(); 2 -> { PageTab(); AboutSection() }; else -> LogsTab() }
             }
         }
     }
@@ -815,19 +815,9 @@ private fun LogsTab() {
 // ---- 关于 --------------------------------------------------------------------------------------------------
 
 @Composable
-private fun AboutTab() {
-    Group("使用说明") {
-        Text("0. 第一次用：在「设置 › 翻译 › LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n" +
-            "1. 点首页的「开始字幕」。" + (if (isWindows) "" else "第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。") + "\n" +
-            "2. 字幕浮在所有窗口上面：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n" +
-            "3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个解锁按钮，点它就解锁。\n" +
-            "4. 字幕听的是${thisComputer}播放出来的所有声音，不用麦克风；同时有别的 App 在放声音时，它的声音也会出现在字幕里。\n" +
-            "5. 关掉这个窗口字幕也会继续，${if (isWindows) "任务栏右下角" else "菜单栏"}的同传字幕图标里可以开始、停止，或重新打开这个窗口。\n" +
-            "6. 在「记录」里打开「记录每次使用」后，每次使用会留下一份文字记录（不含声音和 key），可以发给开发者帮助反馈问题。默认不记录。",
-            fontSize = 14.sp, lineHeight = 22.sp, color = C.text)
-    }
+private fun AboutSection() {
     Group("关于") {
-        Text("同传字幕  版本 $APP_VERSION", fontSize = 15.sp, modifier = Modifier.padding(vertical = 6.dp))
+        Text("同声传译（diy版）  版本 $APP_VERSION", fontSize = 15.sp, modifier = Modifier.padding(vertical = 6.dp))
         Divider()
         SwitchRow("自动检查更新", null, prefs.autoUpdate) { prefs.autoUpdate = it }
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -917,7 +907,7 @@ private fun ApplicationScope.AutoUpdateCheck() {
     LaunchedEffect(Unit) { if (prefs.autoUpdate && APP_VERSION_CODE > 0) { delay(3_000); checkNow(manual = false) } }
     val r = offered.value ?: return
     val dark = when (prefs.theme) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
-    Window(onCloseRequest = { offered.value = null }, title = "同传字幕 有新版本", state = rememberWindowState(size = DpSize(440.dp, 360.dp))) {
+    Window(onCloseRequest = { offered.value = null }, title = "同声传译（diy版）有新版本", state = rememberWindowState(size = DpSize(440.dp, 360.dp))) {
         Themed(dark) {
             Column(Modifier.fillMaxSize().background(C.bg).padding(18.dp).verticalScroll(rememberScrollState())) {
                 UpdateBox(r)

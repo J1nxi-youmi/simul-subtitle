@@ -1,43 +1,69 @@
 # 同声传译（diy版）
 
-个人自用的 Android 悬浮字幕，基于 [KorenKrita/simul-subtitle](https://github.com/KorenKrita/simul-subtitle) 修改。
+个人自用的实时字幕，**安卓 + Windows 双端**，两端功能一致、同一次推送一起构建。
+基于 [KorenKrita/simul-subtitle](https://github.com/KorenKrita/simul-subtitle) 修改。
+
+## 下载
+
+### 安卓（APK，约 251 MB）
+
+[app-debug.apk](../../releases/latest/download/app-debug.apk)
+
+需要 Android 10 以上、arm64。装完在 App 里就能检查更新。
+
+### Windows（ZIP 解压即用，约 215 MB）
+
+[SimulSub-1.0.7-windows-x64.zip](../../releases/download/windows-latest/SimulSub-1.0.7-windows-x64.zip)
+
+解压到英文路径后双击 `SimulSub.exe`。没有代码签名，首次运行会弹 SmartScreen，点「更多信息 → 仍要运行」。
+桌面版没有应用内更新，升级要重新下载。
 
 ## 特点
+
+两端相同：
 
 - **识别**：SenseVoice，中/英/日/韩/粤一部模型全认，可锁语种也可自动判断
 - **翻译**：填自己的 OpenAI 兼容接口。Qwen-MT 走原生协议，语言和术语用结构化参数传，不塞提示词
 - **术语**：只把这一句里真的出现的词发过去，没出现的不发（否则模型会硬塞进译文）
-- **译文检查**：用自己的 LLM 逐句复核，发现译反、漏否定、直译比喻就带提示重译这一句
+- **残留假名**：译文里还剩成串片假名时（如「别说是アルバイト」），自动带提示重译一次
+- **译文检查**：可选，用自己的 LLM 逐句复核，发现译反、漏否定、直译比喻就带提示重译；可单独配地址和 key
 - **断句**：停顿切段、单句最长都能调——调小出字快但句子碎，调大句子完整但更晚
 - **字幕**：边说边出草稿（灰字会就地修正），或说完再出；可同时显示原文和用时
-- **更新**：应用内检查更新，签名固定，覆盖安装不丢配置和 key
-- **隐私**：声音只在手机上识别，不上传；翻译只发识别出的文字
+- **隐私**：声音只在本机识别，不上传；翻译只发识别出的文字
+
+只有安卓有：应用内检查更新、覆盖安装保留配置。
 
 ## 用起来
 
-1. 装[最新 APK](../../releases/latest/download/app-debug.apk)（约 251 MB）
+两端流程一样：
+
+1. 装好上面的包
 2. **只需要填 API Key**：设置 → 翻译 → LLM API → 粘贴 key → 点「测试连接」
    - 地址（`https://dashscope.aliyuncs.com/compatible-mode/v1`）和模型（`qwen-flash`）已经填好了
    - 用别的服务商时再改这两项
-3. **首页**选「识别语种 → 字幕语言」，点「开始字幕」，在系统弹窗里选要听的 App
-4. 以后更新：**设置 → 页面 → 检查更新**
+3. 选「识别语种」（默认日语）→ 回首页点「开始字幕」→ 选要听的 App / 直接播放
+4. 安卓更新：设置 → 页面 → 检查更新
 
-默认配置是实测出来的（一场直播 372 句的对比）：
+默认配置是实测出来的（同一场直播、同一套提示词）：
 
 | 模型 | 翻译 p50 | 端到端 p50 | 上下文 |
 |---|---|---|---|
-| `qwen-flash` + 上文 2 句 | **346 ms** | **833 ms** | ✅ |
+| **`qwen-flash` + 上文 2 句**（默认） | 346 ms | **833 ms** | ✅ |
 | `qwen-mt-plus` | 268 ms | 1370 ms | ❌ |
 | `qwen3.7-plus` | 1046 ms | 2684 ms | ✅ |
 
-成本：一场 1 小时直播约 ¥0.1~0.2（`qwen-flash` 前缀缓存命中约 66%）。
+Windows 上因为 CPU 更强，实测端到端中位 **554 ms**（识别 55 ms、翻译 324 ms）。
+
+成本：一场 1 小时直播约 ¥0.1~0.2（`qwen-flash` 前缀缓存命中率 56~66%）。
 
 ## 已知限制
 
 - 识别语种选「自动」时，短句容易判错语种（实测 52 句里 19 句被判成中文或英文）。纯日语直播请选「日语」
 - 游戏里的玩家名、技能名仍会认错；术语表能修译文，修不了识别
-- 应用内更新会依次尝试 github.com、gh-proxy、ghfast、ghproxy、gh.llkk 五个源，都不通时只能用浏览器手动下载
+- 直播黑话容易连锁出错：识别听错 → 翻译照着错（如 `エフエッ` 被当成人名「FFJ」）
+- 安卓的应用内更新会依次尝试 github.com、gh-proxy、ghfast、ghproxy、gh.llkk 五个源，都不通时只能手动下载
 - 选「粤语」时识别正常，但翻译的源语言会退回「自动」（交给翻译模型自己判断，效果不受影响）
+- Windows 版没有应用内更新；`sysaudio` 抓的是默认输出设备，正在用的耳机/音箱如果不是默认设备可能抓不到声音
 
 ## 说明
 
@@ -48,14 +74,21 @@
 
 ## 构建
 
-推送到 `main` 由 GitHub Actions 自动完成：下载模型（校验 SHA-256）→ 编译 → 上传 artifact → 发布到 Releases（滚动 tag `diy-latest`）。
+推送到 `main`，两条流水线同时跑，各出一个包：
 
-- 签名固定在 Actions 缓存里，覆盖安装不丢配置
-- `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
+| 工作流 | 产物 | 发布位置 |
+|---|---|---|
+| `android.yml` | `app-debug.apk` | 滚动 tag `diy-latest`（应用内更新读它）|
+| `windows.yml` | `SimulSub-1.0.7-windows-x64.zip` | 滚动 tag `windows-latest` |
+
+- 两端功能改动请同时改到位，否则同步更新没意义
+- 安卓签名固定在 Actions 缓存里，覆盖安装不丢配置
+- 安卓 `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
 - 每个版本都会打个 tag（`v1.0.7-diy.NNNN`），但**只有明确要求的版本才留 APK**：
-  - 提交信息里带 `[keep]`，或
+  - 提交信息**末尾**带 `[keep]`，或
   - 手动 Run workflow 时勾选「保留」
-  否则只更新滚动 release，磁盘不会一直涨。想留某个历史版本：在它的 tag 上 Run workflow 并勾选保留
+  否则只更新滚动 release，磁盘不会一直涨
+- `app/build.gradle.kts` 里只能有**一处** `versionName = "..."` 这种写法——桌面打包脚本用它取版本号
 - 每个版本的改动见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 致谢

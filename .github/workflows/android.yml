@@ -132,8 +132,17 @@ jobs:
             echo ""
             echo "### 下载"
             echo ""
-            echo "- 直接下载 APK（${MB} MB）：[app-debug.apk](https://github.com/$GITHUB_REPOSITORY/releases/latest/download/app-debug.apk)"
+            echo "双端同源，改动一致（Windows 版由同一次推送并行构建，通常几分钟后可用）。"
+            echo ""
+            echo "#### 安卓（APK，${MB} MB）"
+            echo ""
+            echo "- 直接下载：[app-debug.apk](https://github.com/$GITHUB_REPOSITORY/releases/latest/download/app-debug.apk)"
             echo "- 或在 App 里：设置 → 页面 → 检查更新"
+            echo ""
+            echo "#### Windows（ZIP 解压即用，约 215 MB）"
+            echo ""
+            echo "- 直接下载：[SimulSub-1.0.7-windows-x64.zip](https://github.com/$GITHUB_REPOSITORY/releases/download/windows-latest/SimulSub-1.0.7-windows-x64.zip)"
+            echo "- 解压到英文路径后双击 \`SimulSub.exe\`；没有代码签名，首次运行请点「更多信息 → 仍要运行」"
             echo ""
             echo "### 校验"
             echo ""
@@ -174,7 +183,18 @@ jobs:
             gh release upload "$TAG" "$APK#app-debug.apk" --clobber
             echo "已更新 $TAG 的 APK"
           else
-            gh release create "$TAG" "$APK#app-debug.apk" --title "$TAG" --notes "$MSG"
+            {
+              echo "$MSG"
+              echo ""
+              echo "#### 安卓（APK）"
+              echo ""
+              echo "- [app-debug.apk](https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/app-debug.apk)"
+              echo ""
+              echo "#### Windows（ZIP）"
+              echo ""
+              echo "- [SimulSub-1.0.7-windows-x64.zip](https://github.com/$GITHUB_REPOSITORY/releases/download/windows-latest/SimulSub-1.0.7-windows-x64.zip)（取同一时期构建的 Windows 包）"
+            } > tag-notes.md
+            gh release create "$TAG" "$APK#app-debug.apk" --title "$TAG" --notes-file tag-notes.md
             echo "已创建版本 release: $TAG"
           fi
           # 关键：把 latest 重新指回滚动 release，否则应用内更新会读到没有 update.json 的版本页

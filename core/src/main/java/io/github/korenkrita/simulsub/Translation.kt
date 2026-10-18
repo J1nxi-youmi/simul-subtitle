@@ -156,6 +156,12 @@ data class Target(val lang: Lang?, val name: String) {
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
 /**
+ * DIY: 译文里成串的片假名（两个以上）。中文译文里本来不该出现，出现了说明这个词没翻——
+ * 实测例子：译文「除金啊，就叫那个兼职，别说是アルバイト。」。用它触发一次带提示的重译。
+ */
+private val KANA_RUN = Regex("[ァ-ヺー]{2,}")
+
+/**
  * Output cap of one translation. 160 tokens covered the longest Chinese output measured (segments are up to ~10 s with
  * Jev). Other targets (Thai, Hindi, Arabic…) take more tokens per sentence: 256, not tuned or measured.
  */
@@ -617,10 +623,11 @@ class ByokTranslator(
     private fun call(user: String, v: ThinkingOff?, firstMs: Long): MtResult {
         val qwenMt = service.qwenMt
         /** DIY: 一次完整请求。qwen-mt 的术语参数若被判非法，[withTerms] 为 false 可重发一版不带术语的。 */
-        fun attempt(withTerms: Boolean): Pair<HttpResult, MtResult> {
+        fun attempt(withTerms: Boolean, extra: String = ""): Pair<HttpResult, MtResult> {
+            val prompt = if (extra.isEmpty()) user else user + extra
             val body = if (qwenMt) qwenMtBody(user, withTerms) else Json.encode(mapOf(
                 "model" to model,
-                "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
+                "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to prompt)),
                 "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
                 "stream_options" to mapOf("include_usage" to true),
             ) + (v?.params ?: emptyMap()))
@@ -651,6 +658,25 @@ class ByokTranslator(
             val next = secrets.fold(stripThink(clean)) { t, k -> t.replace(k, "") }
             if (next == clean) break
             clean = next
+        }
+        // DIY: 译文里还留着成串的片假名，多半是这个词没翻（例如「…别说是アルバイト」）。带一句提示重译一次；
+        // 术语表里本来就要求保留的片假名不触发，重试还留着就照原样显示——不能为了它无限拖慢字幕。
+        if (!qwenMt && !open && res.usable) {
+            val hit = KANA_RUN.find(clean)
+            if (hit != null && terms.none { it.second.contains(hit.value) || it.first.contains(hit.value) }) {
+                val extra = "\n\n（提示：上一版译文里还留着片假名「${hit.value}」没有翻译，请把它也译成目标语言，人名可以音译。）"
+                val again = attempt(termsSent, extra)
+                if (again.second.usable && !again.second.raw.contains("<think>")) {
+                    r = again.first
+                    res = again.second
+                    clean = res.raw
+                    while (true) {
+                        val next = secrets.fold(stripThink(clean)) { t, k -> t.replace(k, "") }
+                        if (next == clean) break
+                        clean = next
+                    }
+                }
+            }
         }
         // DIY 诊断：qwen-mt 失败时把状态码、真实错误原因和报文头部（已抹掉 key）塞进 error，界面会直接显示出来
         val diag = if (service.qwenMt && !res.usable && res.error != null) {

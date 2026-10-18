@@ -52,7 +52,11 @@
 
 - 签名固定在 Actions 缓存里，覆盖安装不丢配置
 - `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
-- 每个版本的改动见 [CHANGELOG.md](CHANGELOG.md)；要重建某个历史版本的 APK，到对应 tag 上手动 Run workflow 即可
+- 每个版本都会打个 tag（`v1.0.7-diy.NNNN`），但**只有明确要求的版本才留 APK**：
+  - 提交信息里带 `[keep]`，或
+  - 手动 Run workflow 时勾选「保留」
+  否则只更新滚动 release，磁盘不会一直涨。想留某个历史版本：在它的 tag 上 Run workflow 并勾选保留
+- 每个版本的改动见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 致谢
 

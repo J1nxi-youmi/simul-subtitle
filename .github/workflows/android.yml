@@ -8,6 +8,11 @@ on:
   push:
     branches: [android, main]
   workflow_dispatch:
+    inputs:
+      keep:
+        description: "为这个版本单独留一份 APK（默认只更新滚动 release）"
+        type: boolean
+        default: false
 
 concurrency:
   group: android-${{ github.ref }}
@@ -142,15 +147,15 @@ jobs:
           } > notes.md
           gh release edit diy-latest --title "$NAME" --notes-file notes.md --latest
 
-      # 每个版本单独留一份（tag + 带 APK 的 release），旧版本不会被覆盖。
-      # 想装回旧版：直接去那个版本的 release 下载即可。
-      - name: 保留这个版本的 APK
+      # 每个版本都打 tag（只占几个字节，方便 checkout 出当时的代码）；
+      # 但 APK 只在明确要求时才单独存一份——提交信息带 [keep]，或手动运行并勾选「保留」。
+      # 平时只更新滚动 release，所以磁盘占用不会一直涨。
+      - name: 按需保留这个版本的 APK
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v1.0.7-diy.$CI_VERSION_CODE"
-          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
             echo "tag $TAG 已存在"
           else
@@ -158,12 +163,17 @@ jobs:
             echo "已打 tag: $TAG"
           fi
           MSG=$(git log -1 --pretty=%s | tr -d '"')
+          KEEP="${{ inputs.keep }}"
+          if [ "$KEEP" != "true" ] && ! printf '%s' "$MSG" | grep -qF '[keep]'; then
+            echo "本版本没有标记保留，跳过 APK 存档（以后想存：在这个 tag 上 Run workflow 并勾选保留）"
+            exit 0
+          fi
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK#app-debug.apk" --clobber
             echo "已更新 $TAG 的 APK"
           else
-            gh release create "$TAG" "$APK#app-debug.apk" \
-              --title "$TAG" --notes "$MSG"
+            gh release create "$TAG" "$APK#app-debug.apk" --title "$TAG" --notes "$MSG"
             echo "已创建版本 release: $TAG"
           fi
           # 关键：把 latest 重新指回滚动 release，否则应用内更新会读到没有 update.json 的版本页

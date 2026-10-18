@@ -324,17 +324,13 @@ class CaptionSession(private val host: SessionHost) {
             fun make(s: Snap, version: Int, wait: Boolean): Built? {
                 val notices = mutableListOf<String>()
                 val (mt, used, ev) = byok(s, version, wait, notices) ?: return null
-                // one Jev client for both features; no key = both paused until one is entered
-                // pauses count deep sleep: one kept across sessions ends at the time the service named
-                // DIY: 填了校验模型就用用户自己的 LLM 做译文检查，不再依赖 Jev 服务
-                val judge: Judge? =
-                    if (s.judgeModel.isNotEmpty()) {
-                        val js = if (s.judgeModel == used.model) used else used.copy(model = s.judgeModel)
-                        ByokJudge(ByokTranslator(js, ByokJudge.SYSTEM, mt.thinkingOff, maxTokens = 48))
-                    } else s.jevKey?.let {
-                        Jev(s.provider, it, source = s.source, target = s.target, clock = host::clock)
-                    }
-                if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
+                // DIY: 译文检查一律用用户自己的 LLM API（Jev 在线服务已从界面上移除，这里也不再调用它）。
+                // 没填校验模型时就不检查，字幕照常显示。
+                val judge: Judge? = if (s.judgeModel.isNotEmpty()) {
+                    val js = if (s.judgeModel == used.model) used else used.copy(model = s.judgeModel)
+                    ByokJudge(ByokTranslator(js, ByokJudge.SYSTEM, mt.thinkingOff, maxTokens = 48))
+                } else null
+                if (wantJev && judge == null) notices += "⚠ 译文检查没有生效：设置里没填校验模型"
                 return Built(Setup(mt, s.scene, s.source, s.target, judge, s.dedupe, s.contextN, version),
                     notices.joinToString("  ·  "), used, ev)
             }

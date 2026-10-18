@@ -54,7 +54,7 @@
             <TextView
                 style="@style/RowSub"
                 android:paddingHorizontal="4dp"
-                android:text="把视频、直播里的日语和英语，实时变成字幕" />
+                android:text="把视频、直播里的声音，实时变成中文字幕" />
 
             <!-- status, languages, the one action and the service it translates with -->
             <com.google.android.material.card.MaterialCardView
@@ -589,55 +589,8 @@
                             android:orientation="vertical" />
                     </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
-            </LinearLayout>
 
-            <!-- == 记录 == -->
-            <LinearLayout
-                android:id="@+id/tabRecords"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    style="@style/SectionTitle"
-                    android:text="使用记录" />
-
-                <com.google.android.material.card.MaterialCardView style="@style/ListCard">
-
-                    <LinearLayout
-                        android:id="@+id/logList"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:paddingHorizontal="14dp"
-                        android:paddingVertical="6dp" />
-                </com.google.android.material.card.MaterialCardView>
-
-            </LinearLayout>
-
-            <!-- == 关于 == -->
-            <LinearLayout
-                android:id="@+id/tabAbout"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    style="@style/SectionTitle"
-                    android:text="使用说明" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/tips_bg"
-                    android:lineSpacingExtra="4dp"
-                    android:padding="14dp"
-                    android:text="0. 第一次用：在「设置 → 翻译 → LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n1. 点首页的「开始字幕」，在弹出的窗口里选你要看的 App（也可以选整个屏幕）。\n2. 字幕会浮在屏幕上：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个开锁按钮，点它就解锁。\n4. 有些 App（比如有版权保护的视频）不允许其他 App 听它的声音，这时不会出字幕。同时有别的 App 在放声音时，它的声音也可能出现在字幕里。\n5. 在「记录」里打开「记录每次使用」后，每次使用会留下一份文字记录（不含声音和 key），可以分享出去，帮助反馈问题。默认不记录。"
-                    android:textColor="@color/text2"
-                    android:textSize="14sp" />
-
+                <!-- 关于（原来单独一个 tab，现在并到「页面」里）-->
                 <TextView
                     style="@style/SectionTitle"
                     android:text="关于" />
@@ -694,7 +647,7 @@
                         <TextView
                             style="@style/RowSub"
                             android:paddingHorizontal="14dp"
-                            android:text="https://github.com/KorenKrita/simul-subtitle"
+                            android:text="https://github.com/J1nxi-youmi/simul-subtitle"
                             android:textIsSelectable="true" />
 
                         <TextView
@@ -702,10 +655,36 @@
                             android:paddingHorizontal="14dp"
                             android:paddingTop="10dp"
                             android:paddingBottom="14dp"
-                            android:text="语音识别用的是 ReazonSpeech 模型和 Silero VAD（通过 sherpa-onnx 在手机上运行，模型已经装在 App 里）。感谢这些项目。" />
+                            android:text="个人 diy 版：语音识别换成 SenseVoice（中/英/日/韩/粤，sherpa-onnx 本地运行，模型已装在 App 里），翻译接自己的 LLM API，译文检查用自己的模型。Silero VAD 用于断句。感谢这些开源项目。" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
+
+            <!-- == 记录 == -->
+            <LinearLayout
+                android:id="@+id/tabRecords"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/SectionTitle"
+                    android:text="使用记录" />
+
+                <com.google.android.material.card.MaterialCardView style="@style/ListCard">
+
+                    <LinearLayout
+                        android:id="@+id/logList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingHorizontal="14dp"
+                        android:paddingVertical="6dp" />
+                </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
+
         </LinearLayout>
     </LinearLayout>
 </ScrollView>

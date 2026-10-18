@@ -185,17 +185,24 @@ class MainActivity : Activity() {
         if (!back()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    /** The home card's two questions, side by side: what is spoken → what the captions should be in. Next sentence. */
+    /** The home card's two questions, side by side: 识别语种 → 字幕的语言。下次开始字幕时生效。 */
     private fun renderLang() {
         val box = findViewById<LinearLayout>(R.id.langBox)
         box.removeAllViews()
         val running = CaptionService.running
-        val sources = Lang.SOURCES
         fun weighted(v: View) = v.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
-        // a running session takes a new language from the next sentence
-        box.addView(weighted(dropdown(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), true, wrap = true) {
-            if (prefs.sourceLang != sources[it]) { prefs.sourceLang = sources[it]; renderTranslate() }
-        }).apply { contentDescription = "视频里说的是" })
+        // DIY: 左边换成「识别语种」——识别引擎只有 SenseVoice，能认的语种就是这几个。
+        // 「自动」时把翻译的源语言也交给模型判断。
+        val langs = listOf("ja" to "日语", "auto" to "自动（中英日韩）", "zh" to "中文", "ko" to "韩语")
+        val cur = langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0)
+        box.addView(weighted(dropdown(langs.map { it.second }, cur, true, wrap = true) {
+            val code = langs[it].first
+            if (prefs.asrSvLang != code) {
+                prefs.asrSvLang = code
+                prefs.sourceLang = Lang.of(code) // 识别成什么语种，翻译的源语言就跟着它
+                renderTranslate()
+            }
+        }).apply { contentDescription = "识别语种" })
         box.addView(TextView(this).apply {
             text = "→"; textSize = 16f; setTextColor(getColor(R.color.muted)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0)
@@ -210,8 +217,8 @@ class MainActivity : Activity() {
             if (it == targets.size) askTargetName()
             else if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate(); main.post { renderLang() } }
         }).apply { contentDescription = "字幕翻译成" })
-        findViewById<TextView>(R.id.langHint).text = if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。"
-            else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。"
+        findViewById<TextView>(R.id.langHint).text = if (running) "识别语种 → 字幕的语言。字幕运行中，语种改了要重新开始字幕才生效。"
+            else "识别语种 → 字幕的语言。纯日语直播选「日语」最准；中日混说才用「自动」。"
     }
 
     /** 其他（自己填）: a language name typed in, saved with 确定; cancel or a blank name keeps the language in use. */
@@ -797,14 +804,6 @@ class MainActivity : Activity() {
         ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
         showCtx()
 
-        // -- DIY: 识别语种（引擎只剩 SenseVoice，ReazonSpeech 已移除）
-        box = group(root, "语音识别")
-        box.addView(label("识别语种"))
-        box.addView(choice(listOf("ja" to "日语", "auto" to "自动", "zh" to "中文", "ko" to "韩语"), prefs.asrSvLang) {
-            if (prefs.asrSvLang != it) prefs.asrSvLang = it
-        })
-        box.addView(hint("直播里的句子只有零点几秒，让模型自己判语种很容易把日语听成中文或英文（实测一场 52 句里 19 句判错）。纯日语场次选「日语」；那位真的中日混说时再选「自动」。下次开始字幕时生效。"))
-
         // -- DIY: manual segmentation
         box = group(root, "断句")
         val segPause = label("")
@@ -842,76 +841,35 @@ class MainActivity : Activity() {
         switchRow(box, "去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
 
-        // -- 译文检查（DIY: 断句不再交给 Jev，只留译文识错）
+        // -- 译文检查（用你自己的 LLM API；Jev 已彻底移除）
         box = group(root, "译文检查（可选，需要联网）")
-        val jevCheck = switchRow(box, "检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
-        val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        box.addView(jevBox)
-        fun renderJev() {
-            jevBox.removeAllViews()
-            val used = prefs.jevCheck // DIY: 断句已不再用 Jev，只有译文检查需要它
-            jevBox.visibility = if (used) View.VISIBLE else View.GONE
-            if (!used) return
-            // DIY: 校验模型——填了就用你自己的 LLM API 做译文检查，不再依赖 Jev 服务
-            jevBox.addView(label("校验模型（用你自己的 LLM API）"))
-            val modelInput = android.widget.EditText(this).apply {
-                hint = "例如 qwen-flash；留空则用下面的 Jev 服务"
+        val checkSwitch = switchRow(box, "检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。打开后每句字幕会稍晚出现，也会多一次 API 调用。", prefs.jevCheck) {}
+        val checkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(checkBox)
+        fun renderCheck() {
+            checkBox.removeAllViews()
+            checkBox.visibility = if (prefs.jevCheck) View.VISIBLE else View.GONE
+            if (!prefs.jevCheck) return
+            checkBox.addView(label("校验模型（用你自己的 LLM API）"))
+            val input = android.widget.EditText(this).apply {
+                hint = "例如 qwen-flash"
                 isSingleLine = true; textSize = 16f; setText(prefs.judgeModelSetting)
                 setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
-            jevBox.addView(modelInput)
-            jevBox.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            checkBox.addView(input)
+            checkBox.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
                 text = "保存校验模型"; textSize = 16f
                 setOnClickListener {
-                    prefs.judgeModelSetting = modelInput.text.toString()
+                    prefs.judgeModelSetting = input.text.toString()
                     Toast.makeText(this@MainActivity, "已保存，下次开始字幕时生效", Toast.LENGTH_SHORT).show()
-                    renderJev()
+                    renderCheck()
                 }
             })
-            if (prefs.judgeModel.isNotEmpty()) {
-                jevBox.addView(hint("现在用「${prefs.judgeModel}」检查译文，下面的 Jev 服务不会用到。校验用你自己的 key，每句会多一次请求。"))
-            }
-            val p = prefs.jevProvider
-            jevBox.addView(label("Jev 在线模型服务"))
-            // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names
-            jevBox.addView(dropdown(JevProvider.entries.map { "${it.label}（${it.note}）" }, p.ordinal, true) {
-                if (prefs.jevProvider.ordinal != it) { prefs.jevProvider = JevProvider.entries[it]; main.post { renderJev() } }
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            if (!p.needsKey) {
-                jevBox.addView(hint("不用填 key，打开就能用。这是免费的公共服务，可能随时限速或停用；服务不可用时，字幕照常显示，只是不做辅助。只发送识别出的文字和译文，不发送声音。"))
-                return
-            }
-            val saved = prefs.jevKey(p)
-            jevBox.addView(label(if (saved != null) "${p.label} 的 key：已保存（…${saved.takeLast(4)}）" else "${p.label} 的 key：还没填"))
-            val input = android.widget.EditText(this).apply {
-                hint = if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key"
-                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                isSingleLine = true; textSize = 16f; setTextColor(getColor(R.color.text))
-                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-            }
-            jevBox.addView(input)
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-                text = "清除"; textSize = 16f; isEnabled = saved != null
-                setOnClickListener { prefs.setJevKey(p, null); renderJev() }
-            })
-            row.addView(MaterialButton(this).apply {
-                text = "保存"; textSize = 16f
-                setOnClickListener {
-                    val k = input.text.toString().trim()
-                    when {
-                        k.isEmpty() -> {}
-                        // a key with spaces/newlines/non-ASCII would be rejected by HTTP (and echoed in its error)
-                        !Jev.validKey(k) -> Toast.makeText(this@MainActivity, "key 里有空格、换行或特殊字符，请重新复制", Toast.LENGTH_LONG).show()
-                        else -> { prefs.setJevKey(p, k); input.setText(""); renderJev() }
-                    }
-                }
-            })
-            jevBox.addView(row)
-            jevBox.addView(hint("只发送识别出的文字和译文，不发送声音。key 加密保存在这台手机上，不会写进使用记录。"))
+            checkBox.addView(hint("用「${prefs.judgeModel}」逐句检查译文，和翻译共用同一个 API 地址和 key；每句会多一次请求。"))
+            checkBox.addView(hint("只发送识别出的文字和译文，不发送声音。"))
         }
-        jevCheck.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderJev() }
-        renderJev()
+        checkSwitch.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderCheck() }
+        renderCheck()
     }
 
     /** The running BYOK test, so a second tap, a new render or leaving the screen does not show a stale result. */
@@ -1433,6 +1391,6 @@ class MainActivity : Activity() {
         // DIY: 指向自己的 fork——上游 release 的签名和本包不一致，应用内更新装不上
         const val REPO_URL = "https://github.com/J1nxi-youmi/simul-subtitle"
         /** Settings categories: the list shown for each, and its tab label. */
-        val TABS: List<Pair<Int, String>> = listOf(R.id.tabCaption to "字幕", R.id.tabTranslate to "翻译", R.id.tabPage to "页面", R.id.tabRecords to "记录", R.id.tabAbout to "关于")
+        val TABS: List<Pair<Int, String>> = listOf(R.id.tabCaption to "字幕", R.id.tabTranslate to "翻译", R.id.tabPage to "页面", R.id.tabRecords to "记录")
     }
 }

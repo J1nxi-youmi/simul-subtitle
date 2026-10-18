@@ -11,11 +11,15 @@ android {
         applicationId = "io.github.korenkrita.simulsub"
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
-        // DIY: CI 用 1000 + 构建序号当 versionCode，App 内的更新器才有「版本更新」可比。
-        // 本地构建没有这个环境变量时仍是原来的 27。
-        val ciCode = System.getenv("CI_VERSION_CODE")?.toIntOrNull()
-        versionCode = ciCode ?: 27
-        versionName = if (ciCode != null) "1.0.7-diy.$ciCode" else "1.0.7"
+        // 下面两行保持「versionCode = 数字」「versionName = "..."」的字面形态：
+        // desktop/build.gradle.kts 用正则从本文件读版本号（一个 release 同时带 APK 和 dmg）。
+        versionCode = 27
+        versionName = "1.0.7"
+        // DIY: CI 传 CI_VERSION_CODE 时覆盖，App 内的更新器才有版本更新可比。
+        System.getenv("CI_VERSION_CODE")?.toIntOrNull()?.let { code ->
+            versionCode = code
+            versionName = "1.0.7-diy.$code"
+        }
         ndk { abiFilters += "arm64-v8a" }
     }
 

@@ -6,7 +6,7 @@ name: android
 
 on:
   push:
-    branches: [android]
+    branches: [android, main]
   workflow_dispatch:
 
 concurrency:
@@ -42,6 +42,14 @@ jobs:
 
       - name: Fetch models and native libs
         run: ./setup.sh
+
+      # 固定 debug 签名。不缓存的话每次构建都生成新 keystore，签名不同，
+      # 覆盖安装会失败（INSTALL_FAILED_UPDATE_INCOMPATIBLE），配置和 key 也会丢。
+      - name: Pin debug keystore
+        uses: actions/cache@v6
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6

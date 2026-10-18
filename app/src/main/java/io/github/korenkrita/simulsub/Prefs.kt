@@ -2,6 +2,9 @@ package io.github.korenkrita.simulsub
 
 import android.content.Context
 
+/** DIY: 译文检查默认用的模型——DashScope compatible-mode 上的通用小模型，够快也够便宜。 */
+private const val DEFAULT_JUDGE_MODEL = "qwen-flash"
+
 /** Subtitle look, shared by the settings screen (live preview) and the overlay. */
 class Prefs(ctx: Context) : SessionPrefs {
     private val sp = ctx.getSharedPreferences("jpsub", Context.MODE_PRIVATE)
@@ -105,6 +108,15 @@ class Prefs(ctx: Context) : SessionPrefs {
         .putInt("endSilenceMs", endSilence.coerceIn(100, 1_200))
         .putInt("maxUtteranceMs", maxUtterance.coerceIn(1_500, 12_000))
         .apply()
+
+    /** DIY: 译文检查用的模型 ID（走自己的 LLM API）。留空 = 退回 Jev 在线服务。 */
+    override val judgeModel: String
+        get() = sp.getString("judgeModel", DEFAULT_JUDGE_MODEL) ?: DEFAULT_JUDGE_MODEL
+
+    /** 同一个键，给设置界面读写用（接口里是只读的） */
+    var judgeModelSetting: String
+        get() = sp.getString("judgeModel", DEFAULT_JUDGE_MODEL) ?: DEFAULT_JUDGE_MODEL
+        set(v) = sp.edit().putString("judgeModel", v.trim()).apply()
 
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
     override var sourceLang: Lang?

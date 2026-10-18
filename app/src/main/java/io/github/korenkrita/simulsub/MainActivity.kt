@@ -854,6 +854,25 @@ class MainActivity : Activity() {
             val used = prefs.jevCheck // DIY: 断句已不再用 Jev，只有译文检查需要它
             jevBox.visibility = if (used) View.VISIBLE else View.GONE
             if (!used) return
+            // DIY: 校验模型——填了就用你自己的 LLM API 做译文检查，不再依赖 Jev 服务
+            jevBox.addView(label("校验模型（用你自己的 LLM API）"))
+            val modelInput = android.widget.EditText(this).apply {
+                hint = "例如 qwen-flash；留空则用下面的 Jev 服务"
+                isSingleLine = true; textSize = 16f; setText(prefs.judgeModelSetting)
+                setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            jevBox.addView(modelInput)
+            jevBox.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "保存校验模型"; textSize = 16f
+                setOnClickListener {
+                    prefs.judgeModelSetting = modelInput.text.toString()
+                    Toast.makeText(this@MainActivity, "已保存，下次开始字幕时生效", Toast.LENGTH_SHORT).show()
+                    renderJev()
+                }
+            })
+            if (prefs.judgeModel.isNotEmpty()) {
+                jevBox.addView(hint("现在用「${prefs.judgeModel}」检查译文，下面的 Jev 服务不会用到。校验用你自己的 key，每句会多一次请求。"))
+            }
             val p = prefs.jevProvider
             jevBox.addView(label("Jev 在线模型服务"))
             // a full-width dropdown: three segmented buttons do not fit a phone's width with readable names

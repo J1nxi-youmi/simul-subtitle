@@ -23,6 +23,8 @@ interface SessionPrefs {
     val contextOn: Boolean
     val contextSentences: Int
     val jevProvider: JevProvider
+    /** DIY: 译文检查用的模型 ID（走用户自己的 LLM API）。空 = 退回 Jev 的在线服务。 */
+    val judgeModel: String
     /** DIY: 断句参数（毫秒）——停顿多久算一句、一句话最多多久。 */
     val endSilenceMs: Int
     val maxUtteranceMs: Int
@@ -324,9 +326,14 @@ class CaptionSession(private val host: SessionHost) {
                 val (mt, used, ev) = byok(s, version, wait, notices) ?: return null
                 // one Jev client for both features; no key = both paused until one is entered
                 // pauses count deep sleep: one kept across sessions ends at the time the service named
-                val judge = s.jevKey?.let {
-                    Jev(s.provider, it, source = s.source, target = s.target, clock = host::clock)
-                }
+                // DIY: 填了校验模型就用用户自己的 LLM 做译文检查，不再依赖 Jev 服务
+                val judge: Judge? =
+                    if (s.judgeModel.isNotEmpty()) {
+                        val js = if (s.judgeModel == used.model) used else used.copy(model = s.judgeModel)
+                        ByokJudge(ByokTranslator(js, ByokJudge.SYSTEM, mt.thinkingOff, maxTokens = 48))
+                    } else s.jevKey?.let {
+                        Jev(s.provider, it, source = s.source, target = s.target, clock = host::clock)
+                    }
                 if (wantJev && judge == null) notices += "⚠ 在线 Decisions 模型辅助已暂停：还没填 ${s.provider.label} 的 key"
                 return Built(Setup(mt, s.scene, s.source, s.target, judge, s.dedupe, s.contextN, version),
                     notices.joinToString("  ·  "), used, ev)
@@ -670,6 +677,8 @@ class CaptionSession(private val host: SessionHost) {
         // the BYOK fields from one read; an unfilled profile in settings keeps the service already in use
         val byok = prefs.byokService()?.takeIf { it.model.isNotEmpty() } ?: fallback
         val provider = prefs.jevProvider
+        /** DIY: 非空则译文检查走用户自己的 LLM（这个模型 ID），不再用 Jev */
+        val judgeModel = prefs.judgeModel.trim()
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
 

@@ -599,6 +599,9 @@ class ByokTranslator(
     /** DIY: 场景术语表。qwen-mt 不发 system prompt，术语只能走 translation_options.terms 结构化传入。 */
     private val terms: List<Pair<String, String>> = emptyList(),
 ) : Mt {
+    /** DIY: 这个翻译器用的「关掉思考」参数；译文检查用的翻译器复用它，免得再探一次。 */
+    val thinkingOff: ThinkingOff? get() = variant
+
     private val calls = Calls(deadlineMs)
     /**
      * DIY: Qwen-MT 用百炼原生端点，路径固定。chatUrl() 那套「补 /v1、补 /chat/completions」的规范化对它无效，

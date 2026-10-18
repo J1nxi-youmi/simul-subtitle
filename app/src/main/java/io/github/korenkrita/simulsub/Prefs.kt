@@ -126,6 +126,24 @@ class Prefs(ctx: Context) : SessionPrefs {
         get() = sp.getString("judgeModel", DEFAULT_JUDGE_MODEL) ?: DEFAULT_JUDGE_MODEL
         set(v) = sp.edit().putString("judgeModel", v.trim()).apply()
 
+    /** DIY: 译文检查单独的接口地址；留空则复用翻译那套的地址 */
+    override val judgeUrl: String
+        get() = sp.getString("judgeUrl", "") ?: ""
+
+    var judgeUrlSetting: String
+        get() = sp.getString("judgeUrl", "") ?: ""
+        set(v) = sp.edit().putString("judgeUrl", v.trim()).apply()
+
+    /** DIY: 译文检查单独的 key（和翻译的 key 一样加密保存）；留空则复用翻译那套 */
+    override fun judgeKey(): String? =
+        sp.getString("judgeKey", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
+
+    val hasJudgeKey: Boolean get() = sp.getString("judgeKey", null) != null
+
+    fun setJudgeKey(key: String?) = sp.edit().apply {
+        if (key.isNullOrBlank()) remove("judgeKey") else putString("judgeKey", KeyBox.seal(key.trim()))
+    }.apply()
+
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
     override var sourceLang: Lang?
         get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }

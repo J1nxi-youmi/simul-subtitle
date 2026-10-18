@@ -23,8 +23,11 @@ interface SessionPrefs {
     val contextOn: Boolean
     val contextSentences: Int
     val jevProvider: JevProvider
-    /** DIY: 译文检查用的模型 ID（走用户自己的 LLM API）。空 = 退回 Jev 的在线服务。 */
+    /** DIY: 译文检查用的模型 ID（走自己的 LLM API）。空 = 不检查。 */
     val judgeModel: String
+    /** DIY: 译文检查可以单独一套接口地址和 key；留空则复用翻译那套。 */
+    val judgeUrl: String
+    fun judgeKey(): String?
     /** DIY: 断句参数（毫秒）——停顿多久算一句、一句话最多多久。 */
     val endSilenceMs: Int
     val maxUtteranceMs: Int
@@ -324,10 +327,20 @@ class CaptionSession(private val host: SessionHost) {
             fun make(s: Snap, version: Int, wait: Boolean): Built? {
                 val notices = mutableListOf<String>()
                 val (mt, used, ev) = byok(s, version, wait, notices) ?: return null
-                // DIY: 译文检查一律用用户自己的 LLM API（Jev 在线服务已从界面上移除，这里也不再调用它）。
-                // 没填校验模型时就不检查，字幕照常显示。
+                // DIY: 译文检查用用户自己的 LLM API。填了单独地址或 key 就用那一套，
+                // 否则复用翻译的服务（只换模型 ID）。没填校验模型就不检查，字幕照常显示。
                 val judge: Judge? = if (s.judgeModel.isNotEmpty()) {
-                    val js = if (s.judgeModel == used.model) used else used.copy(model = s.judgeModel)
+                    val js = when {
+                        s.judgeUrl.isNotEmpty() || s.judgeKey != null -> ByokService(
+                            ByokTranslator.chatUrl(s.judgeUrl.ifEmpty { used.url }).second ?: used.url,
+                            s.judgeModel,
+                            s.judgeKey ?: used.key,
+                            used.userAgent,
+                            used.headers,
+                        )
+                        s.judgeModel == used.model -> used
+                        else -> used.copy(model = s.judgeModel)
+                    }
                     ByokJudge(ByokTranslator(js, ByokJudge.SYSTEM, mt.thinkingOff, maxTokens = 48))
                 } else null
                 if (wantJev && judge == null) notices += "⚠ 译文检查没有生效：设置里没填校验模型"
@@ -673,8 +686,11 @@ class CaptionSession(private val host: SessionHost) {
         // the BYOK fields from one read; an unfilled profile in settings keeps the service already in use
         val byok = prefs.byokService()?.takeIf { it.model.isNotEmpty() } ?: fallback
         val provider = prefs.jevProvider
-        /** DIY: 非空则译文检查走用户自己的 LLM（这个模型 ID），不再用 Jev */
+        /** DIY: 非空则译文检查走用户自己的 LLM（这个模型 ID） */
         val judgeModel = prefs.judgeModel.trim()
+        /** DIY: 校验单独一套接口；地址或 key 留空则复用翻译那套 */
+        val judgeUrl = prefs.judgeUrl.trim()
+        val judgeKey = prefs.judgeKey()?.trim()?.takeIf { it.isNotEmpty() }
         /** null: no Jev wanted, or its key is missing; "" for a provider without a key */
         val jevKey = if (!wantJev) null else if (provider.needsKey) prefs.jevKey(provider) else ""
 

@@ -72,8 +72,11 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     // DIY: 断句参数和手机端共用同一组键；桌面暂时没有界面，用默认值
     override val endSilenceMs: Int get() = int("endSilenceMs", 400)
     override val maxUtteranceMs: Int get() = int("maxUtteranceMs", 7_000)
-    /** DIY: 译文检查用的模型；桌面留空，仍走 Jev */
+    /** DIY: 译文检查用的模型；桌面留空，不检查 */
     override val judgeModel: String get() = str("judgeModel") ?: ""
+    /** DIY: 校验单独的接口；桌面没有界面，留空即复用翻译那套 */
+    override val judgeUrl: String get() = str("judgeUrl") ?: ""
+    override fun judgeKey(): String? = null
     override var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
     /** null: not sure (the recognizer decides) */
     override var sourceLang: Lang?

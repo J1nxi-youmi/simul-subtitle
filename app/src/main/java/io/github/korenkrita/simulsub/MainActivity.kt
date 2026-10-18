@@ -844,29 +844,56 @@ class MainActivity : Activity() {
 
         // -- 译文检查（用你自己的 LLM API；Jev 已彻底移除）
         box = group(root, "译文检查（可选，需要联网）")
-        val checkSwitch = switchRow(box, "检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。打开后每句字幕会稍晚出现，也会多一次 API 调用。", prefs.jevCheck) {}
+        box.addView(hint("建议只在用 qwen-mt 这类「单句翻译」模型时才打开：它看不到上下文，容易把否定或转折翻反、把比喻按字面直译，逐句复检能兜住一部分。用 qwen-flash 这类通用模型时通常不必开——每句会多一次请求，延迟约 +0.4 秒，费用也会跟着涨。"))
+        val checkSwitch = switchRow(box, "检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。", prefs.jevCheck) {}
         val checkBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(checkBox)
         fun renderCheck() {
             checkBox.removeAllViews()
             checkBox.visibility = if (prefs.jevCheck) View.VISIBLE else View.GONE
             if (!prefs.jevCheck) return
-            checkBox.addView(label("校验模型（用你自己的 LLM API）"))
-            val input = android.widget.EditText(this).apply {
+            checkBox.addView(label("校验模型"))
+            val modelInput = android.widget.EditText(this).apply {
                 hint = "例如 qwen-flash"
                 isSingleLine = true; textSize = 16f; setText(prefs.judgeModelSetting)
                 setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
-            checkBox.addView(input)
-            checkBox.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-                text = "保存校验模型"; textSize = 16f
+            checkBox.addView(modelInput)
+            checkBox.addView(label("校验地址（留空则用翻译那套）"))
+            val urlInput = android.widget.EditText(this).apply {
+                hint = "例如 https://dashscope.aliyuncs.com/compatible-mode/v1"
+                isSingleLine = true; textSize = 15f; setText(prefs.judgeUrlSetting)
+                setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            checkBox.addView(urlInput)
+            checkBox.addView(label(if (prefs.hasJudgeKey) "校验 API Key：已保存（留空则用翻译的 key）" else "校验 API Key（留空则用翻译的 key）"))
+            val keyInput = android.widget.EditText(this).apply {
+                hint = if (prefs.hasJudgeKey) "输入新的 key 来替换" else "在这里粘贴 key"
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            checkBox.addView(keyInput)
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = "清除 key"; textSize = 16f; isEnabled = prefs.hasJudgeKey
+                setOnClickListener { prefs.setJudgeKey(null); renderCheck() }
+            })
+            row.addView(MaterialButton(this).apply {
+                text = "保存"; textSize = 16f
                 setOnClickListener {
-                    prefs.judgeModelSetting = input.text.toString()
+                    prefs.judgeModelSetting = modelInput.text.toString()
+                    prefs.judgeUrlSetting = urlInput.text.toString()
+                    val k = keyInput.text.toString().trim()
+                    if (k.isNotEmpty()) prefs.setJudgeKey(k)
                     Toast.makeText(this@MainActivity, "已保存，下次开始字幕时生效", Toast.LENGTH_SHORT).show()
                     renderCheck()
                 }
             })
-            checkBox.addView(hint("用「${prefs.judgeModel}」逐句检查译文，和翻译共用同一个 API 地址和 key；每句会多一次请求。"))
+            checkBox.addView(row)
+            checkBox.addView(hint("现在用「${prefs.judgeModel}」逐句检查；" +
+                if (prefs.judgeUrl.isEmpty() && !prefs.hasJudgeKey) "地址和 key 都复用翻译那套。"
+                else "地址和 key 用上面单独填的，留空的那项才复用翻译那套。"))
             checkBox.addView(hint("只发送识别出的文字和译文，不发送声音。"))
         }
         checkSwitch.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderCheck() }

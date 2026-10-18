@@ -5,15 +5,17 @@
 
 ## 下载
 
-### 安卓（APK，约 251 MB）
+两个平台的文件挂在**同一个页面**的 Assets 里（[最新构建](../../releases/tag/diy-latest)），按文件名区分：
+
+### 安卓 —— `app-debug.apk`（约 251 MB）
 
 [app-debug.apk](../../releases/latest/download/app-debug.apk)
 
 需要 Android 10 以上、arm64。装完在 App 里就能检查更新。
 
-### Windows（ZIP 解压即用，约 215 MB）
+### Windows —— `Windows-SimulSub-x64.zip`（约 215 MB）
 
-[SimulSub-1.0.7-windows-x64.zip](../../releases/download/windows-latest/SimulSub-1.0.7-windows-x64.zip)
+[Windows-SimulSub-x64.zip](../../releases/latest/download/Windows-SimulSub-x64.zip)
 
 解压到英文路径后双击 `SimulSub.exe`。没有代码签名，首次运行会弹 SmartScreen，点「更多信息 → 仍要运行」。
 桌面版没有应用内更新，升级要重新下载。

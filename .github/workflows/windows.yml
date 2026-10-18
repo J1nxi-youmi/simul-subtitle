@@ -44,8 +44,8 @@ jobs:
           name: SimulSub-windows-x64
           path: tools/win-app/build/zip/
 
-      # 发布：滚动 release「windows-latest」每次覆盖，方便固定链接下载最新版；
-      # 另外第一次成功构建会单独存一份「win-first」，把这一版永久留档。
+      # 发布：把 zip 挂到和安卓同一个滚动 release（diy-latest）的 Assets 里，两端的包在同一个下载页；
+      # 另外保留 windows-latest 作为 Windows 专用固定链接，win-first 留档第一个可用版本。
       - name: 发布 Windows 包
         if: github.ref == 'refs/heads/main'
         env:
@@ -54,26 +54,20 @@ jobs:
           ZIP=$(ls desktop/build/compose/binaries/main/SimulSub-*-windows-x64.zip | head -1)
           NAME=$(basename "$ZIP")
           MB=$(( $(stat -c%s "$ZIP") / 1048576 ))
-          MSG=$(git log -1 --pretty=%s | tr -d '"')
           echo "zip: $ZIP ($MB MB)"
-          {
-            echo "### 下载"
-            echo ""
-            echo "#### Windows（ZIP 解压即用，$MB MB）"
-            echo ""
-            echo "- [\`$NAME\`](https://github.com/$GITHUB_REPOSITORY/releases/download/windows-latest/$NAME)"
-            echo "- 解压到英文路径后双击 \`SimulSub.exe\`；没有代码签名，首次运行请点「更多信息 → 仍要运行」"
-            echo ""
-            echo "#### 安卓（APK，约 251 MB）"
-            echo ""
-            echo "- [app-debug.apk](https://github.com/$GITHUB_REPOSITORY/releases/latest/download/app-debug.apk)"
-            echo ""
-            echo "两端功能一致，改动见 [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md)。"
-          } > win-notes.md
+          # 1) 和安卓在同一个下载页：资产名加 Windows 前缀，方便在 Assets 里和 APK 区分
+          if gh release view diy-latest >/dev/null 2>&1; then
+            gh release upload diy-latest "$ZIP#Windows-SimulSub-x64.zip" --clobber
+            echo "已挂到 diy-latest 的 Assets"
+          else
+            echo "diy-latest 还没建（安卓那边会建），跳过合并页"
+          fi
+          # 2) Windows 专用固定链接；更新内容不重复写，指向同一个页面
           gh release view windows-latest >/dev/null 2>&1 \
-            || gh release create windows-latest --title "Windows 最新构建" --notes "首次创建"
+            || gh release create windows-latest --title "Windows 固定下载" --notes "首次创建"
           gh release upload windows-latest "$ZIP#$NAME" --clobber
-          gh release edit windows-latest --title "Windows · $MSG" --notes-file win-notes.md
+          gh release edit windows-latest --title "Windows 固定下载" \
+            --notes "和安卓同源构建。更新内容和校验值见 [最新构建](https://github.com/$GITHUB_REPOSITORY/releases/tag/diy-latest)。"
           if ! gh release view win-first >/dev/null 2>&1; then
             gh release create win-first "$ZIP#$NAME" --title "Windows 首个可用版本" --notes "第一个构建成功的 Windows 版，永久留档"
             echo "已留档首个版本: win-first"

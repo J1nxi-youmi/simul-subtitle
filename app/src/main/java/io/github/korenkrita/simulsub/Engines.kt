@@ -27,7 +27,16 @@ private const val VAD = "models/vad/silero_vad.onnx"
  */
 private const val SV_DIR = "models/asr_sv"
 
-class SenseVoiceAsr(assets: AssetManager, threads: Int) : Asr {
+/** SenseVoice 在中文/日文词之间会插空格（它按词切分），字幕里不该有：只删两侧都是 CJK 的那个空格。 */
+private val CJK_GAP = Regex("(?<=[\\u3000-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef])[ \\u3000](?=[\\u3000-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef])")
+
+internal fun tidySenseVoice(s: String): String = s.replace(CJK_GAP, "")
+
+/**
+ * @param language "auto" 让它自己判语种；"ja" / "zh" / "en" / "ko" 锁死一种。
+ *   直播里的碎句只有零点几秒，自动判语种很容易把日语听成中文或英文，锁死语种能消掉这类误判。
+ */
+class SenseVoiceAsr(assets: AssetManager, threads: Int, language: String = "auto") : Asr {
     private val rec = OfflineRecognizer(
         assets,
         OfflineRecognizerConfig(
@@ -35,7 +44,7 @@ class SenseVoiceAsr(assets: AssetManager, threads: Int) : Asr {
             modelConfig = OfflineModelConfig(
                 senseVoice = OfflineSenseVoiceModelConfig(
                     model = "$SV_DIR/model.int8.onnx",
-                    language = "auto",
+                    language = language,
                     useInverseTextNormalization = true,
                 ),
                 tokens = "$SV_DIR/tokens.txt",
@@ -54,7 +63,7 @@ class SenseVoiceAsr(assets: AssetManager, threads: Int) : Asr {
             s.acceptWaveform(Recognition.padded(samples), 16_000)
             rec.decode(s)
             val r = rec.getResult(s)
-            return Recognition.of(r.text, r.tokens, r.timestamps, Recognition.PAD_S)
+            return Recognition.of(tidySenseVoice(r.text), r.tokens, r.timestamps, Recognition.PAD_S)
         } finally {
             s.release()
         }

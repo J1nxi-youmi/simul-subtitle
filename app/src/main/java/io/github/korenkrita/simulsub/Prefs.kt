@@ -85,6 +85,27 @@ class Prefs(ctx: Context) : SessionPrefs {
         get() = sp.getString("asrEngine", "reazon") ?: "reazon"
         set(v) = sp.edit().putString("asrEngine", v).apply()
 
+    /**
+     * DIY: SenseVoice 的语种。直播里的碎句只有零点几秒，让它自己判语种经常把日语听成中文/英文
+     * （实测一场 52 句里 19 句判错），所以默认锁日语；混说的场次再改成「自动」。
+     */
+    var asrSvLang: String
+        get() = sp.getString("asrSvLang", "ja") ?: "ja"
+        set(v) = sp.edit().putString("asrSvLang", v).apply()
+
+    /** DIY: 停顿多久算一句（毫秒）。越小出字越快、句子越碎。 */
+    override val endSilenceMs: Int
+        get() = sp.getInt("endSilenceMs", 400).coerceIn(100, 1_200)
+
+    /** DIY: 一句话最多多长（毫秒），到了就强制断开。 */
+    override val maxUtteranceMs: Int
+        get() = sp.getInt("maxUtteranceMs", 7_000).coerceIn(1_500, 12_000)
+
+    fun setSegmentation(endSilence: Int, maxUtterance: Int) = sp.edit()
+        .putInt("endSilenceMs", endSilence.coerceIn(100, 1_200))
+        .putInt("maxUtteranceMs", maxUtterance.coerceIn(1_500, 12_000))
+        .apply()
+
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
     override var sourceLang: Lang?
         get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }

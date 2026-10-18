@@ -23,6 +23,9 @@ interface SessionPrefs {
     val contextOn: Boolean
     val contextSentences: Int
     val jevProvider: JevProvider
+    /** DIY: 断句参数（毫秒）——停顿多久算一句、一句话最多多久。 */
+    val endSilenceMs: Int
+    val maxUtteranceMs: Int
     fun jevKey(p: JevProvider): String?
     fun byokService(): ByokService?
     fun byokVariant(url: String, model: String): String?
@@ -182,7 +185,8 @@ class CaptionSession(private val host: SessionHost) {
         try {
             // Fixed for the whole session (the home screen disables them while running): the two Jev switches.
             // Everything else a sentence is translated with is a [Setup], rebuilt when it changes (below).
-            val jevEnds = prefs.jevOn; val jevCheck = prefs.jevCheck
+            // DIY: 断句不再交给 Jev（那个选项已从界面移除），只保留它的译文检查
+            val jevEnds = false; val jevCheck = prefs.jevCheck
             val wantJev = jevEnds || jevCheck
             // a change from here on is seen by the snapshot below or rebuilt after the start
             val order = SetupOrder<ByokService, ByokTranslator.ThinkingOff?>(cancelLock).also { this.order = it }
@@ -505,12 +509,14 @@ class CaptionSession(private val host: SessionHost) {
         }
         try {
             // with Jev the forced cut asks first and an "unfinished" head may grow to twice this (10 s); without Jev it
-            // cuts at the default 7 s. The live log showed long waits were utterances that reached the forced cut.
+            // cuts at the default. The live log showed long waits were utterances that reached the forced cut.
             // An utterance that starts while Jev is paused (its key is missing) is cut as without Jev.
+            // DIY: 两个上限现在来自设置（停顿切段 / 单句最长），默认值仍是原来的 400 / 7000。
             val seg = Segmenter({ pl.submit(it) }, minFinalMs = MIN_FINAL_MS, maxHoldSilenceMs = 1_500,
-                maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else PLAIN_MAX_UTTERANCE_MS,
+                endSilenceMs = prefs.endSilenceMs,
+                maxUtteranceMs = if (jevActive) JEV_MAX_UTTERANCE_MS else prefs.maxUtteranceMs,
                 hintWaitMs = if (jevActive) JEV_WAIT_MS else 0, holdHint = pl::holdHint,
-                judged = pl::judged, plainMaxUtteranceMs = PLAIN_MAX_UTTERANCE_MS,
+                judged = pl::judged, plainMaxUtteranceMs = prefs.maxUtteranceMs,
                 askSilenceMs = JEV_ASK_SILENCE_MS,
                 earlyCutAfterMs = EARLY_CUT_AFTER_MS, earlyCutSilenceMs = EARLY_CUT_SILENCE_MS)
             val frame = FloatArray(seg.frameSize)

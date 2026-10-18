@@ -797,12 +797,42 @@ class MainActivity : Activity() {
         ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
         showCtx()
 
-        // -- DIY: which speech model
+        // -- DIY: which speech model, and its language
         box = group(root, "语音识别")
-        box.addView(choice(listOf("reazon" to "日语/英语（快）", "sensevoice" to "中英日韩自动"), prefs.asrEngine) {
-            if (prefs.asrEngine != it) prefs.asrEngine = it
+        box.addView(choice(listOf("reazon" to "日语/英语（快）", "sensevoice" to "中英日韩"), prefs.asrEngine) {
+            if (prefs.asrEngine != it) { prefs.asrEngine = it; main.post { renderTranslate() } }
         })
-        box.addView(hint("「日语/英语」只认这两种语言，模型 78 MB、跑得快，纯日语直播用它；「中英日韩自动」能认中文和韩语、自己判断说的哪种，中日混说必须用它，代价是模型 239 MB、每句更慢一点。下次开始字幕时生效。"))
+        box.addView(hint("「日语/英语」只认这两种语言，模型 78 MB、跑得快；「中英日韩」能认中文和韩语，中日混说必须用它，模型 239 MB。下次开始字幕时生效。"))
+        if (prefs.asrEngine == "sensevoice") {
+            box.addView(label("识别语种"))
+            box.addView(choice(listOf("ja" to "日语", "auto" to "自动", "zh" to "中文", "ko" to "韩语"), prefs.asrSvLang) {
+                if (prefs.asrSvLang != it) prefs.asrSvLang = it
+            })
+            box.addView(hint("直播里的句子只有零点几秒，让模型自己判语种很容易把日语听成中文或英文（实测一场 52 句里 19 句判错）。纯日语场次选「日语」；那位真的中日混说时再选「自动」。"))
+        }
+
+        // -- DIY: manual segmentation
+        box = group(root, "断句")
+        val segPause = label("")
+        val segMax = label("")
+        val pauseSlider = com.google.android.material.slider.Slider(this).apply {
+            valueFrom = 0.1f; valueTo = 1.2f; stepSize = 0.1f; isTickVisible = false
+            value = prefs.endSilenceMs / 1000f
+        }
+        val maxSlider = com.google.android.material.slider.Slider(this).apply {
+            valueFrom = 1.5f; valueTo = 12f; stepSize = 0.5f; isTickVisible = false
+            value = prefs.maxUtteranceMs / 1000f
+        }
+        fun showSeg() {
+            segPause.text = "停顿切段 %.1f 秒".format(prefs.endSilenceMs / 1000f)
+            segMax.text = "单句最长 %.1f 秒".format(prefs.maxUtteranceMs / 1000f)
+        }
+        pauseSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation((v * 1000).toInt(), prefs.maxUtteranceMs); showSeg() } }
+        maxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation(prefs.endSilenceMs, (v * 1000).toInt()); showSeg() } }
+        showSeg()
+        box.addView(segPause); box.addView(pauseSlider)
+        box.addView(segMax); box.addView(maxSlider)
+        box.addView(hint("停顿多久算一句话说完了、一句话最长多长。调小出字更快但句子更碎；调大句子更完整但更晚出现。下次开始字幕时生效。"))
 
         // -- how captions appear
         box = group(root, "字幕怎么出现")
@@ -814,15 +844,14 @@ class MainActivity : Activity() {
         switchRow(box, "去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
 
-        // -- Jev (optional cloud judge)
-        box = group(root, "在线 Decisions 模型辅助（可选，需要联网）")
-        val jev = switchRow(box, "智能断句", "由 Jev 模型判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) {}
-        val jevCheck = switchRow(box, "检查译文", "由 Jev 模型检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
+        // -- 译文检查（DIY: 断句不再交给 Jev，只留译文识错）
+        box = group(root, "译文检查（可选，需要联网）")
+        val jevCheck = switchRow(box, "检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) {}
         val jevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(jevBox)
         fun renderJev() {
             jevBox.removeAllViews()
-            val used = prefs.jevOn || prefs.jevCheck // the provider and key serve both features
+            val used = prefs.jevCheck // DIY: 断句已不再用 Jev，只有译文检查需要它
             jevBox.visibility = if (used) View.VISIBLE else View.GONE
             if (!used) return
             val p = prefs.jevProvider

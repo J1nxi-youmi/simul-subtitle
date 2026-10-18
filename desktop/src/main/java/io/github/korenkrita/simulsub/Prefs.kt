@@ -69,6 +69,9 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
         put("overlayX" to x, "overlayY" to y, "overlayBottom" to bottom, "widthFrac" to widthFrac, "heightFrac" to heightFrac)
     override var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
     override var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
+    // DIY: 断句参数和手机端共用同一组键；桌面暂时没有界面，用默认值
+    override val endSilenceMs: Int get() = int("endSilenceMs", 400)
+    override val maxUtteranceMs: Int get() = int("maxUtteranceMs", 7_000)
     override var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
     /** null: not sure (the recognizer decides) */
     override var sourceLang: Lang?

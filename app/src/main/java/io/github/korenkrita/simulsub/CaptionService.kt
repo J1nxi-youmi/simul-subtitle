@@ -97,7 +97,7 @@ class CaptionService : Service(), SessionHost {
         // DIY: 按设置选识别引擎；SenseVoice 用于中日混说，ReazonSpeech 快且小
         val sensevoice = prefs.asrEngine == "sensevoice"
         val asr = runCatching {
-            if (sensevoice) SenseVoiceAsr(assets, asrThreads) else SherpaAsr(assets, asrThreads)
+            if (sensevoice) SenseVoiceAsr(assets, asrThreads, prefs.asrSvLang) else SherpaAsr(assets, asrThreads)
         }.getOrElse { vad.release(); throw it }
         return object : SpeechModels {
             override val asr: Asr = asr

@@ -69,16 +69,26 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
         put("overlayX" to x, "overlayY" to y, "overlayBottom" to bottom, "widthFrac" to widthFrac, "heightFrac" to heightFrac)
     override var keepSentences: Int get() = int("keepSentences", CaptionBoard.DEFAULT_SENTENCES); set(v) = put("keepSentences" to v)
     override var keepChars: Int get() = int("keepChars", CaptionBoard.DEFAULT_CHARS); set(v) = put("keepChars" to v)
-    // DIY: 断句参数和手机端共用同一组键；桌面暂时没有界面，用默认值
-    override val endSilenceMs: Int get() = int("endSilenceMs", 400)
-    override val maxUtteranceMs: Int get() = int("maxUtteranceMs", 7_000)
-    /** DIY: 译文检查用的模型；桌面留空，不检查 */
+    // DIY: 断句参数和手机端共用同一组键，默认值也和手机端一致
+    override val endSilenceMs: Int get() = int("endSilenceMs", 350)
+    override val maxUtteranceMs: Int get() = int("maxUtteranceMs", 6_000)
+    var endSilenceSetting: Int get() = endSilenceMs
+        set(v) = put("endSilenceMs" to v.coerceIn(100, 1_200))
+    var maxUtteranceSetting: Int get() = maxUtteranceMs
+        set(v) = put("maxUtteranceMs" to v.coerceIn(1_500, 12_000))
+    /** DIY: 译文检查用的模型；空 = 不检查 */
     override val judgeModel: String get() = str("judgeModel") ?: ""
-    /** DIY: 校验单独的接口；桌面没有界面，留空即复用翻译那套 */
+    /** DIY: 校验单独的接口；留空即复用翻译那套 */
     override val judgeUrl: String get() = str("judgeUrl") ?: ""
-    override fun judgeKey(): String? = null
+    var judgeModelSetting: String get() = judgeModel; set(v) = put("judgeModel" to v.trim())
+    var judgeUrlSetting: String get() = judgeUrl; set(v) = put("judgeUrl" to v.trim())
+    override fun judgeKey(): String? = Keychain.get("judgeKey")
+    val hasJudgeKey: Boolean get() = Keychain.get("judgeKey") != null
+    fun setJudgeKey(key: String?): Boolean =
+        Keychain.set("judgeKey", key?.trim()).also { if (it) put("judgeKey" to null) }
     /** DIY: 识别语种，和手机端共用同一个键（默认日语） */
     val asrSvLang: String get() = str("asrSvLang") ?: "ja"
+    var asrSvLangSetting: String get() = asrSvLang; set(v) = put("asrSvLang" to v)
     override var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
     /** null: not sure (the recognizer decides) */
     override var sourceLang: Lang?

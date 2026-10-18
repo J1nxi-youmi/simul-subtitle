@@ -488,37 +488,53 @@ private fun TranslateTab() {
         SwitchRow("去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
     }
-    Group("在线 Decisions 模型辅助（可选，需要联网）") {
-        SwitchRow("智能断句", "由 Jev 模型判断一句话是否真的说完，减少把一句话切成两半的情况。", prefs.jevOn) { prefs.jevOn = it }
-        SwitchRow("检查译文", "由 Jev 模型检查每句译文是否把意思译反、漏了否定等，发现问题就重新翻译这一句。打开后每句字幕会稍晚出现。", prefs.jevCheck) { prefs.jevCheck = it }
-        if (prefs.jevOn || prefs.jevCheck) {
-            val p = prefs.jevProvider
-            Label("Jev 在线模型服务")
-            Dropdown(JevProvider.entries.map { "${it.label}（${it.note}）" }, p.ordinal) { prefs.jevProvider = JevProvider.entries[it] }
-            if (!p.needsKey) Hint("不用填 key，打开就能用。这是免费的公共服务，可能随时限速或停用；服务不可用时，字幕照常显示，只是不做辅助。只发送识别出的文字和译文，不发送声音。")
-            else {
-                val saved = prefs.jevKey(p)
-                Label(if (saved != null) "${p.label} 的 key：已保存（…${saved.takeLast(4)}）" else "${p.label} 的 key：还没填")
-                var input by remember(p) { mutableStateOf("") }
-                var err by remember(p) { mutableStateOf<String?>(null) }
-                Field(input, { input = it; err = null }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true)
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    err?.let { Text(it, color = C.err, fontSize = 13.sp) }
-                    Grow()
-                    TextBtn("清除", enabled = saved != null) { if (!prefs.setJevKey(p, null)) err = "没能从钥匙串删掉 key，请再试一次" }
-                    Btn("保存", primary = true) {
-                        val k = input.trim()
-                        when {
-                            k.isEmpty() -> {}
-                            // a key with spaces/newlines/non-ASCII would be rejected by HTTP (and echoed in its error)
-                            !Jev.validKey(k) -> err = "key 里有空格、换行或特殊字符，请重新复制"
-                            !prefs.setJevKey(p, k) -> err = "key 没能存进钥匙串，请再试一次"
-                            else -> input = ""
-                        }
+    Group("语音识别") {
+        val langs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
+        Label("识别语种")
+        Dropdown(langs.map { it.second }, langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0)) {
+            prefs.asrSvLangSetting = langs[it].first
+        }
+        Hint("直播里的句子只有零点几秒，让模型自己判语种容易把日语听成中文或英文。纯日语场次选「日语」；中日混说才用「自动」。下次开始字幕时生效。")
+        val pauses = listOf(200, 300, 350, 500, 800)
+        Label("停顿切段")
+        Dropdown(pauses.map { "%.2f 秒".format(it / 1000f) }, pauses.indexOf(prefs.endSilenceMs).let { if (it < 0) 2 else it }) {
+            prefs.endSilenceSetting = pauses[it]
+        }
+        val maxes = listOf(3_000, 4_000, 6_000, 8_000, 12_000)
+        Label("单句最长")
+        Dropdown(maxes.map { "%.1f 秒".format(it / 1000f) }, maxes.indexOf(prefs.maxUtteranceMs).let { if (it < 0) 2 else it }) {
+            prefs.maxUtteranceSetting = maxes[it]
+        }
+        Hint("调小出字更快但句子更碎（太碎识别会变差）；调大句子更完整但更晚出现。下次开始字幕时生效。")
+    }
+    Group("译文检查（可选，需要联网）") {
+        Hint("建议只在用 qwen-mt 这类单句翻译模型时才打开：它看不到上下文，容易把否定或转折翻反。用 qwen-flash 这类通用模型时通常不必开——每句会多一次请求，延迟约 +0.4 秒。")
+        SwitchRow("检查译文", "每句译文出来后由模型再看一遍：有没有把意思译反、漏了否定、把比喻按字面直译。发现问题就带着提示重新翻译这一句。", prefs.jevCheck) { prefs.jevCheck = it }
+        if (prefs.jevCheck) {
+            var model by remember { mutableStateOf(prefs.judgeModelSetting) }
+            var url by remember { mutableStateOf(prefs.judgeUrlSetting) }
+            var key by remember { mutableStateOf("") }
+            var err by remember { mutableStateOf<String?>(null) }
+            Label("校验模型")
+            Field(model, { model = it; err = null }, "例如 qwen-flash")
+            Label("校验地址（留空则用翻译那套）")
+            Field(url, { url = it; err = null }, "例如 https://dashscope.aliyuncs.com/compatible-mode/v1")
+            Label(if (prefs.hasJudgeKey) "校验 API Key：已保存（留空则用翻译的 key）" else "校验 API Key（留空则用翻译的 key）")
+            Field(key, { key = it; err = null }, if (prefs.hasJudgeKey) "输入新的 key 来替换" else "在这里粘贴 key", password = true)
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                err?.let { Text(it, color = C.err, fontSize = 13.sp) }
+                Grow()
+                TextBtn("清除 key", enabled = prefs.hasJudgeKey) { if (!prefs.setJudgeKey(null)) err = "没能从钥匙串删掉 key，请再试一次" }
+                Btn("保存", primary = true) {
+                    val k = key.trim()
+                    when {
+                        k.isNotEmpty() && !Jev.validKey(k) -> err = "key 里有空格、换行或特殊字符，请重新复制"
+                        k.isNotEmpty() && !prefs.setJudgeKey(k) -> err = "key 没能存进钥匙串，请再试一次"
+                        else -> { prefs.judgeModelSetting = model; prefs.judgeUrlSetting = url; key = "" }
                     }
                 }
-                Hint("只发送识别出的文字和译文，不发送声音。key ${if (isWindows) "加密保存在这台电脑上，只有你的 Windows 账户能读出" else "保存在这台 Mac 的钥匙串里"}，不会写进使用记录。")
             }
+            Hint("只发送识别出的文字和译文，不发送声音。下次开始字幕时生效。")
         }
     }
 }

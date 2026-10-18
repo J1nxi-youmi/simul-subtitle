@@ -101,13 +101,46 @@ jobs:
           SIZE=$(stat -c%s "$APK")
           SHA=$(sha256sum "$APK" | awk '{print $1}')
           NAME="1.0.7-diy.$CI_VERSION_CODE"
-          printf '{"versionCode":%s,"versionName":"%s","notes":"自动构建 #%s","apkUrl":"https://github.com/%s/releases/latest/download/app-debug.apk","size":%s,"sha256":"%s"}\n' \
-            "$CI_VERSION_CODE" "$NAME" "$CI_VERSION_CODE" "$GITHUB_REPOSITORY" "$SIZE" "$SHA" > update.json
+          MB=$(( SIZE / 1048576 ))
+          MSG=$(git log -1 --pretty=%s | tr -d '"')
+          BODY=$(git log -1 --pretty=%b | sed '/^$/d' | head -6 | tr -d '"')
+          printf '{"versionCode":%s,"versionName":"%s","notes":"%s","apkUrl":"https://github.com/%s/releases/latest/download/app-debug.apk","size":%s,"sha256":"%s"}\n' \
+            "$CI_VERSION_CODE" "$NAME" "$MSG" "$GITHUB_REPOSITORY" "$SIZE" "$SHA" > update.json
           cat update.json
           gh release view diy-latest >/dev/null 2>&1 \
-            || gh release create diy-latest --title "DIY 最新构建" --notes "自动构建产物，供应用内更新使用" --latest
+            || gh release create diy-latest --title "最新构建" --notes "首次创建" --latest
           gh release upload diy-latest "$APK#app-debug.apk" update.json --clobber
-          gh release edit diy-latest --latest
+          # 把 diy-latest 移到这次提交：否则 release 页显示的 commit 还停在第一次创建时
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/diy-latest" -f "sha=$GITHUB_SHA" -F "force=true" >/dev/null
+          {
+            echo "**最新版本：$NAME**（versionCode $CI_VERSION_CODE，构建 #$CI_VERSION_CODE）"
+            echo ""
+            echo "### 本版更新内容"
+            echo ""
+            echo "$MSG"
+            if [ -n "$BODY" ]; then
+              echo ""
+              echo '```'
+              echo "$BODY"
+              echo '```'
+            fi
+            echo ""
+            echo "### 下载"
+            echo ""
+            echo "- 直接下载 APK（${MB} MB）：[app-debug.apk](https://github.com/$GITHUB_REPOSITORY/releases/latest/download/app-debug.apk)"
+            echo "- 或在 App 里：设置 → 页面 → 检查更新"
+            echo ""
+            echo "### 校验"
+            echo ""
+            echo '```'
+            echo "size   = $SIZE"
+            echo "sha256 = $SHA"
+            echo "commit = $GITHUB_SHA"
+            echo '```'
+            echo ""
+            echo "每个版本的改动见 [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md)。"
+          } > notes.md
+          gh release edit diy-latest --title "$NAME" --notes-file notes.md --latest
 
       # 每个版本打一个 tag（只存指针，不重复存 251 MB 的包）。
       # 想重建某个历史版本的 APK：在该 tag 上手动 Run workflow 即可。

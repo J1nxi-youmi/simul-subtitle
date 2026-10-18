@@ -8,6 +8,9 @@ on:
 jobs:
   zip:
     runs-on: windows-latest
+    # 发布 release 需要写权限（默认 token 是只读的，不加会 403 Resource not accessible）
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash

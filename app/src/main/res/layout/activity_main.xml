@@ -647,7 +647,7 @@
                         <TextView
                             style="@style/RowSub"
                             android:paddingHorizontal="14dp"
-                            android:text="https://github.com/J1nxi-youmi/simul-subtitle"
+                            android:text="https://github.com/J1nxi-youmi/simul-subtitle-diy"
                             android:textIsSelectable="true" />
 
                         <TextView

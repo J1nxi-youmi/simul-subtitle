@@ -58,7 +58,7 @@ internal data class UpdateRelease(
 
     companion object {
         // DIY: 指向自己的 fork——应用内更新只能装同签名的包，上游 release 的签名对不上。
-        const val REPO = "https://github.com/J1nxi-youmi/simul-subtitle"
+        const val REPO = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
         const val LATEST = "$REPO/releases/latest/download/update.json"
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024

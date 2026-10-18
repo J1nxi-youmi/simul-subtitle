@@ -1390,7 +1390,7 @@ class MainActivity : Activity() {
         const val LOGS_BEFORE_SCROLL = 5
         /** where the project lives (set by the author; the repository may not be public yet) */
         // DIY: 指向自己的 fork——上游 release 的签名和本包不一致，应用内更新装不上
-        const val REPO_URL = "https://github.com/J1nxi-youmi/simul-subtitle"
+        const val REPO_URL = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
         /** Settings categories: the list shown for each, and its tab label. */
         val TABS: List<Pair<Int, String>> = listOf(R.id.tabCaption to "字幕", R.id.tabTranslate to "翻译", R.id.tabPage to "页面", R.id.tabRecords to "记录")
     }

@@ -26,7 +26,7 @@ class SenseVoiceAsr(root: File, threads: Int, language: String = "ja") : Asr {
         .setSenseVoice(OfflineSenseVoiceModelConfig.builder()
             .setModel(File(root, "asr_sv/model.int8.onnx").path)
             .setLanguage(language)
-            .setUseInverseTextNormalization(true).build())
+            .setInverseTextNormalization(true).build())
         .setTokens(File(root, "asr_sv/tokens.txt").path).setNumThreads(threads).setModelType("sensevoice").build())
         .setDecodingMethod("greedy_search").build())
 

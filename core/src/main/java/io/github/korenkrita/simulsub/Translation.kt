@@ -307,8 +307,9 @@ object SseStream {
             }
         }
         if (text.contains("<think>")) thinking = true
-        // DIY: 百炼最后可能有、也可能没有明确的 stop 帧；已经拿到内容且从未见过 finish 时按完成处理
-        if (!done && text.isNotEmpty() && finish == null) done = true
+        // DIY: 百炼最后可能有、也可能没有明确的 stop 帧（finish_reason 一直是字符串 "null"）。
+        // 已经拿到内容且从未见过 finish 时，按正常结束处理——否则会判成 stop='f'，整句被当成失败。
+        if (!done && text.isNotEmpty() && finish == null) { done = true; finish = "stop" }
         return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens, thinking, cached)
     }
 }

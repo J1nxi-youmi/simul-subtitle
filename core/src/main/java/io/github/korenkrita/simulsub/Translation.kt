@@ -649,10 +649,10 @@ class ByokTranslator(
             if (next == clean) break
             clean = next
         }
-        // DIY 诊断：qwen-mt 失败时把状态码和原始报文头部（已抹掉 key）塞进 error，界面会直接显示出来
+        // DIY 诊断：qwen-mt 失败时把状态码、真实错误原因和报文头部（已抹掉 key）塞进 error，界面会直接显示出来
         val diag = if (service.qwenMt && !res.usable && res.error != null) {
             val head = secrets.fold((r.body ?: "").take(200)) { t, k -> t.replace(k, "***") }.replace("\n", " ")
-            "diag: HTTP ${r.status} · ${if (head.isEmpty()) "(空响应)" else head}"
+            "diag: HTTP ${r.status} · ${res.error} · ${r.ms}ms · ${if (head.isEmpty()) "(空响应)" else head}"
         } else null
         // an answer cut at the token cap inside reasoning is a conclusive "it thinks" for the probe, but no caption
         return MtResult(clean, if (open) 'f' else res.stop, res.promptTokens,

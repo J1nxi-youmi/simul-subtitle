@@ -44,6 +44,7 @@
 
 - 签名固定在 Actions 缓存里，覆盖安装不丢配置
 - `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
+- 每个版本的改动见 [CHANGELOG.md](CHANGELOG.md)；要重建某个历史版本的 APK，到对应 tag 上手动 Run workflow 即可
 
 ## 致谢
 

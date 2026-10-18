@@ -109,6 +109,21 @@ jobs:
           gh release upload diy-latest "$APK#app-debug.apk" update.json --clobber
           gh release edit diy-latest --latest
 
+      # 每个版本打一个 tag（只存指针，不重复存 251 MB 的包）。
+      # 想重建某个历史版本的 APK：在该 tag 上手动 Run workflow 即可。
+      - name: Tag this version
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.7-diy.$CI_VERSION_CODE"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG 已存在"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
+            echo "已打 tag: $TAG"
+          fi
+
       # ── 可选：要出签名 release 包时，在仓库 Secrets 配好下面四个再看这段 ──
       # - name: Sign release
       #   env:

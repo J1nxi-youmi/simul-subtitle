@@ -849,6 +849,7 @@ private val LOCAL_COMMIT: String by lazy {
         Thread.currentThread().contextClassLoader.getResourceAsStream("build-commit.txt")
             ?.bufferedReader()?.use { it.readText().trim() } ?: ""
     }.getOrDefault("")
+}
 
 private sealed class Update {
     object Idle : Update(); object Checking : Update(); object Latest : Update()

@@ -669,11 +669,14 @@ class ByokTranslator(
      * 语言和术语都走 translation_options 结构化参数（比塞进 prompt 可靠得多）。
      */
     private fun qwenMtBody(user: String, withTerms: Boolean = true): String {
+        val src = qwenSourceText(user)
+        // DIY: 只发这一句里真的出现的术语。实测把整张表都发过去时，qwen-mt 会把它硬塞进译文
+        // （52 句的样本里「B站」在原文出现 0 次、译文出现 4 次），所以这里按原文过滤。
+        val hits = if (withTerms) terms.filter { src.contains(it.first) } else emptyList()
         val opts = buildMap<String, Any> {
             put("source_lang", qwenSource?.en ?: "auto")
             put("target_lang", qwenTarget.en)
-            // DIY: 术语表。MT 读不到 system prompt，不传这里就等于术语完全失效（同一术语会前后译得不一样）。
-            if (withTerms && terms.isNotEmpty()) put("terms", terms.map { mapOf("source" to it.first, "target" to it.second) })
+            if (hits.isNotEmpty()) put("terms", hits.map { mapOf("source" to it.first, "target" to it.second) })
         }
         return Json.encode(mapOf(
             "model" to model,
@@ -681,7 +684,7 @@ class ByokTranslator(
             // 而且它是单句翻译模型，吃不下【前文】【注意】那套提示词——会把提示词也当正文翻。
             // 所以这里只发抠出来的原文。
             "input" to mapOf("messages" to listOf(
-                mapOf("role" to "user", "content" to qwenSourceText(user)),
+                mapOf("role" to "user", "content" to src),
             )),
             "parameters" to mapOf(
                 "translation_options" to opts,

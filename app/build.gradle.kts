@@ -28,6 +28,22 @@ android {
         }
     }
 
+    // DIY: CI 固定签名。默认的 debug keystore 由 AGP 在 runner 的临时目录里生成、用完不留，
+    // 所以每次构建签名都不同，覆盖安装会失败（INSTALL_FAILED_UPDATE_INCOMPATIBLE），App 里的
+    // 配置和 key 也跟着丢。这里在仓库里放一把固定的测试签名（.ci/debug.keystore，由 CI 首次生成
+    // 并缓存），存在就用它；不存在时一切照旧，用 AGP 默认的 debug 签名。
+    signingConfigs {
+        getByName("debug") {
+            val fixed = rootProject.file(".ci/debug.keystore")
+            if (fixed.exists()) {
+                storeFile = fixed
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

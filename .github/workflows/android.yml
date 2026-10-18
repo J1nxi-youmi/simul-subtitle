@@ -45,22 +45,26 @@ jobs:
 
       # 固定 debug 签名：CI 每次跑在新 runner 上，不固定则每次构建签名都不同，
       # 覆盖安装会失败（INSTALL_FAILED_UPDATE_INCOMPATIBLE），App 里的配置和 key 也会丢。
-      # 缓存放在工作区：构建前装回 ~/.android，构建后再存回去，由 post-job 保存。
+      # 做法：仓库根目录的 .ci/debug.keystore 缓存复用，缺了就生成一把（app/build.gradle.kts 会用它）。
       - name: Restore debug keystore
         uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.ci/debug.keystore
-          key: debug-keystore-v1
+          key: debug-keystore-v2
 
-      - name: Install debug keystore
+      - name: Ensure debug keystore
         run: |
-          mkdir -p "$HOME/.android"
-          if [ -f "$GITHUB_WORKSPACE/.ci/debug.keystore" ]; then
-            cp "$GITHUB_WORKSPACE/.ci/debug.keystore" "$HOME/.android/debug.keystore"
-            echo "keystore: 已从缓存恢复"
+          mkdir -p "$GITHUB_WORKSPACE/.ci"
+          KS="$GITHUB_WORKSPACE/.ci/debug.keystore"
+          if [ -f "$KS" ]; then
+            echo "keystore: 已从缓存恢复（签名固定）"
           else
-            echo "keystore: 缓存里还没有，本次生成的会在构建后保存"
+            keytool -genkeypair -v -keystore "$KS" -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "keystore: 首次生成，构建结束后会缓存"
           fi
+          keytool -list -keystore "$KS" -storepass android | tail -2
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -76,18 +80,6 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
-
-      # 构建后用过的 keystore 存回工作区，交给 post-job 缓存；下次构建就能恢复同一把
-      - name: Stash debug keystore
-        if: always()
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.ci"
-          if [ ! -f "$GITHUB_WORKSPACE/.ci/debug.keystore" ]; then
-            found=$(find "$HOME/.android" "${ANDROID_SDK_ROOT:-/nonexistent}" -maxdepth 3 -name debug.keystore 2>/dev/null | head -1)
-            echo "keystore 实际位置: ${found:-未找到}"
-            if [ -n "$found" ]; then cp "$found" "$GITHUB_WORKSPACE/.ci/debug.keystore"; fi
-          fi
-          ls -l "$GITHUB_WORKSPACE/.ci" || true
 
       # ── 可选：要出签名 release 包时，在仓库 Secrets 配好下面四个再看这段 ──
       # - name: Sign release

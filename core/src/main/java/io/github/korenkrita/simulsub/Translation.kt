@@ -640,9 +640,11 @@ class ByokTranslator(
         }
         return Json.encode(mapOf(
             "model" to model,
+            // DIY: qwen-mt 只接受 user / assistant 角色（带 system 会 400 Role must be in [user, assistant]），
+            // 而且它是单句翻译模型，吃不下【前文】【注意】那套提示词——会把提示词也当正文翻。
+            // 所以这里只发抠出来的原文。
             "input" to mapOf("messages" to listOf(
-                mapOf("role" to "system", "content" to system),
-                mapOf("role" to "user", "content" to user),
+                mapOf("role" to "user", "content" to qwenSourceText(user)),
             )),
             "parameters" to mapOf(
                 "translation_options" to opts,
@@ -651,6 +653,17 @@ class ByokTranslator(
                 "incremental_output" to true,
             ),
         ))
+    }
+
+    /** 从 [byokUser] 拼好的提示词里取出【当前句】的原文；已经是纯原文时原样返回。 */
+    private fun qwenSourceText(composed: String): String {
+        val marker = "【当前句】"
+        val i = composed.indexOf(marker)
+        if (i < 0) return composed.trim()
+        var s = composed.substring(i + marker.length).trimStart()
+        val cut = s.indexOf("\n\n【")
+        if (cut >= 0) s = s.substring(0, cut)
+        return s.trim()
     }
 
     /**

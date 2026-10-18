@@ -819,19 +819,18 @@ private fun AboutSection() {
     Group("关于") {
         Text("同声传译（diy版）  版本 $APP_VERSION", fontSize = 15.sp, modifier = Modifier.padding(vertical = 6.dp))
         Divider()
-        SwitchRow("自动检查更新", null, prefs.autoUpdate) { prefs.autoUpdate = it }
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Btn(if (update.value is Update.Checking) "检查中…" else "检查更新", enabled = update.value !is Update.Checking,
                 modifier = Modifier.weight(1f)) { checkNow(manual = true) }
-            Btn("GitHub 项目主页", modifier = Modifier.weight(1f)) { open(REPO) }
+            Btn("打开下载页", modifier = Modifier.weight(1f)) { open("$REPO/releases/tag/diy-latest") }
         }
+        Hint("桌面端不会自动安装新版：点「打开下载页」下载 Windows-SimulSub-x64.zip，退出本程序后解压替换即可，设置和 key 都保留。GitHub 项目主页：$REPO")
         when (val u = update.value) {
             is Update.Found -> UpdateBox(u.release)
             is Update.Latest -> Hint("已经是最新版本。")
             is Update.Failed -> Hint("检查失败：${u.why}", C.err)
             else -> {}
         }
-        Hint(REPO)
         Hint("语音识别用的是 ReazonSpeech 模型和 Silero VAD（通过 sherpa-onnx 在电脑上运行，模型已经装在 App 里）。感谢这些项目。")
     }
 }
@@ -864,7 +863,7 @@ private fun fetchRelease(): Pair<Release?, String?> {
                 val j = JSONObject(String(text))
                 val code = j.get("versionCode").toString().toInt()
                 val name = j.getString("versionName")
-                require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}")))
+                require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}(?:-[A-Za-z0-9._-]{1,24})?")))
                 return Release(code, name, j.optString("notes").take(8_000)) to null
             }
         } catch (e: Exception) { why = e.message ?: e.javaClass.simpleName }
@@ -883,7 +882,7 @@ private fun checkNow(manual: Boolean) {
                 r.code > APP_VERSION_CODE -> Update.Found(r)
                 else -> if (manual) Update.Latest else Update.Idle
             }
-            if (!manual && r != null && r.code > APP_VERSION_CODE && r.code != prefs.skippedUpdate) offered.value = r
+            if (!manual && r != null && r.code > APP_VERSION_CODE) { /* DIY: 桌面端不自更新，启动时不弹窗 */ }
         }
     }.apply { isDaemon = true }.start()
 }
@@ -891,13 +890,12 @@ private fun checkNow(manual: Boolean) {
 @Composable
 private fun UpdateBox(r: Release) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).background(C.brandSoft, RoundedCornerShape(8.dp)).padding(12.dp)) {
-        Text("有新版本 ${r.name}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("线上最新版本 ${r.name}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         if (r.notes.isNotBlank()) Text(r.notes, fontSize = 13.sp, lineHeight = 20.sp, color = C.text2, modifier = Modifier.padding(top = 6.dp))
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Btn("打开下载页", primary = true) { open("$REPO/releases/tag/v${r.name}") }
+            Btn("打开下载页", primary = true) { open("$REPO/releases/tag/diy-latest") }
         }
-        Hint(if (isWindows) "下载页里的 windows-x64.zip 是 Windows 版。先退出同传字幕，解压后用新的文件夹替换旧的即可，设置会保留。"
-            else "下载页里的 .dmg 是 Mac 版。打开后把同传字幕拖进「应用程序」替换旧版即可，设置会保留。")
+        Hint("下载页里 \`Windows-SimulSub-x64.zip\` 是 Windows 版。先退出本程序，解压后用新的文件夹替换旧的，设置会保留（设置存在 %APPDATA%\\SimulSub，不随程序目录走）。")
     }
 }
 

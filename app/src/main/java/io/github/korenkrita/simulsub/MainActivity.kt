@@ -519,7 +519,7 @@ class MainActivity : Activity() {
             renderService()
             if (!prefs.byokReady) {
                 // nothing else to set up: without an LLM API there is nothing to start, so the one action goes there
-                status(R.color.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
+                status(R.color.warn, "先填翻译用的 LLM API", "服务地址和模型已经填好了，只需要粘贴你的 API Key，点「测试连接」就能开始。声音识别已经装在 App 里，不用下载。")
                 primary.text = "去填写"; primary.setIconResource(R.drawable.ic_settings)
                 primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
                 onPrimary(R.color.on_brand)

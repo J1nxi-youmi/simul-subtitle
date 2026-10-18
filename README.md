@@ -16,13 +16,21 @@
 ## 用起来
 
 1. 装[最新 APK](../../releases/latest/download/app-debug.apk)（约 251 MB）
-2. **设置 → 翻译 → LLM API**：填 OpenAI 兼容地址、模型 ID、API Key，点「测试连接」
-   - 翻译建议 `qwen-mt-plus`，地址 `https://dashscope.aliyuncs.com/compatible-mode/v1`
-   - 译文检查建议 `qwen-flash`，和翻译共用同一个地址和 key
+2. **只需要填 API Key**：设置 → 翻译 → LLM API → 粘贴 key → 点「测试连接」
+   - 地址（`https://dashscope.aliyuncs.com/compatible-mode/v1`）和模型（`qwen-flash`）已经填好了
+   - 用别的服务商时再改这两项
 3. **首页**选「识别语种 → 字幕语言」，点「开始字幕」，在系统弹窗里选要听的 App
 4. 以后更新：**设置 → 页面 → 检查更新**
 
-成本参考：一场 1 小时直播的翻译约 ¥0.1~0.2（qwen-mt-plus，按 372 次翻译实测推算）。
+默认配置是实测出来的（一场直播 372 句的对比）：
+
+| 模型 | 翻译 p50 | 端到端 p50 | 上下文 |
+|---|---|---|---|
+| `qwen-flash` + 上文 2 句 | **346 ms** | **833 ms** | ✅ |
+| `qwen-mt-plus` | 268 ms | 1370 ms | ❌ |
+| `qwen3.7-plus` | 1046 ms | 2684 ms | ✅ |
+
+成本：一场 1 小时直播约 ¥0.1~0.2（`qwen-flash` 前缀缓存命中约 66%）。
 
 ## 已知限制
 

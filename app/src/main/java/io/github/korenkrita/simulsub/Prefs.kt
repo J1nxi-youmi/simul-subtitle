@@ -5,6 +5,14 @@ import android.content.Context
 /** DIY: 译文检查默认用的模型——DashScope compatible-mode 上的通用小模型，够快也够便宜。 */
 private const val DEFAULT_JUDGE_MODEL = "qwen-flash"
 
+/**
+ * DIY: 翻译接口的默认值，按实测最优组合填好，新装只需要填 API Key。
+ * 实测（1 小时直播、372 句）：qwen-flash + 上文 2 句，翻译 346 ms、端到端 833 ms；
+ * 对比 qwen-mt-plus 是 268 / 1370 ms（快一些但没有上下文），qwen3.7-plus 是 1046 / 2684 ms（质量好但太慢）。
+ */
+private const val DEFAULT_BYOK_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+private const val DEFAULT_BYOK_MODEL = "qwen-flash"
+
 /** Subtitle look, shared by the settings screen (live preview) and the overlay. */
 class Prefs(ctx: Context) : SessionPrefs {
     private val sp = ctx.getSharedPreferences("jpsub", Context.MODE_PRIVATE)
@@ -96,13 +104,13 @@ class Prefs(ctx: Context) : SessionPrefs {
         get() = sp.getString("asrSvLang", "ja") ?: "ja"
         set(v) = sp.edit().putString("asrSvLang", v).apply()
 
-    /** DIY: 停顿多久算一句（毫秒）。越小出字越快、句子越碎。 */
+    /** DIY: 停顿多久算一句（毫秒）。默认 350：实测 200 太碎会把识别切坏，400 起句偏慢。 */
     override val endSilenceMs: Int
-        get() = sp.getInt("endSilenceMs", 400).coerceIn(100, 1_200)
+        get() = sp.getInt("endSilenceMs", 350).coerceIn(100, 1_200)
 
-    /** DIY: 一句话最多多长（毫秒），到了就强制断开。 */
+    /** DIY: 一句话最多多长（毫秒）。默认 6000：2 秒以内信息量太小，识别器没有上下文。 */
     override val maxUtteranceMs: Int
-        get() = sp.getInt("maxUtteranceMs", 7_000).coerceIn(1_500, 12_000)
+        get() = sp.getInt("maxUtteranceMs", 6_000).coerceIn(1_500, 12_000)
 
     fun setSegmentation(endSilence: Int, maxUtterance: Int) = sp.edit()
         .putInt("endSilenceMs", endSilence.coerceIn(100, 1_200))
@@ -176,8 +184,8 @@ class Prefs(ctx: Context) : SessionPrefs {
     val byokProfiles: List<LlmProfile> get() = LlmProfile.all(sp.getString("byokProfiles", null))
     val byokProfile: LlmProfile get() = LlmProfile.active(byokProfiles, sp.getString("byokActive", null))
     private val sfx: String get() = byokProfile.suffix
-    val byokUrl: String get() = sp.getString("byokUrl$sfx", "") ?: ""
-    val byokModel: String get() = sp.getString("byokModel$sfx", "") ?: ""
+    val byokUrl: String get() = sp.getString("byokUrl$sfx", DEFAULT_BYOK_URL) ?: DEFAULT_BYOK_URL
+    val byokModel: String get() = sp.getString("byokModel$sfx", DEFAULT_BYOK_MODEL) ?: DEFAULT_BYOK_MODEL
     val byokKey: String? get() = sp.getString("byokKey$sfx", null)?.let { runCatching { KeyBox.open(it) }.getOrNull() }
     /**
      * "保存": all fields of the profile in use in one edit (null key = keep the saved one), plus the byokSaved marker a
@@ -245,7 +253,8 @@ class Prefs(ctx: Context) : SessionPrefs {
     override fun setByokVariant(url: String, model: String, name: String?) =
         sp.edit().apply { if (name == null) remove("byokVariant:$url|$model") else putString("byokVariant:$url|$model", name) }.apply()
     /** URL and model are there and valid: BYOK can start (the key may be left empty, for a free service). */
-    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()
+    /** DIY: 地址和模型都有默认值，所以「填好了」还要求有 key——否则首页会放行，一开字幕就 401。 */
+    val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty() && byokKey != null
 
 
     fun listen(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(l)

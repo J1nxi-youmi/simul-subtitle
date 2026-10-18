@@ -815,24 +815,28 @@ class MainActivity : Activity() {
         box = group(root, "断句")
         val segPause = label("")
         val segMax = label("")
+        // Slider 要求 value 必须等于 valueFrom + n×stepSize，否则布局时抛 IllegalStateException（会闪退）。
+        // 所以刻度用毫秒整数，并把存下来的值先吸附到最近的刻度。
+        fun snapTo(v: Int, from: Int, to: Int, step: Int) =
+            (from + Math.round((v - from).toFloat() / step) * step).coerceIn(from, to)
         val pauseSlider = com.google.android.material.slider.Slider(this).apply {
-            valueFrom = 0.1f; valueTo = 1.2f; stepSize = 0.1f; isTickVisible = false
-            value = prefs.endSilenceMs / 1000f
+            valueFrom = 100f; valueTo = 1_200f; stepSize = 50f; isTickVisible = false
+            value = snapTo(prefs.endSilenceMs, 100, 1_200, 50).toFloat()
         }
         val maxSlider = com.google.android.material.slider.Slider(this).apply {
-            valueFrom = 1.5f; valueTo = 12f; stepSize = 0.5f; isTickVisible = false
-            value = prefs.maxUtteranceMs / 1000f
+            valueFrom = 1_500f; valueTo = 12_000f; stepSize = 250f; isTickVisible = false
+            value = snapTo(prefs.maxUtteranceMs, 1_500, 12_000, 250).toFloat()
         }
         fun showSeg() {
-            segPause.text = "停顿切段 %.1f 秒".format(prefs.endSilenceMs / 1000f)
-            segMax.text = "单句最长 %.1f 秒".format(prefs.maxUtteranceMs / 1000f)
+            segPause.text = "停顿切段 %.2f 秒".format(prefs.endSilenceMs / 1000f)
+            segMax.text = "单句最长 %.2f 秒".format(prefs.maxUtteranceMs / 1000f)
         }
-        pauseSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation((v * 1000).toInt(), prefs.maxUtteranceMs); showSeg() } }
-        maxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation(prefs.endSilenceMs, (v * 1000).toInt()); showSeg() } }
+        pauseSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation(v.toInt(), prefs.maxUtteranceMs); showSeg() } }
+        maxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.setSegmentation(prefs.endSilenceMs, v.toInt()); showSeg() } }
         showSeg()
         box.addView(segPause); box.addView(pauseSlider)
         box.addView(segMax); box.addView(maxSlider)
-        box.addView(hint("停顿多久算一句话说完了、一句话最长多长。调小出字更快但句子更碎；调大句子更完整但更晚出现。下次开始字幕时生效。"))
+        box.addView(hint("停顿多久算一句话说完了、一句话最长多长。调小出字更快但句子更碎（太碎识别会变差）；调大句子更完整但更晚出现。下次开始字幕时生效。"))
 
         // -- how captions appear
         box = group(root, "字幕怎么出现")

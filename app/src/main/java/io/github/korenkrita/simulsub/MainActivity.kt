@@ -193,7 +193,8 @@ class MainActivity : Activity() {
         fun weighted(v: View) = v.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
         // DIY: 左边换成「识别语种」——识别引擎只有 SenseVoice，能认的语种就是这几个。
         // 「自动」时把翻译的源语言也交给模型判断。
-        val langs = listOf("ja" to "日语", "auto" to "自动（中英日韩）", "zh" to "中文", "ko" to "韩语")
+        // 语种码来自模型本身：sherpa-onnx 明确只接受 auto / zh / en / ja / ko / yue
+        val langs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
         val cur = langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0)
         box.addView(weighted(dropdown(langs.map { it.second }, cur, true, wrap = true) {
             val code = langs[it].first

@@ -102,7 +102,15 @@ class CaptionService : Service(), SessionHost {
         return object : SpeechModels {
             override val asr: Asr = asr
             override fun vadProb(frame: FloatArray) = vad.prob(frame)
-            override fun release() { asr.release(); vad.release() }
+            override fun release() {
+                // release() 不在 Asr 接口上，按实际引擎类型释放
+                when (asr) {
+                    is SenseVoiceAsr -> asr.release()
+                    is SherpaAsr -> asr.release()
+                    else -> {}
+                }
+                vad.release()
+            }
         }
     }
 

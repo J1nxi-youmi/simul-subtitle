@@ -46,7 +46,7 @@ class CaptionService private constructor(private val sysaudio: File) : SessionHo
     // the models ship inside the app (or come from ./models when run from the repo)
     override fun loadModels(asrThreads: Int): SpeechModels {
         val vad = SileroProb(modelsDir)
-        val asr = runCatching { SherpaAsr(modelsDir, asrThreads) }.getOrElse { vad.release(); throw it }
+        val asr = runCatching { SenseVoiceAsr(modelsDir, asrThreads, prefs.asrSvLang) }.getOrElse { vad.release(); throw it }
         return object : SpeechModels {
             override val asr: Asr = asr
             override fun vadProb(frame: FloatArray) = vad.prob(frame)

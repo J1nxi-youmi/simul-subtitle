@@ -1,9 +1,9 @@
-# The Windows zip (tools/win-app/build.sh) on a GitHub Windows runner, uploaded as the run's artifact. Runs on a push
-# to the windows branch, or by hand (a release: gh workflow run windows.yml --ref main, see docs/build.md).
+# The Windows zip (tools/win-app/build.sh) on a GitHub Windows runner, uploaded as the run's artifact.
+# DIY: 跟着 main 一起构建，和安卓版同步出包；也可以手动触发。
 name: windows
 on:
   push:
-    branches: [windows]
+    branches: [windows, main]
   workflow_dispatch:
 jobs:
   zip:
@@ -12,20 +12,20 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: zulu
           java-version: '17'
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             models
             tools/win-app/build/*.jar
-          key: win-deps-${{ hashFiles('setup.sh', 'tools/win-app/build.sh') }}
+          key: win-deps-v2-${{ hashFiles('setup.sh', 'tools/win-app/build.sh') }}
       - run: tools/win-app/build.sh
       - if: failure()
         run: cat desktop/build/compose/logs/*/*.txt || true
@@ -36,7 +36,7 @@ jobs:
           cat /tmp/err; ls -la /tmp/pcm
       # GitHub zips an artifact itself: upload the app folder, so the download unzips straight to SimulSub/ (the
       # Release's zip is the same folder, zipped once by tools/win-app/build.sh)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: SimulSub-windows-x64
           path: tools/win-app/build/zip/

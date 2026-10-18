@@ -77,6 +77,8 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     /** DIY: 校验单独的接口；桌面没有界面，留空即复用翻译那套 */
     override val judgeUrl: String get() = str("judgeUrl") ?: ""
     override fun judgeKey(): String? = null
+    /** DIY: 识别语种，和手机端共用同一个键（默认日语） */
+    val asrSvLang: String get() = str("asrSvLang") ?: "ja"
     override var finalOnly: Boolean get() = bool("finalOnly", false); set(v) = put("finalOnly" to v)
     /** null: not sure (the recognizer decides) */
     override var sourceLang: Lang?

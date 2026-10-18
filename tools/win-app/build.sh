@@ -24,7 +24,7 @@ fetch "$GH/sherpa-onnx-native-lib-win-x64-$SHERPA.jar" "$W/sherpa-win.jar"
 # 2. the speech models, checked by ./setup.sh (it fetches what is missing)
 "$ROOT/setup.sh" >/dev/null
 mkdir -p "$R/models"
-cp -R "$ROOT/models/asr" "$ROOT/models/vad" "$R/models/"
+cp -R "$ROOT/models/asr_sv" "$ROOT/models/vad" "$R/models/"
 
 # 3. the audio helper (static C runtime: nothing else to install). MSVC's own folder first on PATH: Git Bash has a
 # link.exe of its own that cl would otherwise run; MSYS_NO_PATHCONV keeps /O2 and the like as they are

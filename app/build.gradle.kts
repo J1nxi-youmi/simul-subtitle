@@ -12,8 +12,8 @@ android {
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
         // 注意：desktop/build.gradle.kts 用正则、tools/win-app/build.sh 用 sed 从本文件读版本号，
-        // 两边都按「versionName = "..."」这种写法找。所以下面只能有一处这种形态——
-        // CI 的覆盖那一行故意不以引号开头，不会被它们当成第二个版本号。
+        // 两边都按「赋值号后面紧跟一对引号」的形式找。所以下面只能有一处这种形态——
+        // CI 的覆盖那一行故意不以引号开头，也不会被它们当成第二个版本号。
         versionCode = 27
         versionName = "1.0.7"
         val plainName = "1.0.7"

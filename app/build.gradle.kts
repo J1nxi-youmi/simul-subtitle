@@ -12,14 +12,15 @@ android {
         minSdk = 29 // AudioPlaybackCapture
         targetSdk = 35
         // 注意：desktop/build.gradle.kts 用正则、tools/win-app/build.sh 用 sed 从本文件读版本号，
-        // 两者都按「第一个匹配」/「所有匹配行」取，所以整个文件里只能有下面这一处版本号字面量。
-        // CI 的覆盖写在后面，用 setter 而不是同样的赋值形式。
+        // 两边都按「versionName = "..."」这种写法找。所以下面只能有一处这种形态——
+        // CI 的覆盖那一行故意不以引号开头，不会被它们当成第二个版本号。
         versionCode = 27
         versionName = "1.0.7"
-        // DIY: CI 传 CI_VERSION_CODE 时覆盖，App 内的更新器才有版本更新可比。
-        System.getenv("CI_VERSION_CODE")?.toIntOrNull()?.let { code ->
-            setVersionCode(code)
-            setVersionName("1.0.7-diy." + code)
+        val plainName = "1.0.7"
+        val ciCode = System.getenv("CI_VERSION_CODE")?.toIntOrNull()
+        if (ciCode != null) {
+            versionCode = ciCode
+            versionName = plainName + "-diy." + ciCode
         }
         ndk { abiFilters += "arm64-v8a" }
     }

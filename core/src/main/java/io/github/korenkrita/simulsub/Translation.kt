@@ -201,7 +201,7 @@ object SseStream {
      * DIY: 百炼原生流的结束标记不是 [DONE]，而是最后一帧的 finish_reason 变成 "stop"
      * （中间帧该字段是字符串 "null"）。
      */
-    fun isQwenEnd(line: String) = line.startsWith("data:") && line.contains("\"finish_reason\":\"stop\"")
+    fun isQwenEnd(line: String) = line.contains("data:") && line.contains("\"finish_reason\":\"stop\"")
 
     /**
      * A streamed call as an [MtResult]: [request] is what was sent, [response] the body for the log (BYOK: with the
@@ -228,7 +228,10 @@ object SseStream {
 
     /** One SSE line carrying translated text (not a role-only, empty, usage or keep-alive event). */
     fun hasText(line: String): Boolean {
-        val data = line.takeIf { it.startsWith("data:") }?.removePrefix("data:")?.trim() ?: return false
+        // DIY: 百炼的帧是 "id:1 event:result :HTTP_STATUS/200 data:{...}"，data 不在行首
+        val di = line.indexOf("data:")
+        if (di < 0) return false
+        val data = line.substring(di + "data:".length).trim()
         val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return false
         // DIY: 百炼把 choices 放在 output 下，增量文本在 message 而不是 delta
         val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>)
@@ -264,9 +267,12 @@ object SseStream {
         val text = StringBuilder(); var finish: String? = null; var done = false; var thinking = false
         var promptTokens: Int? = null; var outputTokens: Int? = null; var cached: Int? = null
         for (line in body.lineSequence()) {
-            if (line.startsWith("event:") && line.removePrefix("event:").trim() == "error") return null
-            if (!line.startsWith("data:")) continue
-            val data = line.removePrefix("data:").trim()
+            // DIY: 百炼的错误帧形如 "id:1 event:error :HTTP_STATUS/400 data:{...}"
+            if (line.contains("event:error")) return null
+            // DIY: data 不在行首（前面还有 id/event/:HTTP_STATUS 等），按位置截取
+            val di = line.indexOf("data:")
+            if (di < 0) continue
+            val data = line.substring(di + "data:".length).trim()
             if (data == "[DONE]") { done = true; break }
             val j = runCatching { Json.parse(data) as? Map<*, *> }.getOrNull() ?: return null
             if (j["error"] != null) return null
@@ -301,6 +307,8 @@ object SseStream {
             }
         }
         if (text.contains("<think>")) thinking = true
+        // DIY: 百炼最后可能有、也可能没有明确的 stop 帧；已经拿到内容且从未见过 finish 时按完成处理
+        if (!done && text.isNotEmpty() && finish == null) done = true
         return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens, thinking, cached)
     }
 }
@@ -673,7 +681,9 @@ class ByokTranslator(
      */
     private fun hasAnswer(line: String, seen: StringBuilder): Boolean {
         if (!SseStream.hasText(line)) return false
-        val j = runCatching { Json.parse(line.removePrefix("data:").trim()) as? Map<*, *> }.getOrNull() ?: return false
+        val di = line.indexOf("data:")
+        if (di < 0) return false
+        val j = runCatching { Json.parse(line.substring(di + "data:".length).trim()) as? Map<*, *> }.getOrNull() ?: return false
         // DIY: 百炼的 choices 在 output 下、增量在 message.content
         val choices = (j["choices"] as? List<*>) ?: ((j["output"] as? Map<*, *>)?.get("choices") as? List<*>)
         val choice = (choices?.firstOrNull() as? Map<*, *>) ?: return false

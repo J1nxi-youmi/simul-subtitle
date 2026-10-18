@@ -64,7 +64,14 @@ internal data class UpdateRelease(
         const val MAX_MANIFEST = 128 * 1024
         const val MAX_NOTES = 8_000 // characters shown in the dialog
         // github.com first, then third-party download proxies. Never send api.github.com through these proxies.
-        fun sources(url: String) = listOf(url, "https://gh-proxy.com/$url", "https://gh.llkk.cc/$url")
+        // DIY: github 直连在国内经常不通，gh.llkk.cc 已失效——镜像多留几个，前一个失败自动换下一个。
+        fun sources(url: String) = listOf(
+            url,
+            "https://gh-proxy.com/$url",
+            "https://ghfast.top/$url",
+            "https://ghproxy.net/$url",
+            "https://gh.llkk.cc/$url",
+        )
 
         fun sha256(f: java.io.File): String {
             val md = java.security.MessageDigest.getInstance("SHA-256")

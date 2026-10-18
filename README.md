@@ -37,6 +37,14 @@
 - 签名固定在 Actions 缓存里，覆盖安装不丢配置
 - `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
 
+## 致谢
+
+感谢 [KorenKrita](https://github.com/KorenKrita) 的 [simul-subtitle](https://github.com/KorenKrita/simul-subtitle)。
+
+悬浮字幕、音频内录、VAD 断句、草稿/定稿字幕、BYOK 翻译、术语与场景、桌面端……这套东西的骨架全是他一个人搭的。没有他的工作，这个 diy 版根本不存在——我只是在他的成果上换了自己更习惯的识别模型，改了几处交互和译文检查的实现。
+
+也感谢 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（本地推理）、[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)（多语种识别）、[Silero VAD](https://github.com/snakers4/silero-vad)（断句）。
+
 ## 许可
 
 沿用 [LICENSE](LICENSE)。

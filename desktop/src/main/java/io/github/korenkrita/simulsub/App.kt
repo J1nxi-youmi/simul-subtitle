@@ -830,18 +830,25 @@ private fun AboutSection() {
         Hint("桌面端不会自动安装新版：点「打开下载页」下载 Windows-SimulSub-x64.zip，退出本程序后解压替换即可，设置和 key 都保留。GitHub 项目主页：$REPO")
         when (val u = update.value) {
             is Update.Found -> UpdateBox(u.release)
-            is Update.Latest -> Hint("已经是最新版本。")
+            is Update.Latest -> Hint(if (LOCAL_COMMIT.isEmpty()) "已经是最新版本。" else "已经是最新版本（本机构建 ${LOCAL_COMMIT.take(7)}，和线上一致）。")
             is Update.Failed -> Hint("检查失败：${u.why}", C.err)
             else -> {}
         }
-        Hint("语音识别用的是 ReazonSpeech 模型和 Silero VAD（通过 sherpa-onnx 在电脑上运行，模型已经装在 App 里）。感谢这些项目。")
+        Hint("语音识别用的是 SenseVoice 模型和 Silero VAD（通过 sherpa-onnx 在电脑上运行，模型已经装在 App 里，不用额外下载）。感谢这些项目。")
     }
 }
 
 // ---- updates -----------------------------------------------------------------------------------------------
 
-/** The latest release as update.json describes it; the desktop only needs its version and notes. */
-private class Release(val code: Int, val name: String, val notes: String)
+/** The latest release as update.json describes it; the desktop only needs its version, notes and commit. */
+private class Release(val code: Int, val name: String, val notes: String, val commit: String)
+
+/** DIY: 这次构建的提交号（CI 写进桌面资源），用来判断线上是不是同一个版本；从源码直接跑时为空。 */
+private val LOCAL_COMMIT: String by lazy {
+    runCatching {
+        Thread.currentThread().contextClassLoader.getResourceAsStream("build-commit.txt")
+            ?.bufferedReader()?.use { it.readText().trim() } ?: ""
+    }.getOrDefault("")
 
 private sealed class Update {
     object Idle : Update(); object Checking : Update(); object Latest : Update()
@@ -867,7 +874,7 @@ private fun fetchRelease(): Pair<Release?, String?> {
                 val code = j.get("versionCode").toString().toInt()
                 val name = j.getString("versionName")
                 require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}(?:-[A-Za-z0-9._-]{1,24})?")))
-                return Release(code, name, j.optString("notes").take(8_000)) to null
+                return Release(code, name, j.optString("notes").take(8_000), j.optString("commit")) to null
             }
         } catch (e: Exception) { why = e.message ?: e.javaClass.simpleName }
     }
@@ -882,6 +889,9 @@ private fun checkNow(manual: Boolean) {
         java.awt.EventQueue.invokeLater {
             update.value = when {
                 r == null -> if (manual) Update.Failed(why ?: "") else Update.Idle
+                // DIY: 桌面端用提交号判断——线上就是自己这次构建，说明已是最新
+                LOCAL_COMMIT.isNotEmpty() && r.commit.equals(LOCAL_COMMIT, ignoreCase = true) ->
+                    if (manual) Update.Latest else Update.Idle
                 r.code > APP_VERSION_CODE -> Update.Found(r)
                 else -> if (manual) Update.Latest else Update.Idle
             }
@@ -893,7 +903,7 @@ private fun checkNow(manual: Boolean) {
 @Composable
 private fun UpdateBox(r: Release) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).background(C.brandSoft, RoundedCornerShape(8.dp)).padding(12.dp)) {
-        Text("线上最新版本 ${r.name}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("线上有新版本 ${r.name}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         if (r.notes.isNotBlank()) Text(r.notes, fontSize = 13.sp, lineHeight = 20.sp, color = C.text2, modifier = Modifier.padding(top = 6.dp))
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Btn("打开下载页", primary = true) { open("$REPO/releases/tag/diy-latest") }

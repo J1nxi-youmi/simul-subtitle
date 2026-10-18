@@ -109,8 +109,8 @@ jobs:
           MB=$(( SIZE / 1048576 ))
           MSG=$(git log -1 --pretty=%s | tr -d '"')
           BODY=$(git log -1 --pretty=%b | sed '/^$/d' | head -6 | tr -d '"')
-          printf '{"versionCode":%s,"versionName":"%s","notes":"%s","apkUrl":"https://github.com/%s/releases/latest/download/app-debug.apk","size":%s,"sha256":"%s"}\n' \
-            "$CI_VERSION_CODE" "$NAME" "$MSG" "$GITHUB_REPOSITORY" "$SIZE" "$SHA" > update.json
+          printf '{"versionCode":%s,"versionName":"%s","notes":"%s","apkUrl":"https://github.com/%s/releases/latest/download/app-debug.apk","size":%s,"sha256":"%s","commit":"%s"}\n' \
+            "$CI_VERSION_CODE" "$NAME" "$MSG" "$GITHUB_REPOSITORY" "$SIZE" "$SHA" "$GITHUB_SHA" > update.json
           cat update.json
           gh release view diy-latest >/dev/null 2>&1 \
             || gh release create diy-latest --title "最新构建" --notes "首次创建" --latest

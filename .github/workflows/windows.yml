@@ -29,6 +29,12 @@ jobs:
             models
             tools/win-app/build/*.jar
           key: win-deps-v2-${{ hashFiles('setup.sh', 'tools/win-app/build.sh') }}
+      # 把这次构建的提交号写进包内资源：桌面端「检查更新」用它和线上清单比对，
+      # 相同就说明已是最新，不再提示更新（桌面端没有应用内更新，只能靠这个判断）。
+      - run: |
+          mkdir -p desktop/src/main/resources
+          printf '%s' "$GITHUB_SHA" > desktop/src/main/resources/build-commit.txt
+          echo "build-commit: $(cat desktop/src/main/resources/build-commit.txt)"
       - run: tools/win-app/build.sh
       - if: failure()
         run: cat desktop/build/compose/logs/*/*.txt || true

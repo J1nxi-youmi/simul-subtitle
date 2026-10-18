@@ -1,0 +1,24 @@
+# 一次性辅助工作流：下载 SenseVoice 模型包，打印每个文件的大小和 SHA-256，用来钉进 setup.sh。
+# 拿到数值后这个文件就可以删掉。
+name: sensevoice-hash
+
+on:
+  workflow_dispatch:
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and hash the SenseVoice model
+        run: |
+          set -euo pipefail
+          URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
+          curl -fL --retry 3 -o sv.tar.bz2 "$URL"
+          echo "=== tarball ==="
+          echo "size=$(stat -c%s sv.tar.bz2)"
+          sha256sum sv.tar.bz2
+          mkdir -p sv && tar -xjf sv.tar.bz2 -C sv
+          echo "=== files ==="
+          find sv -type f | while read -r f; do
+            printf '%s\t%s\t%s\n' "$f" "$(stat -c%s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"
+          done

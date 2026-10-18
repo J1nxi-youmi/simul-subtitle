@@ -57,7 +57,8 @@ internal data class UpdateRelease(
         .put("notes", notes).put("apkUrl", apkUrl).put("size", size).put("sha256", sha256).toString()
 
     companion object {
-        const val REPO = "https://github.com/KorenKrita/simul-subtitle"
+        // DIY: 指向自己的 fork——应用内更新只能装同签名的包，上游 release 的签名对不上。
+        const val REPO = "https://github.com/J1nxi-youmi/simul-subtitle"
         const val LATEST = "$REPO/releases/latest/download/update.json"
         const val REMIND_INTERVAL = 24 * 60 * 60 * 1000L
         const val MAX_MANIFEST = 128 * 1024

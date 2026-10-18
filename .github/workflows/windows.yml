@@ -55,9 +55,12 @@ jobs:
           NAME=$(basename "$ZIP")
           MB=$(( $(stat -c%s "$ZIP") / 1048576 ))
           echo "zip: $ZIP ($MB MB)"
-          # 1) 和安卓在同一个下载页：资产名加 Windows 前缀，方便在 Assets 里和 APK 区分
+          # 1) 和安卓在同一个下载页：文件名加 Windows 前缀，Assets 里一眼分得清
+          #    （gh 的 file#label 只改显示标签、不改资产名，所以先把文件复制成目标名）
           if gh release view diy-latest >/dev/null 2>&1; then
-            gh release upload diy-latest "$ZIP#Windows-SimulSub-x64.zip" --clobber
+            mkdir -p dist && cp "$ZIP" "dist/Windows-SimulSub-x64.zip"
+            gh release upload diy-latest "dist/Windows-SimulSub-x64.zip" --clobber
+            gh release delete-asset diy-latest "$NAME" --yes >/dev/null 2>&1 || true
             echo "已挂到 diy-latest 的 Assets"
           else
             echo "diy-latest 还没建（安卓那边会建），跳过合并页"

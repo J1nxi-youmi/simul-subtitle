@@ -94,23 +94,13 @@ class CaptionService : Service(), SessionHost {
 
     override fun loadModels(asrThreads: Int): SpeechModels {
         val vad = SileroProb(assets)
-        // DIY: 按设置选识别引擎；SenseVoice 用于中日混说，ReazonSpeech 快且小
-        val sensevoice = prefs.asrEngine == "sensevoice"
-        val asr = runCatching {
-            if (sensevoice) SenseVoiceAsr(assets, asrThreads, prefs.asrSvLang) else SherpaAsr(assets, asrThreads)
-        }.getOrElse { vad.release(); throw it }
+        // ReazonSpeech 已移除，识别一律用 SenseVoice（语种由设置决定）
+        val asr = runCatching { SenseVoiceAsr(assets, asrThreads, prefs.asrSvLang) }
+            .getOrElse { vad.release(); throw it }
         return object : SpeechModels {
             override val asr: Asr = asr
             override fun vadProb(frame: FloatArray) = vad.prob(frame)
-            override fun release() {
-                // release() 不在 Asr 接口上，按实际引擎类型释放
-                when (asr) {
-                    is SenseVoiceAsr -> asr.release()
-                    is SherpaAsr -> asr.release()
-                    else -> {}
-                }
-                vad.release()
-            }
+            override fun release() { asr.release(); vad.release() }
         }
     }
 

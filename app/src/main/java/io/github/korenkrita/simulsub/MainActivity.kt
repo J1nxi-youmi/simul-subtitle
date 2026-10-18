@@ -797,19 +797,13 @@ class MainActivity : Activity() {
         ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
         showCtx()
 
-        // -- DIY: which speech model, and its language
+        // -- DIY: 识别语种（引擎只剩 SenseVoice，ReazonSpeech 已移除）
         box = group(root, "语音识别")
-        box.addView(choice(listOf("reazon" to "日语/英语（快）", "sensevoice" to "中英日韩"), prefs.asrEngine) {
-            if (prefs.asrEngine != it) { prefs.asrEngine = it; main.post { renderTranslate() } }
+        box.addView(label("识别语种"))
+        box.addView(choice(listOf("ja" to "日语", "auto" to "自动", "zh" to "中文", "ko" to "韩语"), prefs.asrSvLang) {
+            if (prefs.asrSvLang != it) prefs.asrSvLang = it
         })
-        box.addView(hint("「日语/英语」只认这两种语言，模型 78 MB、跑得快；「中英日韩」能认中文和韩语，中日混说必须用它，模型 239 MB。下次开始字幕时生效。"))
-        if (prefs.asrEngine == "sensevoice") {
-            box.addView(label("识别语种"))
-            box.addView(choice(listOf("ja" to "日语", "auto" to "自动", "zh" to "中文", "ko" to "韩语"), prefs.asrSvLang) {
-                if (prefs.asrSvLang != it) prefs.asrSvLang = it
-            })
-            box.addView(hint("直播里的句子只有零点几秒，让模型自己判语种很容易把日语听成中文或英文（实测一场 52 句里 19 句判错）。纯日语场次选「日语」；那位真的中日混说时再选「自动」。"))
-        }
+        box.addView(hint("直播里的句子只有零点几秒，让模型自己判语种很容易把日语听成中文或英文（实测一场 52 句里 19 句判错）。纯日语场次选「日语」；那位真的中日混说时再选「自动」。下次开始字幕时生效。"))
 
         // -- DIY: manual segmentation
         box = group(root, "断句")

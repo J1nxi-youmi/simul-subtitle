@@ -142,20 +142,32 @@ jobs:
           } > notes.md
           gh release edit diy-latest --title "$NAME" --notes-file notes.md --latest
 
-      # 每个版本打一个 tag（只存指针，不重复存 251 MB 的包）。
-      # 想重建某个历史版本的 APK：在该 tag 上手动 Run workflow 即可。
-      - name: Tag this version
+      # 每个版本单独留一份（tag + 带 APK 的 release），旧版本不会被覆盖。
+      # 想装回旧版：直接去那个版本的 release 下载即可。
+      - name: 保留这个版本的 APK
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v1.0.7-diy.$CI_VERSION_CODE"
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
             echo "tag $TAG 已存在"
           else
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
             echo "已打 tag: $TAG"
           fi
+          MSG=$(git log -1 --pretty=%s | tr -d '"')
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK#app-debug.apk" --clobber
+            echo "已更新 $TAG 的 APK"
+          else
+            gh release create "$TAG" "$APK#app-debug.apk" \
+              --title "$TAG" --notes "$MSG"
+            echo "已创建版本 release: $TAG"
+          fi
+          # 关键：把 latest 重新指回滚动 release，否则应用内更新会读到没有 update.json 的版本页
+          gh release edit diy-latest --latest
 
       # ── 可选：要出签名 release 包时，在仓库 Secrets 配好下面四个再看这段 ──
       # - name: Sign release

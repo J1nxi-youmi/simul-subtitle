@@ -20,11 +20,13 @@ jobs:
     # 发布应用内更新需要写 release
     permissions:
       contents: write
-    # versionCode 从 1000 起，避免和固定的 27 倒挂；App 内的更新器靠它判断「有新版本」
-    env:
-      CI_VERSION_CODE: ${{ 1000 + github.run_number }}
     steps:
       - uses: actions/checkout@v7
+
+      # versionCode 从 1000 起，避免和固定的 27 倒挂；App 内的更新器靠它判断「有新版本」。
+      # 用 shell 算再写进 GITHUB_ENV（往 env: 里直接放表达式会让 workflow 校验不通过）。
+      - name: Set version code
+        run: echo "CI_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v6
         with:

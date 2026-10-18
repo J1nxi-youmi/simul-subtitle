@@ -164,7 +164,8 @@ jobs:
           fi
           MSG=$(git log -1 --pretty=%s | tr -d '"')
           KEEP="${{ inputs.keep }}"
-          if [ "$KEEP" != "true" ] && ! printf '%s' "$MSG" | grep -qF '[keep]'; then
+          # 标记必须出现在提交标题末尾：句子中间提到它不算（否则一条讲这个规则的 commit 会误存一份）
+          if [ "$KEEP" != "true" ] && ! printf '%s' "$MSG" | grep -qE '\[keep\][[:space:]]*$'; then
             echo "本版本没有标记保留，跳过 APK 存档（以后想存：在这个 tag 上 Run workflow 并勾选保留）"
             exit 0
           fi

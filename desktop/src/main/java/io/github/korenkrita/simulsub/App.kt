@@ -178,7 +178,7 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
 private fun Home(startError: String?, setStartError: (String?) -> Unit, openTranslate: () -> Unit) {
     val running by CaptionService.runningState
     val ended by CaptionService.endedState
-    Text("把视频、直播里的日语和英语，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
+    Text("把视频、直播里的声音，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
     /** the language name being typed for 其他; null while that editor is closed */
     var typing by remember { mutableStateOf<String?>(null) }
     // one card: status, the two languages, the one action, and the LLM API it translates with
@@ -200,11 +200,14 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
             startError != null -> status(C.err, "还不能开始", startError)
             else -> status(C.brand, "可以开始了", "点下面的按钮开始。" + if (isWindows) "" else "第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
         }
-        // what is spoken → what the captions are in (a running session: from the next sentence)
-        val sources = Lang.SOURCES
+        // DIY: 左边是「识别语种」，和手机端一致——识别引擎只有 SenseVoice，能认的就是这五个。
+        // 选「自动」时把翻译的源语言也交给模型自己判断。
+        val asrLangs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Dropdown(sources.map { it?.zh ?: "不确定（日语或英语）" }, sources.indexOf(prefs.sourceLang).coerceAtLeast(0), modifier = Modifier.weight(1f)) {
-                prefs.sourceLang = sources[it]
+            Dropdown(asrLangs.map { it.second }, asrLangs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0), modifier = Modifier.weight(1f)) {
+                val code = asrLangs[it].first
+                prefs.asrSvLangSetting = code
+                prefs.sourceLang = Lang.of(code) // 识别成什么语种，翻译的源语言就跟着它
             }
             Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
             // the presets, the typed language in use (if any), and 其他 to type one below

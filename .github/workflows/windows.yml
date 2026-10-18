@@ -48,7 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ZIP=$(ls tools/win-app/build/compose/binaries/main/SimulSub-*-windows-x64.zip | head -1)
+          ZIP=$(ls desktop/build/compose/binaries/main/SimulSub-*-windows-x64.zip | head -1)
           NAME=$(basename "$ZIP")
           echo "zip: $ZIP ($(stat -c%s "$ZIP") 字节)"
           gh release view windows-latest >/dev/null 2>&1 \

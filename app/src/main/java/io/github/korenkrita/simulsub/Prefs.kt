@@ -76,6 +76,15 @@ class Prefs(ctx: Context) : SessionPrefs {
         get() = sp.getBoolean("finalOnly", false)
         set(v) = sp.edit().putBoolean("finalOnly", v).apply()
 
+    /**
+     * DIY: 语音识别引擎，下次开始字幕时生效。
+     * "reazon"（默认）= ReazonSpeech，只认日英，模型 78 MB，快；
+     * "sensevoice" = 中英日韩自动判语种，模型 239 MB，慢一些，中日混说必须用它。
+     */
+    var asrEngine: String
+        get() = sp.getString("asrEngine", "reazon") ?: "reazon"
+        set(v) = sp.edit().putString("asrEngine", v).apply()
+
     /** Spoken language (null = auto: Japanese or English) and caption language; read when a session starts. */
     override var sourceLang: Lang?
         get() = sp.getString("sourceLang", "ja").let { if (it == "auto") null else Lang.of(it) ?: Lang.JA }

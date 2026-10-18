@@ -797,6 +797,13 @@ class MainActivity : Activity() {
         ctxSlider.addOnChangeListener { _, v, user -> if (user) { prefs.contextSentences = v.toInt(); showCtx() } }
         showCtx()
 
+        // -- DIY: which speech model
+        box = group(root, "语音识别")
+        box.addView(choice(listOf("reazon" to "日语/英语（快）", "sensevoice" to "中英日韩自动"), prefs.asrEngine) {
+            if (prefs.asrEngine != it) prefs.asrEngine = it
+        })
+        box.addView(hint("「日语/英语」只认这两种语言，模型 78 MB、跑得快，纯日语直播用它；「中英日韩自动」能认中文和韩语、自己判断说的哪种，中日混说必须用它，代价是模型 239 MB、每句更慢一点。下次开始字幕时生效。"))
+
         // -- how captions appear
         box = group(root, "字幕怎么出现")
         modeGroup = choice(listOf(false to "边听边出", true to "说完再出"), prefs.finalOnly) { if (prefs.finalOnly != it) prefs.finalOnly = it }

@@ -278,8 +278,11 @@ class CaptionSession(private val host: SessionHost) {
                 }
                 // the log names the service really used (never the key): the one saved last may still be in its probe
                 fun use(k: ByokService, variant: ByokTranslator.ThinkingOff?) = Triple(
-                    ByokTranslator(k, system, variant, maxTokens = mtMaxTokens(s.target)), k,
-                    mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.url, "mt_model" to k.model) + k.log())
+                    // DIY: 术语表交给 MT 的结构化入口（qwen-mt 收不到 system prompt）
+                    ByokTranslator(k, system, variant, maxTokens = mtMaxTokens(s.target),
+                        terms = s.scene.termsFor(s.target)), k,
+                    mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.url, "mt_model" to k.model,
+                        "terms" to s.scene.termsFor(s.target).size) + k.log())
                 var (ready, variant) = known(t)
                 if (!ready) {
                     val keep = inUse

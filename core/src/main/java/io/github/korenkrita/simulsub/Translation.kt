@@ -596,6 +596,8 @@ class ByokTranslator(
     /** DIY: Qwen-MT 的 translation_options 语言；默认 auto（源）→ 中文（目标），正是字幕场景 */
     private val qwenSource: Lang? = null,
     private val qwenTarget: Target = Target.ZH,
+    /** DIY: 场景术语表。qwen-mt 不发 system prompt，术语只能走 translation_options.terms 结构化传入。 */
+    private val terms: List<Pair<String, String>> = emptyList(),
 ) : Mt {
     private val calls = Calls(deadlineMs)
     /**
@@ -610,24 +612,32 @@ class ByokTranslator(
     override fun translate(prompt: String): MtResult? = call(prompt, variant, firstContentMs)
 
     private fun call(user: String, v: ThinkingOff?, firstMs: Long): MtResult {
-        val body = if (service.qwenMt) qwenMtBody(user) else Json.encode(mapOf(
-            "model" to model,
-            "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
-            "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
-            "stream_options" to mapOf("include_usage" to true),
-        ) + (v?.params ?: emptyMap()))
-        val seen = StringBuilder() // this request's content so far, for the first-text check (one per call: a late reader
-        // of an earlier, abandoned call must not touch the next one)
-        // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
-        val r = try {
-            calls.post(url, body, service.requestHeaders(),
-                firstContentMs = firstMs, isContent = { hasAnswer(it, seen) },
-                isEnd = if (service.qwenMt) SseStream::isQwenEnd else SseStream::isDone)
-        } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
-        // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
-        // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
-        // the log gets the cleaned text, status, timings and usage.
-        val res = SseStream.streamResult(r, body, null)
+        val qwenMt = service.qwenMt
+        /** DIY: 一次完整请求。qwen-mt 的术语参数若被判非法，[withTerms] 为 false 可重发一版不带术语的。 */
+        fun attempt(withTerms: Boolean): Pair<HttpResult, MtResult> {
+            val body = if (qwenMt) qwenMtBody(user, withTerms) else Json.encode(mapOf(
+                "model" to model,
+                "messages" to listOf(mapOf("role" to "system", "content" to system), mapOf("role" to "user", "content" to user)),
+                "temperature" to 0, "max_tokens" to maxTokens, "stream" to true,
+                "stream_options" to mapOf("include_usage" to true),
+            ) + (v?.params ?: emptyMap()))
+            val seen = StringBuilder() // this request's content so far, for the first-text check (one per call: a late reader
+            // of an earlier, abandoned call must not touch the next one)
+            // the URL was checked by chatUrl; anything OkHttp still refuses is a failed call, never a crash
+            val http = try {
+                calls.post(url, body, service.requestHeaders(),
+                    firstContentMs = firstMs, isContent = { hasAnswer(it, seen) },
+                    isEnd = if (qwenMt) SseStream::isQwenEnd else SseStream::isDone)
+            } catch (e: IllegalArgumentException) { HttpResult(0, null, 0, "bad url") }
+            // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
+            // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
+            // the log gets the cleaned text, status, timings and usage.
+            return http to SseStream.streamResult(http, body, null)
+        }
+        val termsSent = qwenMt && terms.isNotEmpty()
+        var (r, res) = attempt(termsSent)
+        // DIY: 术语被 API 拒绝时去掉术语重发一次。宁可这次没术语，也不能整句翻不出来。
+        if (termsSent && r.status == 400) { val again = attempt(false); r = again.first; res = again.second }
         // reasoning that never closed (the model ran out of tokens while thinking) is not a translation
         val open = res.raw.lastIndexOf("<think>") > res.raw.lastIndexOf("</think>")
         // what a caption may show: reasoning removed until nothing changes, then the key masked until it is gone, so
@@ -653,13 +663,14 @@ class ByokTranslator(
 
     /**
      * DIY: Qwen-MT 走百炼原生接口。翻译专用模型不吃长 system prompt，
-     * 语言走 translation_options 结构化参数（比塞进 prompt 可靠）。
-     * 术语表目前仍走 system prompt；若要结构化传给 MT，在 options 里加 "terms" 即可（见方案 v2 的 P2）。
+     * 语言和术语都走 translation_options 结构化参数（比塞进 prompt 可靠得多）。
      */
-    private fun qwenMtBody(user: String): String {
+    private fun qwenMtBody(user: String, withTerms: Boolean = true): String {
         val opts = buildMap<String, Any> {
             put("source_lang", qwenSource?.en ?: "auto")
             put("target_lang", qwenTarget.en)
+            // DIY: 术语表。MT 读不到 system prompt，不传这里就等于术语完全失效（同一术语会前后译得不一样）。
+            if (withTerms && terms.isNotEmpty()) put("terms", terms.map { mapOf("source" to it.first, "target" to it.second) })
         }
         return Json.encode(mapOf(
             "model" to model,

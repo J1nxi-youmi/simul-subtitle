@@ -893,7 +893,6 @@ class MainActivity : Activity() {
             jevBox.addView(row)
             jevBox.addView(hint("只发送识别出的文字和译文，不发送声音。key 加密保存在这台手机上，不会写进使用记录。"))
         }
-        jev.setOnCheckedChangeListener { _, on -> prefs.jevOn = on; renderJev() }
         jevCheck.setOnCheckedChangeListener { _, on -> prefs.jevCheck = on; renderJev() }
         renderJev()
     }

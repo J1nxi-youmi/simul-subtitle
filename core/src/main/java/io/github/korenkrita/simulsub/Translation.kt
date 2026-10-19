@@ -218,9 +218,9 @@ object SseStream {
      * A streamed call as an [MtResult]: [request] is what was sent, [response] the body for the log (BYOK: with the
      * key removed). A stopped call keeps what was sent; the pipeline checks running before showing anything.
      */
-    fun streamResult(r: HttpResult, request: String, response: String?): MtResult {
+    fun streamResult(r: HttpResult, request: String, response: String?, missingDoneIsEnd: Boolean = false): MtResult {
         if (r.error == "cancelled") return MtResult("", 'f', null, null, firstContentMs = r.firstContentMs, request = request, http = r.status, error = "cancelled")
-        val s = if (r.status == 200) r.body?.let { parseStream(it) } else null
+        val s = if (r.status == 200) r.body?.let { parseStream(it, missingDoneIsEnd) } else null
         val stop = when {
             r.status != 200 || s == null -> 'f'
             s.finish == "stop" -> 'e'
@@ -257,7 +257,7 @@ object SseStream {
      * JSON object, reports an error, or its choices / delta / content have the wrong type: part of the text may
      * be missing. Role-only and usage-only chunks are fine.
      */
-    fun parseStream(body: String): Streamed? {
+    fun parseStream(body: String, missingDoneIsEnd: Boolean = false): Streamed? {
         // DIY: 百炼在部分「模型 + 参数」组合下不返回 SSE，而是一整段 JSON。先按整体 JSON 解一次，
         // 解析不出来再走下面的 SSE 逐行逻辑。
         if (!body.contains("data:")) {
@@ -279,7 +279,7 @@ object SseStream {
         var promptTokens: Int? = null; var outputTokens: Int? = null; var cached: Int? = null
         for (line in body.lineSequence()) {
             // DIY: 百炼的错误帧形如 "id:1 event:error :HTTP_STATUS/400 data:{...}"
-            if (line.contains("event:error")) return null
+            if (line.contains("event:error") || line.contains("event: error")) return null
             // DIY: data 不在行首（前面还有 id/event/:HTTP_STATUS 等），按位置截取
             val di = line.indexOf("data:")
             if (di < 0) continue
@@ -312,7 +312,9 @@ object SseStream {
                 // DIY: 百炼中间帧的 finish_reason 是字符串 "null"，结束帧是 "stop"（不发 [DONE]）
                 when (val f = choice["finish_reason"]) {
                     null, "null" -> {}
-                    is String -> { finish = f; if (f == "stop" || f == "length") done = true }
+                    // A chunk saying "stop" is not the stream ending: without [DONE] part of the text may be missing.
+                    // 百炼/qwen-mt never sends [DONE], so only that route accepts a stop frame as the end.
+                    is String -> { finish = f; if (missingDoneIsEnd && (f == "stop" || f == "length")) done = true }
                     else -> return null
                 }
                 // DeepSeek / vLLM / SGLang: reasoning_content; OpenRouter and others: reasoning
@@ -334,7 +336,7 @@ object SseStream {
         if (text.contains("<think>")) thinking = true
         // DIY: 百炼最后可能有、也可能没有明确的 stop 帧（finish_reason 一直是字符串 "null"）。
         // 已经拿到内容且从未见过 finish 时，按正常结束处理——否则会判成 stop='f'，整句被当成失败。
-        if (!done && text.isNotEmpty() && finish == null) { done = true; finish = "stop" }
+        if (!done && missingDoneIsEnd && text.isNotEmpty() && finish == null) { done = true; finish = "stop" }
         return if (!done) null else Streamed(text.toString(), finish, promptTokens, outputTokens, thinking, cached)
     }
 }
@@ -647,7 +649,7 @@ class ByokTranslator(
             // The key is in a header, not the body, but a service may echo it anywhere (split over chunks, inside
             // reasoning, in an error), where no text replacement on the body can find it. So no BYOK reply body is kept:
             // the log gets the cleaned text, status, timings and usage.
-            return http to SseStream.streamResult(http, body, null)
+            return http to SseStream.streamResult(http, body, null, missingDoneIsEnd = qwenMt)
         }
         val termsSent = qwenMt && terms.isNotEmpty()
         var (r, res) = attempt(termsSent)

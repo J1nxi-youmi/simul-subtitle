@@ -7,6 +7,11 @@
 
 ---
 
+## DIY1066 — 10-19 22:50
+- **修** 被截断的翻译流不再当成完整译文上屏：普通端点只认以 `[DONE]` 闭合的流，某个 chunk 带 `finish_reason:"stop"` 不算流结束（此前会把半句话当整句显示）。百炼（qwen-mt）本来就不发 `[DONE]`，仍按 `stop` 帧接受，这条按 `qwenMt` 区分，不影响现有配置
+- **修** 识别标准 SSE 的 `event: error`（带空格）：此前只认 `event:error`，带空格的错误帧会被忽略，流继续读到一半才断
+- **测** `JevTest` 那个长期失败的用例转绿，核心 223 个用例全部通过
+
 ## DIY1065 — 10-19 22:20
 - **删** 移除 macOS 支持，桌面端只保留 Windows：删除 `tools/mac-app`（dmg 打包）、`tools/mac-capture`（Core Audio 采集）与 `tools/mac-e2e`，以及 `desktop/icons/icon.icns`
 - **改** `desktop/` 里的 `isWindows` 分支全部去掉，直接走 Windows 路径：托盘配色只看注册表、密钥只走 DPAPI、数据目录固定 `%APPDATA%`、文件定位只在资源管理器里显示；`build.gradle.kts` 去掉 Dmg 与 macOS 打包配置，sherpa 的本地依赖回退到 `tools/win-app` 的产物

@@ -182,7 +182,7 @@ jobs:
               echo ""
               echo "#### Windows（ZIP）"
               echo ""
-              echo "- [SimulSub-DIY-windows-x64.zip](https://github.com/$GITHUB_REPOSITORY/releases/download/windows-latest/SimulSub-DIY-windows-x64.zip)（取同一时期构建的 Windows 包）"
+              echo "- [Windows-SimulSub-x64.zip](https://github.com/$GITHUB_REPOSITORY/releases/download/diy-latest/Windows-SimulSub-x64.zip)（同一时期构建的 Windows 包）"
             } > tag-notes.md
             gh release create "$TAG" "$APK#app-debug.apk" --title "$TAG" --notes-file tag-notes.md
             echo "已创建版本 release: $TAG"

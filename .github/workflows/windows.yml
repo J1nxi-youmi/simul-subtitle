@@ -50,8 +50,9 @@ jobs:
           name: SimulSub-windows-x64
           path: tools/win-app/build/zip/
 
-      # 发布：把 zip 挂到和安卓同一个滚动 release（diy-latest）的 Assets 里，两端的包在同一个下载页；
-      # 另外保留 windows-latest 作为 Windows 专用固定链接，win-first 留档第一个可用版本。
+      # 发布：把 zip 挂到和安卓同一个滚动 release（diy-latest）的 Assets 里。
+      # 只保留这一条 release：正文由安卓流水线写（版本号、更新内容、双端下载链接），Windows 这边只挂资产，
+      # 不再另建 windows-latest / win-first，避免下载页分裂成好几条。
       - name: 发布 Windows 包
         if: github.ref == 'refs/heads/main'
         env:
@@ -61,25 +62,15 @@ jobs:
           NAME=$(basename "$ZIP")
           MB=$(( $(stat -c%s "$ZIP") / 1048576 ))
           echo "zip: $ZIP ($MB MB)"
-          # 1) 和安卓在同一个下载页：文件名加 Windows 前缀，Assets 里一眼分得清
-          #    （gh 的 file#label 只改显示标签、不改资产名，所以先把文件复制成目标名）
+          # 和安卓在同一个下载页：文件名加 Windows 前缀，Assets 里一眼分得清
+          # （gh 的 file#label 只改显示标签、不改资产名，所以先把文件复制成目标名）
           if gh release view diy-latest >/dev/null 2>&1; then
             mkdir -p dist && cp "$ZIP" "dist/Windows-SimulSub-x64.zip"
             gh release upload diy-latest "dist/Windows-SimulSub-x64.zip" --clobber
             gh release delete-asset diy-latest "$NAME" --yes >/dev/null 2>&1 || true
             echo "已挂到 diy-latest 的 Assets"
           else
-            echo "diy-latest 还没建（安卓那边会建），跳过合并页"
-          fi
-          # 2) Windows 专用固定链接；更新内容不重复写，指向同一个页面
-          gh release view windows-latest >/dev/null 2>&1 \
-            || gh release create windows-latest --title "Windows 固定下载" --notes "首次创建"
-          gh release upload windows-latest "$ZIP#$NAME" --clobber
-          gh release edit windows-latest --title "Windows 固定下载" \
-            --notes "和安卓同源构建。更新内容和校验值见 [最新构建](https://github.com/$GITHUB_REPOSITORY/releases/tag/diy-latest)。"
-          if ! gh release view win-first >/dev/null 2>&1; then
-            gh release create win-first "$ZIP#$NAME" --title "Windows 首个可用版本" --notes "第一个构建成功的 Windows 版，永久留档"
-            echo "已留档首个版本: win-first"
+            echo "diy-latest 还没建（安卓那边会建），跳过"
           fi
           # latest 必须留在安卓那条滚动 release 上，否则应用内更新会读到没有 update.json 的 release
           gh release edit diy-latest --latest

@@ -81,7 +81,7 @@ Windows 上因为 CPU 更强，实测端到端中位 **554 ms**（识别 55 ms�
 | 工作流 | 产物 | 发布位置 |
 |---|---|---|
 | `android.yml` | `app-debug.apk` | 滚动 tag `diy-latest`（应用内更新读它）|
-| `windows.yml` | `SimulSub-DIY-windows-x64.zip` | 滚动 tag `windows-latest` |
+| `windows.yml` | `Windows-SimulSub-x64.zip`（挂在同一个 `diy-latest` 的 Assets 里） | 滚动 tag `diy-latest` |
 
 - 两端功能改动请同时改到位，否则同步更新没意义
 - 安卓签名固定在 Actions 缓存里，覆盖安装不丢配置

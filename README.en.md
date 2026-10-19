@@ -79,7 +79,7 @@ Download the latest package for your platform from the [Releases](../../releases
 ### Windows
 
 - **Requirements**: Windows 10 / 11, 64-bit (`x64`).
-- **Run**: Download `SimulSub-<version>-windows-x64.zip` from [Releases](../../releases), extract the folder anywhere, and run `SimulSub.exe` (portable, no installer needed).
+- **Run**: Download `Windows-SimulSub-x64.zip` from [Releases](../../releases), extract the folder anywhere, and run `SimulSub.exe` (portable, no installer needed).
 - **First launch (unsigned binary)**: If Windows SmartScreen displays *"Windows protected your PC"*, click **More info** → **Run anyway**.
 - **Background &amp; data**:
   - Captures audio from the default playback device via WASAPI loopback and automatically follows device switches (e.g., plugging in headphones).

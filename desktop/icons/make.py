@@ -1,4 +1,4 @@
-# Draws the app icon (docs/images/icon.svg, by hand: no SVG library needed) into icon.ico, icon.icns and the window
+# Draws the app icon (docs/images/icon.svg, by hand: no SVG library needed) into icon.ico and the window
 # icon ../src/main/resources/icon.png.   uv run --with pillow desktop/icons/make.py
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -23,5 +23,4 @@ d.polygon([(44 * k, 72 * k), (54 * k, 72 * k), (44 * k, 81 * k)], fill="white") 
 for box in [(38, 44, 41, 52), (44, 40, 47, 56), (50, 43, 53, 53)]: rect(*box, "#6D5DF6")  # sound wave
 rect(58, 43, 74, 47, "#EC4899", 2); rect(58, 50, 70, 54, "#B4ACFA", 2); rect(38, 61, 74, 65, "#8B5CF6", 2)  # lines
 im.save(HERE / "icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-im.save(HERE / "icon.icns")
 im.resize((256, 256), Image.LANCZOS).save(HERE.parent / "src/main/resources/icon.png")

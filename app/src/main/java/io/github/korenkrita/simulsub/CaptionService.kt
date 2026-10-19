@@ -9,7 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -21,16 +20,9 @@ import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.util.Log
-import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.WindowManager
-import android.widget.TextView
 import java.io.File
 
 /**

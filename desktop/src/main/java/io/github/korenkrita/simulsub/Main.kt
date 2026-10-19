@@ -6,9 +6,6 @@ import java.io.File
 val APP_VERSION: String = System.getProperty("simulsub.version") ?: "dev"
 val APP_VERSION_CODE: Int = System.getProperty("simulsub.versionCode")?.toIntOrNull() ?: 0
 
-/** "这台电脑" in texts (this fork is Windows-only) */
-val thisComputer = "这台电脑"
-
 /**
  * The speech models (asr/, vad/): inside the packaged app (its resources, put there by tools/win-app), or
  * where -Dsimulsub.models points (./models when run from the repo, see ./setup.sh).

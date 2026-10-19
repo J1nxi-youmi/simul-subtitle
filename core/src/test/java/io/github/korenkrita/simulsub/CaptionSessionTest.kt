@@ -69,6 +69,12 @@ class CaptionSessionTest {
         override val contextOn = false
         override val contextSentences = 0
         override val jevProvider = JevProvider.OFFICIAL
+        // the shipped defaults (Prefs.kt on both platforms): the session cuts at the same thresholds a user gets
+        override val judgeModel = ""
+        override val judgeUrl = ""
+        override fun judgeKey(): String? = null
+        override val endSilenceMs = 350
+        override val maxUtteranceMs = 6_000
         override fun jevKey(p: JevProvider): String? = null
         override fun byokService() = ByokService("http://127.0.0.1:${server.localPort}/v1/chat/completions", "m-1", "")
         // tested before: no probe

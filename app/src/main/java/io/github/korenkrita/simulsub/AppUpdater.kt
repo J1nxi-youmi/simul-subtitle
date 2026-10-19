@@ -100,8 +100,9 @@ internal data class UpdateRelease(
             val size = j.get("size").toString().toLong()
             val hash = j.getString("sha256").lowercase()
             val url = j.getString("apkUrl")
-            // DIY: 上游要求版本名是纯 1.2.3；我们的是 1.0.7-diy.1028，允许一个后缀
-            require(code > 0 && name.matches(Regex("[0-9]+(?:\\.[0-9]+){1,3}(?:-[A-Za-z0-9._-]{1,24})?")))
+            // DIY: 版本名是 "DIY" + versionCode（如 DIY1064）；旧版本的 1.0.7-diy.1028 仍要能解析（已发布的清单）。
+            // 上游要求纯 1.2.3 点分格式，这里两种都接受，其余一律拒绝。
+            require(code > 0 && name.matches(Regex("(?:DIY[0-9]+|[0-9]+(?:\\.[0-9]+){1,3})(?:-[A-Za-z0-9._-]{1,24})?")))
             // DIY: 语音模型打进包后 APK 有 325 MB，上游的 200 MB 上限不够
             require(size in 1..MAX_APK_BYTES && hash.matches(Regex("[0-9a-f]{64}")))
             // DIY: 只认本仓库自己的 release 资产（任意站点一律拒绝，防止被镜像投毒）。

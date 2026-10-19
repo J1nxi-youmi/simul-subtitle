@@ -156,10 +156,15 @@ data class Target(val lang: Lang?, val name: String) {
 fun stripThink(s: String): String = s.replace(Regex("(?s)<think>.*?</think>"), "").replace("</think>", "").replace("<think>", "").trim()
 
 /**
- * DIY: 译文里成串的片假名（两个以上）。中文译文里本来不该出现，出现了说明这个词没翻——
+ * DIY: 译文里成串的假名（两个以上），平假名和片假名都算。中文译文里本来不该出现，出现了说明这个词没翻——
  * 实测例子：译文「除金啊，就叫那个兼职，别说是アルバイト。」。用它触发一次带提示的重译。
+ *
+ * 旧规则只认片假名 `[ァ-ヺー]{2,}`，漏掉了汉假混排的残留：一场 20 分钟直播的会话日志里，
+ * 「…像廉んかちゃん那样温柔的人」「搞啥呢，伊ず」这类平假名残留出现了 13 次而一次都没触发重译
+ * （`んか`、`ず` 都在平假名区）。平假名区 ぁ-ゖ 与片假名区 ァ-ヺ 一并纳入后，同样两字起算，
+ * 不会因为单个语气假名而误判。
  */
-private val KANA_RUN = Regex("[ァ-ヺー]{2,}")
+private val KANA_RUN = Regex("[ぁ-ゖァ-ヺー]{2,}")
 
 /**
  * Output cap of one translation. 160 tokens covered the longest Chinese output measured (segments are up to ~10 s with
@@ -659,12 +664,12 @@ class ByokTranslator(
             if (next == clean) break
             clean = next
         }
-        // DIY: 译文里还留着成串的片假名，多半是这个词没翻（例如「…别说是アルバイト」）。带一句提示重译一次；
-        // 术语表里本来就要求保留的片假名不触发，重试还留着就照原样显示——不能为了它无限拖慢字幕。
+        // DIY: 译文里还留着成串的假名（平假名或片假名），多半是这个词没翻（例如「…别说是アルバイト」「…廉んかちゃん」）。带一句提示重译一次；
+        // 术语表里本来就要求保留的假名不触发，重试还留着就照原样显示——不能为了它无限拖慢字幕。
         if (!qwenMt && !open && res.usable) {
             val hit = KANA_RUN.find(clean)
             if (hit != null && terms.none { it.second.contains(hit.value) || it.first.contains(hit.value) }) {
-                val extra = "\n\n（提示：上一版译文里还留着片假名「${hit.value}」没有翻译，请把它也译成目标语言，人名可以音译。）"
+                val extra = "\n\n（提示：上一版译文里还留着假名「${hit.value}」没有翻译，请把它也译成目标语言，人名可以音译。）"
                 val again = attempt(termsSent, extra)
                 if (again.second.usable && !again.second.raw.contains("<think>")) {
                     r = again.first

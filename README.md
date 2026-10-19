@@ -81,12 +81,12 @@ Windows 上因为 CPU 更强，实测端到端中位 **554 ms**（识别 55 ms�
 | 工作流 | 产物 | 发布位置 |
 |---|---|---|
 | `android.yml` | `app-debug.apk` | 滚动 tag `diy-latest`（应用内更新读它）|
-| `windows.yml` | `SimulSub-1.0.7-windows-x64.zip` | 滚动 tag `windows-latest` |
+| `windows.yml` | `SimulSub-DIY-windows-x64.zip` | 滚动 tag `windows-latest` |
 
 - 两端功能改动请同时改到位，否则同步更新没意义
 - 安卓签名固定在 Actions 缓存里，覆盖安装不丢配置
-- 安卓 `versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
-- 每个版本都会打个 tag（`v1.0.7-diy.NNNN`），但**只有明确要求的版本才留 APK**：
+- 版本名是 `DIY` + `versionCode`（如 `DIY1064`），`versionCode` 取 `1000 + 构建序号`，应用内更新靠它判断有没有新版本
+- 每个版本都会打个 tag（`vDIYNNNN`），但**只有明确要求的版本才留 APK**：
   - 提交信息**末尾**带 `[keep]`，或
   - 手动 Run workflow 时勾选「保留」
   否则只更新滚动 release，磁盘不会一直涨

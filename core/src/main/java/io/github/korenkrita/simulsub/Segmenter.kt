@@ -281,12 +281,18 @@ class Segmenter(
         frames.clear()
         // A cut that leaves nothing behind ends the utterance: the next one starts with its first speech frame, and only
         // then fixes its settings (a change made in the silence after a forced cut applies to it).
-        if (continueSpeech && tail.isNotEmpty()) {
+        //
+        // A forced cut lands in the middle of a pause, so the tail normally starts with silence. That silence is part of
+        // the new segment and has to stay counted: dropping it (silentFrames = 0) delays the pause test by the frames it
+        // keeps (see silMs) and makes speechEnd overcount the trailing silence. A tail with no speech frame at all leaves
+        // nothing to continue — opening a segment for it would only make the segmenter wait out endSilenceMs/maxHoldSilenceMs
+        // and then submit pure silence to ASR, so the utterance ends here instead.
+        if (continueSpeech && tail.any { it.speech }) {
             segmentId++; beginUtterance()
             revision = 0
             frames.addAll(tail)
             framesSinceDraft = 0
-            silentFrames = 0
+            silentFrames = tail.takeLastWhile { !it.speech }.size
         } else {
             inSpeech = false
             preRoll.clear()

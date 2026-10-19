@@ -509,6 +509,14 @@ class Pipeline(
     }
 
     /**
+     * Whether this text has anything a translator could act on. Recognition sometimes ends a segment on a lone
+     * punctuation mark ("。" "." "…"): asking for a translation costs a call and models answer with commentary
+     * ("（无内容）") that would then be shown as a caption. Those segments skip the translator, and an empty
+     * translation is not shown (see CaptionBoard).
+     */
+    private fun hasTranslatableContent(s: String): Boolean = s.any { it.isLetterOrDigit() }
+
+    /**
      * Whether this draft is worth a translation call (see [DRAFT_MIN_NEW_CHARS]). A draft the recognizer rewrote
      * without growing it counts as new all the same: the translator would then have to work with different text.
      * Called on the asr thread.
@@ -721,10 +729,11 @@ class Pipeline(
             val job = j.q.job
             val start = clock()
             val ctx = previousFor(job.segmentId, j.setup.previousSentences)
-            val r = if (j.ja.isEmpty()) null else translate(job, j.setup, 1, j.ja, emptyList(), ctx)
+            val translatable = hasTranslatableContent(j.ja)
+            val r = if (translatable) translate(job, j.setup, 1, j.ja, emptyList(), ctx) else null
             if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
-            var zh = if (j.ja.isEmpty()) "" else r?.takeIf { it.usable }?.text
+            var zh = if (translatable) r?.takeIf { it.usable }?.text else ""
             if (zh == null) {
                 if (!job.isFinal) continue
                 zh = "[翻译失败] ${j.ja}"

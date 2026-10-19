@@ -170,7 +170,7 @@ Windows 版仅构建 64 位（`x64`）绿色免安装压缩包。通过 GitHub A
 }
 ```
 
-- `size` 必须为 APK 实际字节数；`versionCode` 必须严格递增（客户端据此判定是否有新版）；`versionName` 采用数字点分格式（如 `0.4`、`0.6.7`），须与 APK、Git tag 及文件名完全一致；`notes` 与 GitHub Release 正文使用同一份中文更新说明。
+- `size` 必须为 APK 实际字节数；`versionCode` 必须严格递增（客户端据此判定是否有新版）；`versionName` 是 `DIY` + `versionCode`（如 `DIY1064`，旧版的 `1.0.7-diy.1028` 也仍被接受），须与 APK、Git tag 及文件名完全一致；`notes` 与 GitHub Release 正文使用同一份中文更新说明。
 - 清单缺失、损坏或字段不合规时会自动尝试下一个镜像源，不会误报“已是最新版本”。
 
 #### 3. 客户端检查与安装行为

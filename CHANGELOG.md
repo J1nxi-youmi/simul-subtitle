@@ -1,11 +1,18 @@
 # 版本记录
 
-`versionCode` = **1000 + GitHub Actions 构建序号**，只有构建成功并发布到 Releases 的版本才有编号。
-每个版本都打了 git tag（如 `v1.0.7-diy.1033`），可以 `git checkout` 出当时的代码。
+`versionCode` = **1000 + GitHub Actions 构建序号**，版本名是 `DIY` + `versionCode`（如 `DIY1064`），只有构建成功并发布到 Releases 的版本才有编号。
+每个版本都打了 git tag（如 `vDIY1064`；`vDIY1033` 之前的旧 tag 仍是 `v1.0.7-diy.NNNN`），可以 `git checkout` 出当时的代码。
 
 按时间倒序。标注：**加** = 新增功能，**改** = 行为或界面调整，**删** = 移除，**修** = 修 bug。
 
 ---
+
+## DIY1064 — 10-19 21:18
+- **改** 版本名去掉上游的 `1.0.7` 前缀：现在直接是 `DIY` + 构建序号（如 `DIY1064`），Git tag 同步改成 `vDIY1064`，Windows 包名变成 `SimulSub-DIY-windows-x64.zip`；应用内更新清单的版本名校验同时接受新旧两种格式，老版本升级不会中断
+- **修** 译文里的平假名残留不再漏检：原先只认「连续两个以上片假名」，`…像廉んかちゃん那样温柔的人`、`搞啥呢，伊ず` 这类汉假混排一次都不会触发重译（一场 20 分钟直播里 13 条，全部漏掉）。现在平假名区与片假名区一起算，仍是两个起，单个语气假名不误判
+- **修** 纯标点段（`。`、`.`）不再送去翻译：原先会产生「（无内容）」这类解释性输出并上屏，现在直接跳过，空译文按既有规则不显示
+- **修** 强制切段后保留尾部静音计数：原先 `silentFrames` 归零，停顿判定要多等被丢掉的那几帧，识别音频的结尾静音也会被算进语音；尾巴全是静音时还会开出一个没有语音的段，白等 `maxHoldSilenceMs` 之后向识别提交一段纯静音
+- **修** `CaptionSessionTest` 补上 `SessionPrefs` 后来新增的 5 个成员（`judgeModel`/`judgeUrl`/`judgeKey`/`endSilenceMs`/`maxUtteranceMs`）：`:core:test` 此前在 `compileTestKotlin` 就失败，CI 只跑 `assembleDebug`，223 个用例从未被执行过
 
 ## 1.0.7-diy.1038 — 10-18 15:14
 - **改** 仓库更名为 `simul-subtitle-diy`；App 内的 GitHub 地址、更新源同步（旧地址 GitHub 保留 301 重定向）

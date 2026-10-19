@@ -611,6 +611,25 @@ class PipelineTest {
     }
 
     @Test
+    fun aSegmentOfNothingButPunctuationIsNeitherTranslatedNorShown() {
+        val mt = FakeMt(0)
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        // recognition sometimes ends a segment on a lone mark; asking a model for it is a wasted call, and the
+        // answer ("（无内容）") would then be shown as a caption
+        val asr = object : Asr { override fun recognize(samples: FloatArray) = "。" }
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        try {
+            p.submit(job(1, 1, true, 10))
+            assertTrue(done.await(2, TimeUnit.SECONDS))
+        } finally { p.stop(); p.awaitStopped() }
+        assertTrue("a lone punctuation mark must not reach the translator", mt.calls.isEmpty())
+        val b = CaptionBoard(10); out.forEach { b.accept(it) }
+        assertTrue("nor be shown as a caption", b.snapshot().none { it.isFinal })
+    }
+
+    @Test
     fun aRetranslationNeverRunsAlongsideAnotherTranslation() {
         val inside = AtomicInteger(0); val maxInside = AtomicInteger(0)
         val threads = Collections.synchronizedSet(HashSet<String>()); val calls = Collections.synchronizedList(ArrayList<String>())

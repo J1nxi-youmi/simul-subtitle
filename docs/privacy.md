@@ -8,15 +8,15 @@
 
 ---
 
-## 三端本地机制对比
+## 两端本地机制对比
 
-| 维度 | Android | macOS | Windows |
-|---|---|---|---|
-| **音频采集方式** | `AudioPlaybackCapture`（内录其他 App 媒体/游戏声音，不用麦克风） | `sysaudio`（Core Audio Process Tap 捕获整机播放声音，不用麦克风） | `sysaudio.exe`（WASAPI Loopback 捕获默认播放设备声音，不用麦克风） |
-| **配置与日志目录** | `Android/data/io.github.korenkrita.simulsub/files/` | `~/Library/Application Support/SimulSub/` | `%APPDATA%\SimulSub\` |
-| **密钥加密存储** | **Android Keystore** 加密保存 | **macOS 登录钥匙串**（服务名 `SimulSub`，经 `security` 标准输入写入，不暴露于进程命令行参数） | **Windows DPAPI** 绑定当前 Windows 账户加密，存于 `keys.json`（其他账户或电脑无法解密） |
-| **更新检查行为** | 读取公开版本清单，可在应用内下载并校验 APK 后拉起系统安装器 | 仅读取公开版本清单，发现新版时打开 GitHub 下载页 | 仅读取公开版本清单，发现新版时打开 GitHub 下载页 |
-| **网络代理策略** | 跟随系统网络 / VPN | 跟随系统代理，代理不可达时回退直连 | 跟随系统代理，代理不可达时回退直连 |
+| 维度 | Android | Windows |
+|---|---|---|
+| **音频采集方式** | `AudioPlaybackCapture`（内录其他 App 媒体/游戏声音，不用麦克风） | `sysaudio.exe`（WASAPI Loopback 捕获默认播放设备声音，不用麦克风） |
+| **配置与日志目录** | `Android/data/io.github.korenkrita.simulsub/files/` | `%APPDATA%\SimulSub\` |
+| **密钥加密存储** | **Android Keystore** 加密保存 | **Windows DPAPI** 绑定当前 Windows 账户加密，存于 `keys.json`（其他账户或电脑无法解密） |
+| **更新检查行为** | 读取公开版本清单，可在应用内下载并校验 APK 后拉起系统安装器 | 仅读取公开版本清单，发现新版时打开 GitHub 下载页 |
+| **网络代理策略** | 跟随系统网络 / VPN | 跟随系统代理，代理不可达时回退直连 |
 
 ---
 
@@ -51,5 +51,4 @@
 
 ### 桌面端权限说明
 
-- **macOS**：首次点击「开始字幕」时，系统会弹窗询问是否允许录制系统声音（可在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中随时管理）。
 - **Windows**：通过 WASAPI Loopback 读取默认播放设备输出，系统不弹出额外权限请求。

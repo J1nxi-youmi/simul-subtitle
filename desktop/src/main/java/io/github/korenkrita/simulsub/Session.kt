@@ -14,7 +14,7 @@ class OverlayState {
 }
 
 /**
- * One captioning session on the Mac / Windows ([CaptionSession] does the work): system audio from tools/mac-capture's
+ * One captioning session on Windows ([CaptionSession] does the work): system audio from tools/win-capture's
  * or win-capture's sysaudio (16 kHz mono f32 LE on its stdout), the caption window's state ([overlay]).
  */
 class CaptionService private constructor(private val sysaudio: File) : SessionHost {
@@ -39,7 +39,7 @@ class CaptionService private constructor(private val sysaudio: File) : SessionHo
     override val appVersion: String get() = APP_VERSION
     override fun deviceInfo(byokUrl: String?): Map<String, Any?> = mapOf(
         "proxy" to byokUrl?.let { runCatching { java.net.ProxySelector.getDefault().select(java.net.URI(it)).toString() }.getOrNull() },
-        "device" to "${if (isWindows) "Windows" else "Mac"} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}")
+        "device" to "Windows ${System.getProperty("os.version")} ${System.getProperty("os.arch")}")
     override val deviceWord = "电脑"
     override val endHint = "点 ✕ 结束"
 

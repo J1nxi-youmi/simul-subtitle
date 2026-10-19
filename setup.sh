@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetches what the build needs but git does not hold: the sherpa-onnx AAR and the speech models (~75 MB), checked by
-# size + SHA-256. The models go into ./models (the Mac app and tools/mac-e2e take them from there) and are copied into
+# size + SHA-256. The models go into ./models (the desktop app runs from there) and are copied into
 # app/src/main/assets/models, so the APK carries them.
 #   ./setup.sh
 # Set HTTPS_PROXY if GitHub / Hugging Face need a proxy.

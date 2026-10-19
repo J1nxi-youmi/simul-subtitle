@@ -10,16 +10,14 @@ import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Where the app keeps its settings and logs: ~/Library/Application Support/SimulSub, %APPDATA%\SimulSub on Windows
- * (or -Dsimulsub.data).
+ * Where the app keeps its settings and logs: %APPDATA%\SimulSub on Windows (or -Dsimulsub.data).
  */
 val dataDir: File = File(System.getProperty("simulsub.data")
-    ?: if (isWindows) "${System.getenv("APPDATA") ?: System.getProperty("user.home")}\\SimulSub"
-    else "${System.getProperty("user.home")}/Library/Application Support/SimulSub").also { it.mkdirs() }
+    ?: "${System.getenv("APPDATA") ?: System.getProperty("user.home")}\\SimulSub").also { it.mkdirs() }
 
 /**
- * The phone's settings with the same names and defaults, kept in settings.json; keys (Jev, BYOK) go to the macOS
- * Keychain (on Windows: keys.json, encrypted for this Windows user) instead. Every read also reads [rev], so a composable that shows a setting follows its changes.
+ * The phone's settings with the same names and defaults, kept in settings.json; keys (Jev, BYOK) go to keys.json,
+ * encrypted for this Windows user. Every read also reads [rev], so a composable that shows a setting follows its changes.
  * Listeners get the changed key on the thread that changed it, like SharedPreferences.
  */
 class Prefs internal constructor(private val file: File) : SessionPrefs {
@@ -212,45 +210,21 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
 }
 
 /**
- * Secrets in the login keychain (service "SimulSub"), through /usr/bin/security. Values are written over its stdin
- * (`security -i`), never on a command line other processes could read. Cached: [Prefs] reads keys on every setup.
+ * Secrets for the desktop app, cached: [Prefs] reads keys on every setup. On Windows they go to [Dpapi]
+ * (keys.json in [dataDir], encrypted for the current user); this fork no longer has a macOS keychain path.
  */
 object Keychain {
-    /** Tests point this at a service of their own, so they never touch the app's real secrets. */
+    /** Tests point this at a service of their own; Windows keys are per user, so the name only documents the owner. */
     internal var service: String = "SimulSub"
     private val cache = HashMap<String, String?>()
 
-    @Synchronized fun get(account: String): String? = cache.getOrPut(account) {
-        if (isWindows) return@getOrPut Dpapi.get(account)
-        runCatching {
-            val p = ProcessBuilder("/usr/bin/security", "find-generic-password", "-s", service, "-a", account, "-w")
-                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
-            val out = p.inputStream.readBytes().decodeToString().trimEnd('\n')
-            if (p.waitFor() == 0 && out.isNotEmpty()) out else null
-        }.getOrNull()
-    }
+    @Synchronized fun get(account: String): String? = cache.getOrPut(account) { Dpapi.get(account) }
 
-    /** true when the keychain took it (deleting a key that is not there counts as done) */
+    /** true when the store took it (deleting a key that is not there counts as done) */
     @Synchronized fun set(account: String, value: String?): Boolean {
         cache.remove(account)
-        val del = value.isNullOrEmpty()
-        if (isWindows) return Dpapi.set(account, value?.ifEmpty { null }).also { if (it) cache[account] = value?.ifEmpty { null } }
-        val cmd = if (del) "delete-generic-password -s ${q(service)} -a ${q(account)}"
-            else "add-generic-password -U -s ${q(service)} -a ${q(account)} -w ${q(value!!)}"
-        val ok = runCatching {
-            val p = ProcessBuilder("/usr/bin/security", "-i").redirectErrorStream(true).start()
-            p.outputStream.use { it.write((cmd + "\n").toByteArray()) }
-            val out = p.inputStream.readBytes().decodeToString()
-            // a failed command makes `security -i` exit non-zero (a missing item on delete: "could not be found")
-            p.waitFor() == 0 || (del && "could not be found" in out)
-        }.getOrDefault(false)
-        // on failure the cache stays empty: the next read asks the keychain what it really holds
-        if (ok) cache[account] = value?.ifEmpty { null }
-        return ok
+        return Dpapi.set(account, value?.ifEmpty { null }).also { if (it) cache[account] = value?.ifEmpty { null } }
     }
-
-    /** a word for `security -i`: double-quoted, with \ and " escaped (keys are checked to be printable ASCII) */
-    private fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
 
 /**

@@ -1,6 +1,6 @@
 package io.github.korenkrita.simulsub
 
-// Translator prompts and the BYOK client. Pure Kotlin so the Mac app and harness (tools/mac-e2e) compile the same code.
+// Translator prompts and the BYOK client. Pure Kotlin so the Android app and the desktop app compile the same code.
 
 /**
  * What the subtitles are about: the background text and the term list given to the translator. Two come with the app

@@ -60,8 +60,7 @@ private const val REPO = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
 
 private fun open(url: String) = runCatching { Desktop.getDesktop().browse(URI(url)) }
 private fun reveal(f: File) = runCatching {
-    if (isWindows) ProcessBuilder("explorer.exe", "/select,", f.path).start()
-    else ProcessBuilder("/usr/bin/open", "-R", f.path).start()
+    ProcessBuilder("explorer.exe", "/select,", f.path).start()
 }
 private fun sizeText(b: Long) = if (b >= 1e6) "%.1f MB".format(b / 1e6) else "%.0f KB".format(b / 1e3)
 
@@ -82,7 +81,7 @@ fun app() = application {
     val dark = when (prefs.theme) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
     // Windows: the taskbar's own theme (it can be dark while apps are light), checked again every few seconds
     var trayDark by remember { mutableStateOf(taskbarDark()) }
-    if (isWindows) LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
+    LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
 
     Tray(icon = TrayIcon(running, trayDark), tooltip = "同传字幕", menu = {
         if (running) Item("停止字幕", onClick = { CaptionService.stop() })
@@ -101,8 +100,7 @@ fun app() = application {
         val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
         // closing the window keeps the app (and its captions) in the menu bar
         Window(onCloseRequest = { mainOpen = false }, state = state, title = "同声传译（diy版）", icon = painterResource("icon.png")) {
-            // the title bar is the system's: follow the page colour, not just macOS's own setting
-            if (!isWindows) LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
+            // the title bar is the system's: follow the page colour, not just the system's own setting
             Themed(dark) {
                 Box(Modifier.fillMaxSize().background(C.bg)) { MainScreen(startError) { startError = it } }
             }
@@ -111,18 +109,15 @@ fun app() = application {
     AutoUpdateCheck()
 }
 
-/**
- * Windows: true when the taskbar is dark (the default), from the registry; on macOS false (the icon is a template
- * image there, which the menu bar colours itself).
- */
-private fun taskbarDark(): Boolean = isWindows && runCatching {
+/** True when the Windows taskbar is dark (the default), from the registry. */
+private fun taskbarDark(): Boolean = runCatching {
     com.sun.jna.platform.win32.Advapi32Util.registryGetIntValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER,
         "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "SystemUsesLightTheme") == 0
 }.getOrDefault(true)
 
 /**
- * The menu bar / notification area icon: a caption card, filled while captions run. Drawn, so it follows no file.
- * Black on macOS (a template image: the menu bar draws it white when it is dark), white on a dark Windows taskbar.
+ * The notification area icon: a caption card, filled while captions run. Drawn, so it follows no file.
+ * White on a dark Windows taskbar, black on a light one.
  */
 private class TrayIcon(val on: Boolean, val dark: Boolean) : Painter() {
     override val intrinsicSize = Size(64f, 64f)
@@ -195,10 +190,10 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
         val ready = prefs.byokReady
         when {
             running && ended -> status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
-            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，${if (isWindows) "任务栏右下角" else "菜单栏"}的图标里可以停止。")
+            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，任务栏右下角的图标里可以停止。")
             !ready -> status(C.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
             startError != null -> status(C.err, "还不能开始", startError)
-            else -> status(C.brand, "可以开始了", "点下面的按钮开始。" + if (isWindows) "" else "第一次会问你是否允许同传字幕录制系统声音，请选「允许」。")
+            else -> status(C.brand, "可以开始了", "点下面的按钮开始。")
         }
         // DIY: 左边是「识别语种」，和手机端一致——识别引擎只有 SenseVoice，能认的就是这五个。
         // 选「自动」时把翻译的源语言也交给模型自己判断。
@@ -579,7 +574,7 @@ private fun ByokAdvanced() {
     Field(d.userAgent, { d.userAgent = it }, ByokTranslator.defaultUserAgent)
     Hint("空着就用 ${ByokTranslator.defaultUserAgent}。有的服务会拦下不认识的 User-Agent，例如 B 站 Index 的免费接口要求填 Index-Translate-Client/1.0。")
     Label("自定义请求头")
-    Hint("左边写名字，右边写值，每个请求都会带上。值和 key 一样保存在${if (isWindows) "加密文件" else "钥匙串"}里，使用记录里只记名字。")
+    Hint("左边写名字，右边写值，每个请求都会带上。值和 key 一样保存在加密文件里，使用记录里只记名字。")
     d.headers.forEachIndexed { i, (k, v) ->
         Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { Field(k, { n -> d.headers = d.headers.toMutableList().also { it[i] = n to it[i].second } }, "名字") }
@@ -661,7 +656,7 @@ private fun Byok(running: Boolean) {
             Btn("删除", danger = true, enabled = !testing) {
                 confirmDel = false
                 if (!prefs.deleteByokProfile(active)) {
-                    byokResult.value = "⚠ key 或请求头没能从${if (isWindows) "加密文件" else "钥匙串"}删掉，请再试一次；钥匙串要求授权时请选「允许」。"
+                    byokResult.value = "⚠ key 或请求头没能从加密文件删掉，请再试一次；钥匙串要求授权时请选「允许」。"
                     return@Btn
                 }
                 byokDraft.value = ByokDraft(); byokAdvanced.value = null
@@ -696,7 +691,7 @@ private fun Byok(running: Boolean) {
         }
         // one edit; a running session switches to the saved service from the next sentence, as one change
         if (!prefs.saveByok(u, m, k.ifEmpty { if (d.clearKey) "" else null }, d.userAgent, d.headers)) {
-            msg = "⚠ key 或请求头没能存进${if (isWindows) "加密文件" else "钥匙串"}，请再试一次；钥匙串要求授权时请选「允许」。"; return null
+            msg = "⚠ key 或请求头没能存进加密文件，请再试一次；钥匙串要求授权时请选「允许」。"; return null
         }
         byokDraft.value = ByokDraft()
         return ByokTranslator.chatUrl(u).second
@@ -791,7 +786,7 @@ private fun LogsTab() {
                     TextBtn("删除", danger = true) { confirm = null; if (!SessionLog.delete(f)) msg = "删除失败：记录正在写入或文件被占用"; tick++ }
                 } else {
                     TextBtn("删除", enabled = !active) { confirm = f }
-                    TextBtn(if (isWindows) "在文件夹中显示" else "在访达中显示", enabled = !active) { reveal(f) }
+                    TextBtn("在文件夹中显示", enabled = !active) { reveal(f) }
                 }
             }
         }

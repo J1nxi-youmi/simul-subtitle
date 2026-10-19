@@ -5,7 +5,7 @@
 <h1 align="center">Simul Subtitle（同传字幕）</h1>
 
 <p align="center">
-  Real-time floating translated subtitles for Japanese and English videos &amp; livestreams on Android, macOS, and Windows.<br>
+  Real-time floating translated subtitles for Japanese and English videos &amp; livestreams on Android and Windows.<br>
   100% on-device speech recognition · Bring Your Own LLM (BYOK) · Works on top of any app.
 </p>
 
@@ -26,7 +26,7 @@
     <td align="center" valign="top"><img src="docs/images/screens/caption.png" width="240" alt="Android · Settings · Subtitles"><br>Settings · Subtitles</td>
     <td align="center" valign="top"><img src="docs/images/screens/translate.png" width="240" alt="Android · Settings · Translation"><br>Settings · Translation</td>
   </tr>
-  <tr><th colspan="3">Desktop (macOS / Windows)</th></tr>
+  <tr><th colspan="3">Desktop (Windows)</th></tr>
   <tr>
     <td align="center" valign="top"><img src="docs/images/screens/desktop/home.png" width="260" alt="Desktop · Home"><br>Home</td>
     <td align="center" valign="top"><img src="docs/images/screens/desktop/caption.png" width="260" alt="Desktop · Settings · Subtitles"><br>Settings · Subtitles</td>
@@ -36,7 +36,7 @@
 
 ## Key Features
 
-- **Works across your apps**: Watch Bilibili, YouTube, Twitch, browser streams, or local players. On Android, the app captures internal audio from any app that permits playback capture (DRM-protected streams excluded); on macOS and Windows, it captures system audio output directly without using a microphone.
+- **Works across your apps**: Watch Bilibili, YouTube, Twitch, browser streams, or local players. On Android, the app captures internal audio from any app that permits playback capture (DRM-protected streams excluded); on Windows, it captures system audio output directly without using a microphone.
 - **Live drafts &amp; final subtitles**: Draft captions appear while someone is speaking and settle into a polished translation as soon as the sentence ends—or switch to final-only mode to save battery and tokens.
 - **100% on-device speech recognition**: Ships with bundled ReazonSpeech and Silero VAD models (~78 MB). Nothing extra to download, and **your audio never leaves your device**.
 - **Bring Your Own LLM (BYOK)**: Connect any OpenAI-compatible API endpoint (DeepSeek, Qwen, OpenRouter, etc.) with your own base URL, model ID, and API key. On first use, the app automatically probes and disables reasoning/thinking mode for low-latency streaming.
@@ -50,7 +50,6 @@
 1. **Configure your LLM API**: On first launch, tap **Configure** (去填写) on the home screen—or go to **Settings → Translation** (设置 → 翻译). Enter your OpenAI-compatible base URL, model ID, and API key, then tap **Test Connection** (测试连接).
 2. **Grant permissions**:
    - **Android**: Allow internal audio capture and displaying over other apps when prompted.
-   - **macOS**: Allow **System Audio Recording** the first time you start subtitles.
    - **Windows**: No special permissions required.
 3. **Start subtitles**: Select the spoken language (Japanese / English) on the home screen and tap **Start Captions** (开始字幕). On Android, pick the target app in the system dialog; on desktop, it listens to all system playback immediately. Switch back to your video to watch with live subtitles.
 
@@ -76,16 +75,6 @@ Download the latest package for your platform from the [Releases](../../releases
 - **Requirements**: Android 10 (API 29) or later, `arm64-v8a`.
 - **Install**: Download the `.apk` from [Releases](../../releases) and open it on your phone (allow *Install unknown apps* when prompted).
 - **In-app updates**: Since v0.4, the app checks for updates on launch and can download and install new releases directly. You can also check manually or disable auto-checks under **Settings → About** (设置 → 关于).
-
-### macOS
-
-- **Requirements**: Apple Silicon (M1 or later), macOS 14.2 or later.
-- **Install**: Download `SimulSub-<version>-mac-arm64.dmg` from [Releases](../../releases), open it, and drag **同传字幕** into **Applications**.
-- **First launch (unnotarized app)**: Because the DMG is not notarized by Apple, macOS will warn that the developer cannot be verified on first launch. **Right-click 同传字幕 in Applications and choose Open**, or click **Open Anyway** in *System Settings → Privacy &amp; Security*.
-- **System audio permission**: On the first subtitle session, grant permission in the macOS prompt (*System Settings → Privacy &amp; Security → Screen &amp; System Audio Recording*).
-- **Background &amp; data**:
-  - Closing the main window keeps subtitles running; use the menu bar icon to start, stop, or reopen the window.
-  - Preferences and optional session logs are stored in `~/Library/Application Support/SimulSub/`, and API keys are stored in the macOS Keychain.
 
 ### Windows
 

@@ -21,7 +21,7 @@
 - **鉴权头**：携带 `Authorization: Bearer {key}`；当 API Key 留空时不发送 `Authorization` 头（方便接入无需鉴权的本地或公共服务）。
 - **安全约束**：仅接受 `https://` 地址，不允许包含用户名、`?` 查询参数或 `#` 锚点；请求**不跟随 HTTP 重定向**，防止 API Key 被重定向泄露到第三方域名。
 - **凭据与日志脱敏**：
-  - API Key 在 Android 经 **Android Keystore** 加密、在 macOS 存入**登录钥匙串**、在 Windows 经 **DPAPI** 加密保存。
+  - API Key 在 Android 经 **Android Keystore** 加密、在 Windows 经 **DPAPI** 加密保存。
   - 服务端返回的原始流式报文、思考内容、错误响应正文（可能回显 Key）一律不写入使用记录；仅记录剥离思考内容并抹除 Key 后的最终译文、HTTP 状态码、耗时与 `usage`。
 
 ### 自动探测关闭思考参数

@@ -20,12 +20,18 @@ class PrefsProfileTest {
     private lateinit var prefs: Prefs
 
     @Before fun setUp() {
+        // The desktop app is Windows-only now and its key store is DPAPI, which only exists there: on any other OS
+        // (a Linux dev box or CI runner) these tests would fail for a missing platform API, not a defect.
+        org.junit.Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"))
         Keychain.service = "SimulSubTest"
         file = File.createTempFile("simulsub-prefs", ".json").also { it.delete() }
         prefs = Prefs(file)
     }
 
     @After fun tearDown() {
+        // skipped on a non-Windows machine (see setUp): nothing was created, and touching [prefs] would turn the
+        // skip into a failure
+        if (!this::prefs.isInitialized) return
         // every account this run could have written, deleted (one that is not there counts as done)
         for (p in prefs.byokProfiles) {
             Keychain.set("byokKey${p.suffix}", null)

@@ -36,7 +36,7 @@
 | **TypeSafe 官方** | 需要 | 官方直连计费接口 |
 | **OpenRouter** | 需要 | 通过 OpenRouter 路由调用 `typesafe/jev-1.13`，按账户余额扣费 |
 
-- **数据与隐私**：仅向 Jev 发送本地识别出的**原文文本**与**译文文本**，不发送音频。API Key 在 Android 存入 Keystore、macOS 存入钥匙串、Windows 经 DPAPI 加密，且不写入使用记录。
+- **数据与隐私**：仅向 Jev 发送本地识别出的**原文文本**与**译文文本**，不发送音频。API Key 在 Android 存入 Keystore、Windows 经 DPAPI 加密，且不写入使用记录。
 - **无感降级**：任何 Jev 请求超时、限流或网络失败，都会自动退回未开启 Jev 时的默认行为（按静音停顿断句、直接保留原译文），不会中断字幕。
 
 ---

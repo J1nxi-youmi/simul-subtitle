@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$HERE/../.."
 W="$HERE/build"; R="$W/resources/windows-x64"
 rm -rf "$R"; mkdir -p "$R"
 
-# 1. sherpa-onnx JVM jar + its Windows libraries (the same version as the Mac app)
+# 1. sherpa-onnx JVM jar + its Windows libraries
 SHERPA=1.13.8
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download/v$SHERPA
 fetch() {

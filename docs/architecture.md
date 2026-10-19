@@ -2,12 +2,11 @@
 
 ## 端到端数据流
 
-三端（Android、macOS、Windows）共用同一套分句、识别与翻译流水线，只有最前端的**系统声音采集**与最末端的**悬浮窗渲染**按平台分别实现：
+两端（Android、Windows）共用同一套分句、识别与翻译流水线，只有最前端的**系统声音采集**与最末端的**悬浮窗渲染**按平台分别实现：
 
 ```text
 系统 / 应用播放的声音（16 kHz 单声道 PCM）
   ├─ Android : AudioPlaybackCapture（录制其他 App 的媒体/游戏音频）
-  ├─ macOS   : sysaudio（Core Audio Process Tap 捕获整机音频）
   └─ Windows : sysaudio.exe（WASAPI Loopback 捕获默认播放设备音频）
         │
         ▼
@@ -35,7 +34,7 @@
 
 ## 模块与代码结构
 
-仓库分为三个 Gradle 模块：跨平台核心 `:core`、Android 客户端 `:app`、桌面客户端 `:desktop`（macOS 与 Windows 共用）。
+仓库分为三个 Gradle 模块：跨平台核心 `:core`、Android 客户端 `:app`、桌面客户端 `:desktop`（Windows）。
 
 ### 1. 跨平台核心（`core/src/main/java/io/github/korenkrita/simulsub/`）
 
@@ -64,17 +63,16 @@
 
 ### 3. 桌面客户端（`desktop/` 与 `tools/`）
 
-基于 Compose Desktop，macOS 与 Windows 共用同一套 Kotlin 代码：
+基于 Compose Desktop 的 Windows 客户端：
 
 | 文件 | 职责 |
 |---|---|
-| `tools/mac-capture/SysAudio.swift` | macOS 原生采集程序 `sysaudio`：通过 Core Audio Process Tap 捕获整机音频，向标准输出写入 16 kHz 单声道 `float32` |
 | `tools/win-capture/sysaudio.cpp` | Windows 原生采集程序 `sysaudio.exe`：通过 WASAPI Loopback 捕获默认播放设备音频并自动跟随设备切换，输出格式同上 |
 | `Session.kt` | 对应 Android 的 `CaptionService`：管理 `sysaudio` 子进程、从应用资源目录 `models/` 加载识别模型、驱动流水线并支持运行中热更新设置 |
 | `Engines.kt` | `sherpa-onnx` 的桌面端 JNI 封装 |
 | `Overlay.kt` | 透明、置顶、可跨屏拖动与缩放的悬浮字幕窗口及工具栏 |
 | `App.kt` / `Ui.kt` | 主窗口（首页与设置）、菜单栏 / 系统托盘图标、版本更新检查 |
-| `Prefs.kt` | 桌面端设置持久化；API Key 在 macOS 存入登录钥匙串，在 Windows 经 DPAPI 加密存入 `keys.json` |
+| `Prefs.kt` | 桌面端设置持久化；API Key 经 DPAPI 加密存入 `keys.json` |
 | `Main.kt` | 平台差异适配（`isWindows`）、系统代理与直连回退路由、Windows Skiko 软件渲染与系统证书库加载 |
 
 ---

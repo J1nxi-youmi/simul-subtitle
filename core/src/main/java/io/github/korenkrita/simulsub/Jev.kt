@@ -18,7 +18,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 // TypeSafe Jev (System One decision model) client and the two questions the pipeline asks it.
-// Pure Kotlin + OkHttp so the Mac harness (tools/mac-e2e) runs the same code.
+// Pure Kotlin + OkHttp so every target (Android, desktop, tests) runs the same code.
 
 /** [needsKey] false: no Authorization header is sent (Zen rejects a wrong key with 401 but answers without one). */
 enum class JevProvider(val label: String, val url: String, val model: String, val needsKey: Boolean = true, val note: String) {

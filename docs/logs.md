@@ -9,7 +9,6 @@
 | 平台 | 日志目录路径 | 文件命名格式 |
 |---|---|---|
 | **Android** | `Android/data/io.github.korenkrita.simulsub/files/logs/` | `session-YYYYMMDD-HHMMSS.jsonl` |
-| **macOS** | `~/Library/Application Support/SimulSub/logs/` | `session-YYYYMMDD-HHMMSS.jsonl` |
 | **Windows** | `%APPDATA%\SimulSub\logs\` | `session-YYYYMMDD-HHMMSS.jsonl` |
 
 ### 写入与安全机制

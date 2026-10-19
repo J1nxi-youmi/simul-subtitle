@@ -8,7 +8,7 @@
 |---|---|
 | `:core` | 不依赖 Android SDK 的跨平台核心（分句状态机、识别与翻译流水线、翻译提示词与 BYOK 客户端、Jev 判断、会话日志、运行状态），由手机端与桌面端共用 |
 | `:app` | Android 客户端（界面、悬浮窗、前台采集服务、Keystore 加密、应用内检查更新） |
-| `:desktop` | 桌面客户端（Compose Desktop，macOS 与 Windows 共用一套界面与悬浮窗代码，配合 `tools/` 下的原生音频采集子进程） |
+| `:desktop` | 桌面客户端（Compose Desktop，Windows 专用的界面与悬浮窗代码，配合 `tools/` 下的原生音频采集子进程） |
 
 ---
 
@@ -52,66 +52,16 @@ export JAVA_HOME=<jdk17> ANDROID_HOME=~/Library/Android/sdk
 | `vad/silero_vad.onnx` | 0.6 MB | `sherpa-onnx` GitHub Release（`asr-models`） | Silero VAD 静音检测 |
 | `asr/LICENSE`、`vad/LICENSE` | — | `apache.org` 的 Apache-2.0 原文、`silero-vad` 固定 commit 的 MIT 许可证 | 随模型一同分发许可证 |
 
-### 三端打包位置
+### 两端打包位置
 
 - **Android**：`setup.sh` 将模型复制到 `app/src/main/assets/models/`（不纳入 Git），`.onnx` 在 APK 内配置为 `noCompress`，由 `sherpa-onnx` 直接从 `assets` 零拷贝读取。
-- **macOS**：`tools/mac-app/build.sh` 将 `models/asr` 与 `models/vad` 打入 `.app` 的资源目录；直接从源码仓库运行时读取 `./models`（可通过 `-Dsimulsub.models=<目录>` 覆盖）。
 - **Windows**：`tools/win-app/build.sh` 使用 `sha256sum` 校验 `models/asr` 与 `models/vad` 后打入应用资源目录。
-
----
-
-## macOS 端到端回归测试
-
-```bash
-tools/mac-e2e/run.sh [file.wav]
-```
-
-在 macOS 上加载真实的 `sherpa-onnx` 离线模型与你配置的翻译服务，运行与手机端完全相同的 `Pipeline` / `Segmenter` 代码，按 1x 实时速度喂入 WAV 音频：
-
-- **环境变量**：通过 `BYOK_URL`、`BYOK_MODEL`、`BYOK_KEY` 指定翻译接口（模型须支持关闭思考，首次运行会先自动探测关闭思考参数）。
-- **默认语料**：不传音频文件参数时，自动调用 `say -v Kyoko` 合成一段 6 句日语语音作为回归输入；所有定稿按顺序送达才以退出码 `0` 结束。
-- **反向自检**：`JAVA_OPTS=-DdropFinal=3 tools/mac-e2e/run.sh` 用于模拟丢句，必须以失败退出。
-- **超时保护**：`-DdeadlineS`（默认 180 秒）超时后以退出码 `2` 强制退出，防止底层原生调用卡死挂起测试。
 
 ---
 
 ## 桌面端构建与打包
 
-### 1. macOS 版（Apple Silicon，macOS 14.2+）
-
-系统音频采集依赖 macOS 14.2 引入的 Core Audio Process Tap，因此仅支持 Apple Silicon（`arm64`）与 macOS 14.2 及以上版本。
-
-#### 从源码仓库直接运行
-
-```bash
-tools/mac-capture/build.sh          # 编译系统音频采集工具 sysaudio
-tools/mac-e2e/run.sh                # 顺带拉取 sherpa-onnx 的 macOS 原生库（需设置 BYOK_* 环境变量）
-./gradlew :desktop:run
-```
-
-源码运行时直接读取仓库根目录下的 `models/` 与上述原生库，配置文件写入 `desktop/build/run-data/`，不污染系统中已安装的正式版 App。
-
-#### 打包 DMG
-
-```bash
-export JAVA_HOME=$(mise where java@zulu-17.68.203.0)
-tools/mac-app/build.sh
-```
-
-构建产物为 `desktop/build/compose/binaries/main/dmg/SimulSub-<versionName>-mac-arm64.dmg`（脚本结束时会打印 SHA-256）。`build.sh` 独立完成所有原生依赖组装，不依赖 `tools/mac-e2e`：
-
-- 自动准备 `sherpa-onnx` 1.13.8 的 JVM JAR 与 `osx-aarch64` 原生库。
-- 打包经 `./setup.sh` 校验的 `models/asr` 与 `models/vad`。
-- 编译 `arm64` 架构的 `sysaudio`。
-- 执行 `:desktop:createDistributable` 生成带裁剪版 JRE（含 `java.net.http`、`jdk.crypto.ec`、`java.naming` 等模块）的 `.app`，将原生库、模型与 `sysaudio` 放入 `SimulSub.app/Contents/app/resources/`（即 `compose.application.resources.dir`）。
-- 版本号与 Android 端共用 `versionName`。因 `jpackage` 要求主版本号大于 0，Bundle 的 `CFBundleVersion` 设为 `1.<versionCode>`（仅用于内部排序），随后将 `CFBundleShortVersionString` 写回 `versionName` 并重新执行 ad-hoc 签名。
-- `Info.plist` 内置 `NSAudioCaptureUsageDescription`，首次启动字幕时触发系统录音授权弹窗。
-
-> 注：DMG 未做 Apple Developer ID 签名与公证，用户首次打开需在「应用程序」中右键选择「打开」或在「系统设置 → 隐私与安全性」中点击「仍要打开」。
-
----
-
-### 2. Windows 版（x64，免安装 ZIP）
+### Windows 版（x64，免安装 ZIP）
 
 Windows 版仅构建 64 位（`x64`）绿色免安装压缩包。通过 GitHub Actions 的 Windows runner 构建：推送 `windows` 分支或在 Actions 页面手动触发 `.github/workflows/windows.yml`，即可执行 `tools/win-app/build.sh`，生成 `SimulSub-<versionName>-windows-x64.zip`（Actions Artifact 为解压状态的 `SimulSub/` 目录）。
 
@@ -121,10 +71,10 @@ Windows 版仅构建 64 位（`x64`）绿色免安装压缩包。通过 GitHub A
 
 - 集成 `sherpa-onnx` 1.13.8 的 JVM JAR 与 `win-x64` 原生库（`sherpa-onnx-jni.dll`、`onnxruntime.dll`）。
 - 使用 `sha256sum` 校验并复制 `models/asr` 与 `models/vad`。
-- 编译 `tools/win-capture/sysaudio.cpp`：通过 WASAPI Loopback 录制默认播放设备，重采样为 16 kHz 单声道 `float32` 写入标准输出（与 macOS `sysaudio` 协议一致）；静音期间持续输出零采样以保持实时时钟，默认播放设备切换时自动跟随，每 5 秒向 `stderr` 输出一行设备名与音量统计（写入会话日志的 `sysaudio` 事件）。采用静态 C 运行库（`/MT`）编译，用户无需额外安装 VC++ Redistributable。
+- 编译 `tools/win-capture/sysaudio.cpp`：通过 WASAPI Loopback 录制默认播放设备，重采样为 16 kHz 单声道 `float32` 写入标准输出；静音期间持续输出零采样以保持实时时钟，默认播放设备切换时自动跟随，每 5 秒向 `stderr` 输出一行设备名与音量统计（写入会话日志的 `sysaudio` 事件）。采用静态 C 运行库（`/MT`）编译，用户无需额外安装 VC++ Redistributable。
 - 执行 `:desktop:createDistributable` 生成 `SimulSub/SimulSub.exe` 及裁剪版 JRE（额外包含 `jdk.crypto.mscapi`），再用系统自带 `tar.exe` 打包为 `.zip`（统一使用 `/` 路径分隔符；因 `jpackage` 在 Windows 下按系统代码页解析参数，包描述使用英文）。
 
-#### Windows 与 macOS 的平台差异（`isWindows` 分支）
+#### Windows 的平台行为
 
 - **软件渲染（`SOFTWARE`）**：Windows 默认使用 Skiko 的 `SOFTWARE` 渲染后端——实测 Direct3D 渲染透明置顶字幕窗会出现拖动后工具栏被裁剪、放大后字幕消失、关闭窗口时主进程卡死等问题，而 OpenGL 会导致工具栏底部发黑（仍可通过环境变量 `SKIKO_RENDER_API` 手动覆盖）。
 - **系统根证书库**：信任 Windows 系统证书库（`Windows-ROOT`），与桌面浏览器行为一致。
@@ -216,12 +166,9 @@ Windows 版仅构建 64 位（`x64`）绿色免安装压缩包。通过 GitHub A
    PY
    ```
 
-   接着打包 macOS DMG，并在推送版本号提交后触发 GitHub Actions 构建 Windows ZIP，汇总到 `build/release/`：
+   推送版本号提交后，GitHub Actions 会自动构建 Windows ZIP，汇总到 `build/release/`：
 
    ```bash
-   tools/mac-app/build.sh
-   cp "desktop/build/compose/binaries/main/dmg/SimulSub-$VERSION-mac-arm64.dmg" build/release/
-
    # Windows：将版本号提交推送到 main 后，触发远端工作流并下载产物
    gh workflow run windows.yml --repo KorenKrita/simul-subtitle --ref main
    gh run watch "$(gh run list --repo KorenKrita/simul-subtitle --workflow windows.yml --limit 1 --json databaseId -q '.[0].databaseId')" --repo KorenKrita/simul-subtitle --exit-status
@@ -237,7 +184,7 @@ Windows 版仅构建 64 位（`x64`）绿色免安装压缩包。通过 GitHub A
    git push origin main
    gh release create "v$VERSION" --repo KorenKrita/simul-subtitle --target "$(git rev-parse HEAD)" --latest \
      --title "同传字幕 v$VERSION" --notes-file build/release/notes.md \
-     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json "build/release/SimulSub-$VERSION-mac-arm64.dmg" \
+     "build/release/simul-subtitle-v$VERSION.apk" build/release/update.json \
      "build/release/SimulSub-$VERSION-windows-x64.zip"
    ```
 

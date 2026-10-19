@@ -7,6 +7,12 @@
 
 ---
 
+## DIY1065 — 10-19 22:20
+- **删** 移除 macOS 支持，桌面端只保留 Windows：删除 `tools/mac-app`（dmg 打包）、`tools/mac-capture`（Core Audio 采集）与 `tools/mac-e2e`，以及 `desktop/icons/icon.icns`
+- **改** `desktop/` 里的 `isWindows` 分支全部去掉，直接走 Windows 路径：托盘配色只看注册表、密钥只走 DPAPI、数据目录固定 `%APPDATA%`、文件定位只在资源管理器里显示；`build.gradle.kts` 去掉 Dmg 与 macOS 打包配置，sherpa 的本地依赖回退到 `tools/win-app` 的产物
+- **改** 文档同步：`README`、`docs/build.md`、`architecture.md`、`privacy.md` 等去掉 macOS 章节与表格列，打包说明变成两端
+- **修** `PrefsProfileTest` 在非 Windows 机器上会因 DPAPI 不可用而报 7 个假失败，现在只在 Windows 上执行（其余平台跳过）
+
 ## DIY1064 — 10-19 21:18
 - **改** 版本名去掉上游的 `1.0.7` 前缀：现在直接是 `DIY` + 构建序号（如 `DIY1064`），Git tag 同步改成 `vDIY1064`，Windows 包名变成 `SimulSub-DIY-windows-x64.zip`；应用内更新清单的版本名校验同时接受新旧两种格式，老版本升级不会中断
 - **修** 译文里的平假名残留不再漏检：原先只认「连续两个以上片假名」，`…像廉んかちゃん那样温柔的人`、`搞啥呢，伊ず` 这类汉假混排一次都不会触发重译（一场 20 分钟直播里 13 条，全部漏掉）。现在平假名区与片假名区一起算，仍是两个起，单个语气假名不误判

@@ -67,7 +67,7 @@ class AudioRecorder(
      * Flushes the queued audio, writes a correct WAV header, and renames the part file to `*.wav`.
      * @return true only if the file is complete; otherwise [failed] says why.
      */
-    fun close(timeoutMs: Long = 3_000): Boolean {
+    fun close(timeoutMs: Long = CLOSE_TIMEOUT_MS): Boolean {
         if (completed) return failed == null
         closing = true
         thread.join(timeoutMs)
@@ -79,7 +79,12 @@ class AudioRecorder(
         return finalizeWav().also { completed = it }
     }
 
-    override fun close() { close() }
+    /**
+     * [AutoCloseable] for use{} / try-with-resources, same semantics without the result.
+     * 必须显式指向带参数的重载：无参调用会再次解析到这个无参 close 本身（Kotlin 里精确匹配
+     * 优先于默认参数），那是一开始就写成的无限递归，开启录音的会话收尾时必然栈溢出。
+     */
+    override fun close() { close(CLOSE_TIMEOUT_MS) }
 
     private fun finalizeWav(): Boolean {
         val raf = runCatching { RandomAccessFile(partFile, "rwd") }.getOrNull()
@@ -96,6 +101,9 @@ class AudioRecorder(
             runCatching { raf.close() }
         }
         val target = File(partFile.parentFile, partFile.name.removeSuffix(PART))
+        // 同名文件已被占用（stem 的选择在 SessionLog 那边避开了，这里只防进程外的文件）：宁可留下 .part，
+        // 也不覆盖别人的完整录音——renameTo 在 Windows 会失败，在 Linux 却会静默覆盖
+        if (target != partFile && target.exists()) { fail("无法完成音频文件：${target.name} 已存在"); return false }
         if (!partFile.renameTo(target)) { fail("无法完成音频文件"); return false }
         file = target
         return true
@@ -114,6 +122,8 @@ class AudioRecorder(
         private const val BITS_PER_SAMPLE = 16
         private const val HEADER_SIZE = 44
         private const val PART = ".part"
+        /** how long [close] waits for the writer thread to drain its queue */
+        const val CLOSE_TIMEOUT_MS = 3_000L
 
         fun samplesToBytes(samples: FloatArray): ByteArray {
             val buf = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)

@@ -57,6 +57,7 @@ class CaptionSessionTest {
         override val jevOn = false
         override val jevCheck = false
         override val keepLogs = false
+        override val recordAudio = false
         override val keepSentences = CaptionBoard.DEFAULT_SENTENCES
         override val keepChars = CaptionBoard.DEFAULT_CHARS
         override val finalOnly = false

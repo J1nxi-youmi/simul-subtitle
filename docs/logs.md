@@ -8,8 +8,8 @@
 
 | 平台 | 日志目录路径 | 文件命名格式 |
 |---|---|---|
-| **Android** | `Android/data/io.github.korenkrita.simulsub/files/logs/` | `session-YYYYMMDD-HHMMSS.jsonl` |
-| **Windows** | `%APPDATA%\SimulSub\logs\` | `session-YYYYMMDD-HHMMSS.jsonl` |
+| **Android** | `Android/data/io.github.korenkrita.simulsub/files/logs/` | `session-YYYYMMDD-HHMMSS.jsonl`（开启音频后另有同名 `.wav`） |
+| **Windows** | `%APPDATA%\SimulSub\logs\` | `session-YYYYMMDD-HHMMSS.jsonl`（开启音频后另有同名 `.wav`） |
 
 ### 写入与安全机制
 
@@ -42,6 +42,7 @@
 - **格式**：16 kHz、单声道、16-bit PCM WAV，与采集完全一致，不做压缩或转码。
 - **`.part` 语义**：录音进行中写成 `….wav.part`（WAV 头的两个长度字段先留空）；只有会话正常结束时才回填这两个长度字段并重命名为 `.wav`。写失败、队列积压或异常中断的录音**永远保留 `.part` 后缀**，不会被误当成完整记录。
 - **体积上限**：每次开始录音前，自动删除同目录**最旧的完整 `.wav`**，使 WAV 总量不超过 200 MB；`.wav.part` 永不自动清理。
+- **与日志成对增删**：删除某条记录（单条删除或「全部清空」）时，它的 `.wav`（含 `.part`）与日志一起删除，不会留下孤儿音频；正在记录的会话连同其录音整体保留。分享某条记录时，若保留了音频，`.jsonl` 与 `.wav` 两个文件会一起发出。
 - **失败不影响字幕**：写盘在独立后台线程完成，采集线程只把帧放进一个有界队列、从不等待。队列满或写失败时，本次录音停止并在悬浮窗提示「⚠ 音频写入失败，本次录音不完整」，字幕会话照常进行——音频不是主链路。
 - **隐私**：音频只保存在本地，与日志一样不上传；不开启这个开关就不会产生任何音频文件。
 

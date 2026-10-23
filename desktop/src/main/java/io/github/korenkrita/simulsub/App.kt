@@ -777,12 +777,14 @@ private fun LogsTab() {
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(f.name.removeSuffix(".part").removeSuffix(".jsonl"), fontSize = 14.sp)
-                    Text(sizeText(f.length()) + when { active -> " · 正在记录，结束后可以发送"; !SessionLog.complete(f) -> " · 没有正常结束"; else -> "" },
+                    // the recording belongs to the record: its size is shown next to the log's (null: no audio was kept)
+                    Text(sizeText(f.length()) + (SessionFiles.audioOf(f)?.let { " · 音频 " + sizeText(it.length()) } ?: "") +
+                        when { active -> " · 正在记录，结束后可以发送"; !SessionLog.complete(f) -> " · 没有正常结束"; else -> "" },
                         fontSize = 12.sp, color = C.muted)
                 }
                 if (confirm == f) {
                     TextBtn("取消") { confirm = null }
-                    TextBtn("删除", danger = true) { confirm = null; if (!SessionLog.delete(f)) msg = "删除失败：记录正在写入或文件被占用"; tick++ }
+                    TextBtn("删除", danger = true) { confirm = null; if (!SessionFiles.deleteLog(f)) msg = "删除失败：记录正在写入或文件被占用"; tick++ }
                 } else {
                     TextBtn("删除", enabled = !active) { confirm = f }
                     TextBtn("在文件夹中显示", enabled = !active) { reveal(f) }
@@ -793,13 +795,14 @@ private fun LogsTab() {
         if (files.isNotEmpty()) {
             Divider()
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("共 ${files.size} 个，${sizeText(files.sumOf { it.length() })}", fontSize = 13.sp, color = C.muted)
+                // the total counts a record's log and recording together (core counts the bytes, the text is ours)
+                Text("共 ${files.size} 个，${sizeText(SessionFiles.totalBytes(dataDir))}", fontSize = 13.sp, color = C.muted)
                 Grow()
                 if (confirmAll) {
                     TextBtn("取消") { confirmAll = false }
                     TextBtn("删除全部（正在记录的不删）", danger = true) {
                         confirmAll = false
-                        val left = SessionLog.deleteAll(dataDir)
+                        val left = SessionFiles.deleteAll(dataDir)
                         msg = if (left > 0) "还剩 $left 个（正在记录或无法删除）" else null; tick++
                     }
                 } else TextBtn("全部清空", danger = true) { confirmAll = true }

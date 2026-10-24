@@ -1256,7 +1256,7 @@ class MainActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } else Intent(Intent.ACTION_SEND_MULTIPLE).apply {
             type = "application/octet-stream" // same as above: .jsonl and .wav both stay files
-            putExtra(Intent.EXTRA_STREAM, arrayListOf(uriOf(f), uriOf(audio)))
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(uriOf(f), uriOf(audio)))
             putExtra(Intent.EXTRA_SUBJECT, f.name)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

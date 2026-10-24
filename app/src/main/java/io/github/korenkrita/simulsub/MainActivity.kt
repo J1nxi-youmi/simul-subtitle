@@ -1135,6 +1135,8 @@ class MainActivity : Activity() {
         val box = findViewById<LinearLayout>(R.id.logList)
         box.removeAllViews()
         val root = getExternalFilesDir(null)!!
+        // a killed session leaves a headerless recording: finish it here, so the list never offers an unplayable file
+        AudioRecorder.recover(SessionLog.dir(root))
         val files = SessionLog.list(root)
         val active = SessionLog.activeFiles()
         listedLogs = files.map { it.name } to active

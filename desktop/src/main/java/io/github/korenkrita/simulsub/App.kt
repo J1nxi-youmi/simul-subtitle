@@ -766,6 +766,8 @@ private fun LogsTab() {
         SwitchRow("记录每次使用", "打开后，每次开始字幕会在电脑上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含声音和 key。只有你自己发出去才会离开电脑，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
             prefs.keepLogs) { prefs.keepLogs = it }
         tick.let { }
+        // a killed session leaves a headerless recording: finish it here, so the list never offers an unplayable file
+        AudioRecorder.recover(SessionLog.dir(dataDir))
         val files = SessionLog.list(dataDir)
         var confirm by remember { mutableStateOf<File?>(null) }
         var confirmAll by remember { mutableStateOf(false) }

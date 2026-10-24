@@ -155,6 +155,44 @@ class AudioRecorder(
             }.array()
         }
 
+        /**
+         * Finalizes recordings a killed process left behind: a `*.wav.part` whose header was never backfilled gets a
+         * correct one and is renamed to `*.wav`, so a crashed session's audio is playable and shares like a finished
+         * one. The part of a session that may still write it ([SessionLog.isActive]) is left untouched, as is a part
+         * holding nothing but the reserved header, and one whose `.wav` name is already taken — a complete recording
+         * is never overwritten. A killed write can end mid-frame; the odd trailing byte is dropped, not shifted.
+         * @return how many recordings were recovered
+         */
+        fun recover(dir: File): Int {
+            val parts = dir.listFiles { f -> f.isFile && f.name.endsWith(".wav$PART") } ?: return 0
+            var recovered = 0
+            for (part in parts) {
+                val stem = part.name.removeSuffix(".wav$PART")
+                // the writer of a live session is still appending to its own part file: never repair that one
+                if (SessionLog.isActive(File(dir, "$stem.jsonl$PART"))) continue
+                if (recoverOne(part, File(dir, "$stem.wav"))) recovered++
+            }
+            return recovered
+        }
+
+        private fun recoverOne(part: File, target: File): Boolean {
+            val len = runCatching { part.length() }.getOrNull() ?: return false
+            if (len < HEADER_SIZE + 2L) return false // nothing but the reserved header: no audio to save
+            if (target.exists()) return false // a complete recording already owns this name: keep the part as evidence
+            val dataBytes = ((len - HEADER_SIZE) / 2) * 2 // drop a half-written sample so frames stay aligned
+            val raf = runCatching { RandomAccessFile(part, "rwd") }.getOrNull() ?: return false
+            try {
+                if (dataBytes < len - HEADER_SIZE) raf.setLength(HEADER_SIZE + dataBytes)
+                raf.seek(0)
+                raf.write(makeWavHeader(dataBytes))
+            } catch (t: Throwable) {
+                return false // the part stays as it was: a later attempt can still recover it
+            } finally {
+                runCatching { raf.close() }
+            }
+            return part.renameTo(target)
+        }
+
         /** Deletes the oldest complete `.wav` files in [dir] until their total size is <= [maxBytes]. `.part` files are kept. */
         fun trim(dir: File, maxBytes: Long = 200L * 1024 * 1024) {
             val wavs = dir.listFiles { f -> f.isFile && f.name.endsWith(".wav") }

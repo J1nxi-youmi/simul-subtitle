@@ -225,4 +225,74 @@ class AudioRecorderTest {
         assertTrue(rec.file.isFile)
         assertEquals(36L + 512L * 2 to 512L * 2, lengthFields(rec.file))
     }
+
+    /** what a killed process leaves: the reserved all-zero header, then however many samples reached the disk */
+    private fun killedPart(dir: File, name: String, samples: Int): File = File(dir, name).apply {
+        RandomAccessFile(this, "rw").use {
+            it.write(ByteArray(44))
+            it.write(ByteArray(samples * 2) { i -> (i % 251).toByte() })
+        }
+    }
+
+    @Test
+    fun recoverBackfillsTheHeaderOfAKilledRecording() {
+        val dir = tmp.newFolder()
+        val part = killedPart(dir, "session-20261023-214100.wav.part", 1_000)
+        // before the recovery the file is headerless garbage: RIFF and data length are both still zero
+        assertEquals(0L to 0L, lengthFields(part))
+        assertEquals(1, AudioRecorder.recover(dir))
+        val wav = File(dir, "session-20261023-214100.wav")
+        assertFalse("the recovered file is renamed like a finished recording", part.exists())
+        assertTrue(wav.isFile)
+        assertEquals(36L + 2_000L to 2_000L, lengthFields(wav))
+        assertEquals(44L + 2_000L, wav.length())
+        // the same header a normal close writes: PCM, mono, 16 kHz
+        val head = ByteBuffer.wrap(wav.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(1, head.getShort(20).toInt())
+        assertEquals(1, head.getShort(22).toInt())
+        assertEquals(16_000, head.getInt(24))
+        // the payload below the header was left byte-for-byte untouched, not merely the same length
+        val payload = wav.readBytes().copyOfRange(44, 44 + 2_000)
+        assertEquals(2_000, payload.size)
+        assertTrue("the recovered header must not rewrite the PCM", payload.withIndex().all { (i, b) -> b == (i % 251).toByte() })
+        // a second pass has nothing left to do
+        assertEquals(0, AudioRecorder.recover(dir))
+    }
+
+    @Test
+    fun recoverDropsAHalfWrittenSample() {
+        val dir = tmp.newFolder()
+        val part = killedPart(dir, "session-20261023-214100.wav.part", 100)
+        part.appendBytes(byteArrayOf(0x7f)) // a killed write can stop inside the last sample
+        assertEquals(1, AudioRecorder.recover(dir))
+        val wav = File(dir, "session-20261023-214100.wav")
+        assertEquals("the odd trailing byte is dropped, not kept as a broken frame", 44L + 200L, wav.length())
+        assertEquals(36L + 200L to 200L, lengthFields(wav))
+    }
+
+    @Test
+    fun recoverLeavesAPartWithNoAudioAndATakenNameAlone() {
+        val dir = tmp.newFolder()
+        val headerOnly = File(dir, "session-20261023-214100.wav.part").apply { writeBytes(ByteArray(44)) }
+        val taken = File(dir, "session-20261023-220000.wav").apply { writeBytes(ByteArray(44)) }
+        val partial = killedPart(dir, "session-20261023-220000.wav.part", 10)
+        assertEquals(0, AudioRecorder.recover(dir))
+        assertTrue("a part holding only the reserved header saves nothing", headerOnly.exists())
+        assertTrue("a complete recording is never overwritten", partial.exists())
+        assertEquals(44L, taken.length())
+    }
+
+    @Test
+    fun recoverNeverTouchesThePartOfARunningSession() {
+        val dir = tmp.newFolder()
+        val log = SessionLog(dir)
+        val part = killedPart(dir, "${log.stem}.wav.part", 50)
+        assertEquals("a live session's recorder still appends to that file", 0, AudioRecorder.recover(dir))
+        assertTrue(part.exists())
+        assertTrue(log.close())
+        // once the session is over its stem is no longer active, so the leftover can be finished
+        assertEquals(1, AudioRecorder.recover(dir))
+        assertFalse(part.exists())
+        assertTrue(File(dir, "${log.stem}.wav").isFile)
+    }
 }
